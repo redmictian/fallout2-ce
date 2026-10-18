@@ -10,6 +10,7 @@
 
 #include "audio_engine.h"
 #include "delay.h"
+#include "input.h"
 #include "platform_compat.h"
 
 namespace fallout {
@@ -1299,9 +1300,10 @@ static void _MVE_sndSync()
         }
         v0 = true;
 
-#ifdef EMSCRIPTEN
+// Focus loss pauses audio. Process focus events while waiting so that
+        // playback can resume instead of spinning on a frozen audio cursor.
+        _GNW95_process_message();
         delay_ms(1);
-#endif
     }
 
     if (dword_6B3660 != dword_6B3AE4) {
