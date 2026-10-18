@@ -61,3 +61,7 @@ An attempted Windows standalone harness link did not complete because PE section
 
 Close the old frozen process and launch `fallout2-ce-movie-fix.exe`. Check opening movies, New Game -> character -> Proceed (`elder.mve`), and focus loss/return during playback. Do not load original Sfall saves for this baseline test.
 Game was not launched by the agent, per user preference. If it still freezes, inspect `debug.log` and sample the patched process with symbols; do not mark the root cause fixed until actual cinematic playback is verified.
+
+## User finding — October 18, 2026
+
+The machine had no working audio output. Connecting headphones made playback/game work. The user did not specify whether the successful run used the official or experimental executable. The sampled wait location was correct, but focus loss was not established as the trigger. The regression test covers a simulated focus deadlock, not missing-device recovery. Do not treat this patch as necessary or merge it on the basis of this result. Keep working audio connected for normal testing; investigate no-device handling separately if needed.
