@@ -189,3 +189,27 @@ The live probe is opt-in and is not registered as an automatic CTest/Docker run.
 No modified game, proprietary assets, saves or local game configuration were
 opened/changed by these checks. In-game rendering/input, actual mod-owned global
 effects and save/reload still need the acceptance procedure above.
+
+## Terminal text-input correction (October 21, 2026)
+
+Root's in-game test of binary `7adfede` found that text-only Windows/SDL typing
+worked for the first command but was discarded after Return. The modal retained
+`skipText=true` from Return while ignoring its queued key release. Replaced that
+blanket flag with a shared, tested input policy: suppress at most one matching
+single-character duplicate of a forwarded special/control/keypad key; account
+for translated ASCII from active Ctrl/Alt chords and localized keypad decimal;
+clear on matching release, another keydown, focus loss or an overflowed batch.
+Independent text and IME commits do not require a physical keydown.
+
+Focused native WSL terminal CTest passed, covering three text-only commands
+separated by Return down/up, unrelated text without release, UTF-8/IME commits,
+control/special/keypad duplicate suppression, repeats and reset behavior.
+clang-format19.1.7 dry-run/Werror and Git whitespace checks passed. This fix was
+not built into the full game or launched by the fixing agent; the parent task
+will rebuild and repeat the in-game acceptance test.
+
+```sh
+cmake -S tests -B out/terminal-tests -G Ninja
+cmake --build out/terminal-tests --target nixboy-terminal-test
+ctest --test-dir out/terminal-tests -R nixboy-terminal --output-on-failure
+```

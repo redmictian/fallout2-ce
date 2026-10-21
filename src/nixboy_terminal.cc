@@ -16,6 +16,7 @@
 #include "input.h"
 #include "kb.h"
 #include "mouse.h"
+#include "nixboy_terminal_input.h"
 #include "svga.h"
 #include "text_font.h"
 #include "window_manager.h"
@@ -79,8 +80,10 @@ namespace {
                 self->quit_ = true;
                 return 0;
             }
+            const bool focusLost = event->type == SDL_WINDOWEVENT
+                && event->window.event == SDL_WINDOWEVENT_FOCUS_LOST;
             if (event->type == SDL_KEYDOWN || event->type == SDL_KEYUP
-                || event->type == SDL_TEXTINPUT) {
+                || event->type == SDL_TEXTINPUT || focusLost) {
                 std::lock_guard<std::mutex> lock(self->mutex_);
                 // Reserve local close even if the bounded input queue is full.
                 if (event->type == SDL_KEYDOWN && event->key.keysym.sym == SDLK_F10) {
@@ -91,7 +94,9 @@ namespace {
                 } else {
                     self->overflow_ = true;
                 }
-                return 0;
+                // Keep focus changes in order with terminal keys, while still
+                // allowing the engine to pause audio/update its focus state.
+                return focusLost ? 1 : 0;
             }
             return 1;
         }
@@ -134,7 +139,7 @@ namespace {
         bool exited = false;
         bool cursorVisible = true;
         bool dirty = true;
-        bool skipText = false;
+        nixboy::TerminalTextInput textInput;
 
         static void output(const char* bytes, size_t length, void* user)
         {
@@ -259,8 +264,82 @@ namespace {
         const SDL_Keycode key = event.keysym.sym;
         const auto mod = static_cast<SDL_Keymod>(event.keysym.mod);
         VTermKey special = terminalKey(key);
-        state.skipText = special != VTERM_KEY_NONE;
+        state.textInput.keyDown(event.keysym.scancode);
         if (special != VTERM_KEY_NONE) {
+            char duplicate = '\0';
+            char alternate = '\0';
+            switch (key) {
+            case SDLK_RETURN:
+            case SDLK_KP_ENTER:
+                duplicate = '\r';
+                alternate = '\n';
+                break;
+            case SDLK_TAB:
+                duplicate = '\t';
+                break;
+            case SDLK_BACKSPACE:
+                duplicate = '\b';
+                alternate = '\x7f';
+                break;
+            case SDLK_ESCAPE:
+                duplicate = '\x1b';
+                break;
+            case SDLK_KP_0:
+                duplicate = '0';
+                break;
+            case SDLK_KP_1:
+                duplicate = '1';
+                break;
+            case SDLK_KP_2:
+                duplicate = '2';
+                break;
+            case SDLK_KP_3:
+                duplicate = '3';
+                break;
+            case SDLK_KP_4:
+                duplicate = '4';
+                break;
+            case SDLK_KP_5:
+                duplicate = '5';
+                break;
+            case SDLK_KP_6:
+                duplicate = '6';
+                break;
+            case SDLK_KP_7:
+                duplicate = '7';
+                break;
+            case SDLK_KP_8:
+                duplicate = '8';
+                break;
+            case SDLK_KP_9:
+                duplicate = '9';
+                break;
+            case SDLK_KP_MULTIPLY:
+                duplicate = '*';
+                break;
+            case SDLK_KP_PLUS:
+                duplicate = '+';
+                break;
+            case SDLK_KP_COMMA:
+                duplicate = ',';
+                break;
+            case SDLK_KP_MINUS:
+                duplicate = '-';
+                break;
+            case SDLK_KP_PERIOD:
+                duplicate = '.';
+                alternate = ',';
+                break;
+            case SDLK_KP_DIVIDE:
+                duplicate = '/';
+                break;
+            case SDLK_KP_EQUALS:
+                duplicate = '=';
+                break;
+            default:
+                break;
+            }
+            state.textInput.keyDown(event.keysym.scancode, duplicate, alternate);
             vterm_keyboard_key(term, special, modifiers(mod));
             return;
         }
@@ -269,8 +348,11 @@ namespace {
         // Right Alt / MODE is left to SDL's AltGr text composition.
         if ((mod & (KMOD_CTRL | KMOD_LALT)) && !(mod & (KMOD_RALT | KMOD_MODE))
             && key >= 32 && key <= 126) {
-            state.skipText = true;
             uint32_t ch = static_cast<uint32_t>(key);
+            char duplicate = static_cast<char>(key);
+            if (key >= SDLK_a && key <= SDLK_z && ((mod & KMOD_SHIFT) != 0) != ((mod & KMOD_CAPS) != 0)) {
+                duplicate -= 'a' - 'A';
+            }
             int terminalMods = modifiers(mod);
             // Preserve conventional shell control bytes for Ctrl+I/J/M/[ as well
             // as the other letters. libvterm deliberately encodes these distinct
@@ -280,13 +362,16 @@ namespace {
                 terminalMods &= ~(VTERM_MOD_CTRL | VTERM_MOD_SHIFT);
             } else if ((mod & KMOD_CTRL) && (mod & KMOD_SHIFT) && key == SDLK_6) {
                 ch = 30;
+                duplicate = '^';
                 terminalMods &= ~(VTERM_MOD_CTRL | VTERM_MOD_SHIFT);
             } else if ((mod & KMOD_CTRL) && (mod & KMOD_SHIFT) && key == SDLK_MINUS) {
                 ch = 31;
+                duplicate = '_';
                 terminalMods &= ~(VTERM_MOD_CTRL | VTERM_MOD_SHIFT);
             } else if ((mod & KMOD_SHIFT) && key >= SDLK_a && key <= SDLK_z) {
                 ch -= 'a' - 'A';
             }
+            state.textInput.keyDown(event.keysym.scancode, duplicate, static_cast<char>(ch), true);
             vterm_keyboard_unichar(term, ch, static_cast<VTermModifier>(terminalMods));
         }
     }
@@ -501,13 +586,19 @@ bool nixboyTerminalOpen(uint16_t port, const std::string& token,
             if (!state.ready || close) continue;
             if (event.type == SDL_KEYDOWN) {
                 handleKey(term, state, event.key);
-            } else if (event.type == SDL_TEXTINPUT && !state.skipText) {
+            } else if (event.type == SDL_KEYUP) {
+                state.textInput.keyUp(event.key.keysym.scancode);
+            } else if (event.type == SDL_WINDOWEVENT) {
+                state.textInput.reset();
+            } else if (event.type == SDL_TEXTINPUT && state.textInput.acceptText(event.text.text)) {
                 if (!state.client.sendInput(event.text.text)) {
                     state.status = "Terminal input queue full or disconnected. Wait, or close with F10.";
                     state.dirty = true;
                 }
             }
         }
+        // Overflow may have discarded the release for a retained keydown.
+        if (overflow) state.textInput.reset();
         vterm_screen_flush_damage(screen);
         if (state.dirty) {
             renderTerminal(modal.window, width, height, cellWidth, cellHeight, rows, cols, term, screen, state);

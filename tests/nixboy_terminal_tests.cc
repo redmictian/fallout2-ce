@@ -5,6 +5,8 @@
 #include <stdexcept>
 #include <string>
 
+#include "../src/nixboy_terminal_input.h"
+
 namespace {
 
 void require(bool condition, const char* message)
@@ -135,6 +137,76 @@ void generatedCharacterTables()
     require(t.cell(0, 1).chars[0] == 0xA3, "UK table generation");
 }
 
+void textOnlyInputAfterTerminalKeys()
+{
+    fallout::nixboy::TerminalTextInput input;
+    constexpr uint32_t enter = 40;
+    constexpr uint32_t escape = 41;
+    constexpr uint32_t controlC = 6;
+    constexpr uint32_t keypad0 = 98;
+    constexpr uint32_t keypadPlus = 87;
+    constexpr uint32_t altShift1 = 30;
+
+    // Match the in-game failure: synthetic typing supplies text events only,
+    // while Return supplies physical keydown/keyup events between commands.
+    std::string sent;
+    for (const char* command : { "printf first", "printf second", "printf third" }) {
+        for (const char* ch = command; *ch; ++ch) {
+            if (input.acceptText(std::string_view(ch, 1))) sent.push_back(*ch);
+        }
+        input.keyDown(enter, '\r', '\n');
+        sent.push_back('\r');
+        input.keyUp(enter);
+    }
+    require(sent == "printf first\rprintf second\rprintf third\r", "text-only commands survive Return releases");
+
+    input.keyDown(enter, '\r', '\n');
+    require(!input.acceptText("\r"), "forwarded Return duplicate suppressed");
+    require(input.acceptText("\r"), "duplicate suppression consumed once");
+    input.keyDown(enter, '\r', '\n');
+    require(input.acceptText("next command"), "Return cannot suppress unrelated synthetic text without keyup");
+
+    input.keyDown(controlC, 'c', '\x03');
+    require(!input.acceptText("c"), "forwarded control chord duplicate suppressed");
+    input.keyDown(controlC, 'c', '\x03');
+    require(!input.acceptText("\x03"), "forwarded control byte duplicate suppressed");
+    input.keyDown(controlC, 'c', '\x03');
+    input.keyUp(escape);
+    require(!input.acceptText("c"), "unrelated keyup preserves active chord suppression");
+    input.keyDown(controlC, 'c', '\x03');
+    input.keyUp(controlC);
+    require(input.acceptText("c"), "released control chord permits same synthetic character");
+
+    input.keyDown(escape, '\x1b');
+    require(!input.acceptText("\x1b"), "forwarded Escape duplicate suppressed");
+    input.keyDown(escape, '\x1b');
+    require(input.acceptText("\xe4\xb8\xad"), "held special key cannot suppress UTF-8 IME commit");
+    input.keyDown(controlC, 'c', '\x03');
+    require(input.acceptText("compose"), "whole IME text cannot match a duplicate prefix");
+    input.keyDown(altShift1, '1', '\0', true);
+    require(!input.acceptText("!"), "shifted printable chord duplicate suppressed");
+    input.keyDown(altShift1, '1', '\0', true);
+    input.keyUp(altShift1);
+    require(input.acceptText("!"), "released shifted chord permits synthetic punctuation");
+
+    input.keyDown(keypad0, '0');
+    require(!input.acceptText("0"), "keypad numeric duplicate suppressed");
+    input.keyDown(keypadPlus, '+');
+    require(!input.acceptText("+"), "keypad operator duplicate suppressed");
+    input.keyDown(keypad0, '.', ',');
+    require(!input.acceptText(","), "localized keypad decimal duplicate suppressed");
+    input.keyDown(keypadPlus, '+');
+    require(!input.acceptText("+"), "key repeat re-arms duplicate suppression");
+    input.keyDown(keypadPlus, '+');
+    input.keyDown(controlC);
+    require(input.acceptText("+"), "subsequent ordinary keydown clears stale duplicate");
+    for (const char* reason : { "focus loss", "queue overflow after retained keydown" }) {
+        input.keyDown(controlC, 'c', '\x03');
+        input.reset();
+        require(input.acceptText("c"), reason);
+    }
+}
+
 } // namespace
 
 int main()
@@ -146,6 +218,7 @@ int main()
         editingAndReports();
         keyboardModes();
         generatedCharacterTables();
+        textOnlyInputAfterTerminalKeys();
         std::cout << "Nix-Boy VT regression tests passed\n";
         return EXIT_SUCCESS;
     } catch (const std::exception& error) {
