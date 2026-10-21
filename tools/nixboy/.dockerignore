@@ -1,0 +1,7 @@
+# Send only explicit image inputs; exclude local tokens, environments and caches.
+**
+!protocol.py
+!container/
+!container/Dockerfile
+!container/control.py
+!container/nixboy

@@ -19,7 +19,7 @@ Copy-Item -LiteralPath $executablePath -Destination (Join-Path $destinationPath 
 # Explicit source allowlist: no game assets, saves, runtime config or tokens.
 $files = @(
     'LICENSE.md', 'MODLOG.md', 'nixboy.ini.example',
-    'tools/nixboy/README.md', 'tools/nixboy/protocol.md',
+    'tools/nixboy/README.md', 'tools/nixboy/protocol.md', 'tools/nixboy/.dockerignore',
     'tools/nixboy/requirements.txt', 'tools/nixboy/bridge.py',
     'tools/nixboy/protocol.py', 'tools/nixboy/smoke_docker.py',
     'tools/nixboy/container/Dockerfile', 'tools/nixboy/container/control.py',
