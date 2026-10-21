@@ -56,6 +56,19 @@ namespace {
             if (!wasKeyboardDisabled_) {
                 keyboardEnable();
             }
+            // The modal intercepts SDL_QUIT to close its Docker session first.
+            // Redeliver it after restoring the engine's event handler: value 2
+            // only ends gameplay and is cleared by gameReset.
+            bool quit;
+            {
+                std::lock_guard<std::mutex> lock(mutex_);
+                quit = quit_;
+            }
+            if (quit) {
+                SDL_Event event = {};
+                event.type = SDL_QUIT;
+                SDL_PushEvent(&event);
+            }
         }
 
         void take(std::deque<SDL_Event>& events, bool& quit, bool& overflow)
