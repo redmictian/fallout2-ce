@@ -2,6 +2,11 @@ cmake_minimum_required(VERSION 3.13)
 project(nixboy_tests LANGUAGES C CXX)
 
 enable_testing()
+add_executable(debug-launch-test debug_launch_test.cc ../src/debug_launch.cc)
+target_include_directories(debug-launch-test PRIVATE ../src)
+target_compile_features(debug-launch-test PRIVATE cxx_std_17)
+add_test(NAME debug-launch COMMAND debug-launch-test)
+
 find_package(Threads REQUIRED)
 add_executable(nixboy-client-test nixboy_client_test.cc ../src/nixboy_client.cc)
 target_include_directories(nixboy-client-test PRIVATE ../src)

@@ -1,6 +1,7 @@
 #include "main.h"
 
 #include <limits.h>
+#include <stdio.h>
 #include <string.h>
 
 #include "art.h"
@@ -11,6 +12,7 @@
 #include "cycle.h"
 #include "db.h"
 #include "debug.h"
+#include "debug_launch.h"
 #include "draw.h"
 #include "endgame.h"
 #include "game.h"
@@ -23,6 +25,7 @@
 #include "mainmenu.h"
 #include "map.h"
 #include "mouse.h"
+#include "movie.h"
 #include "object.h"
 #include "palette.h"
 #include "platform_compat.h"
@@ -53,6 +56,7 @@ static int _main_load_new(char* fname);
 static int main_loadgame_new();
 static void main_unload_new();
 static void mainLoop();
+static void mainNewGame();
 static void showDeath();
 static void _main_death_voiceover_callback();
 static int _mainDeathGrabTextFile(const char* fileName, char* dest);
@@ -73,6 +77,12 @@ static bool _main_death_voiceover_done;
 // 0x48099C
 int falloutMain(int argc, char** argv)
 {
+    DebugLaunchOptions debugLaunch;
+    if (!debugLaunchParseOptions(argc, argv, debugLaunch)) {
+        fprintf(stderr, "Invalid debug launch option. Use --debug-no-movies or --debug-new-game=narg|chitsa|mingun.\n");
+        return 1;
+    }
+
     if (!autorunMutexCreate()) {
         return 1;
     }
@@ -81,6 +91,8 @@ int falloutMain(int argc, char** argv)
         return 1;
     }
 
+    movieSetSkipPlayback(debugLaunch.skipMovies);
+
     // SFALL: Allow to skip intro movies
     int skipOpeningMovies;
     configGetInt(&gSfallConfig, SFALL_CONFIG_MISC_KEY, SFALL_CONFIG_SKIP_OPENING_MOVIES_KEY, &skipOpeningMovies);
@@ -88,6 +100,17 @@ int falloutMain(int argc, char** argv)
         gameMoviePlay(MOVIE_IPLOGO, GAME_MOVIE_FADE_IN);
         gameMoviePlay(MOVIE_INTRO, 0);
         gameMoviePlay(MOVIE_CREDITS, 0);
+    }
+
+    if (debugLaunch.newGameCharacter != nullptr) {
+        if (!characterSelectorLoadPremade(debugLaunch.newGameCharacter)) {
+            debugPrint("\nDebug launch: unable to load premade %s\n", debugLaunch.newGameCharacter);
+            main_exit_system();
+            autorunMutexClose();
+            return 1;
+        }
+        debugPrint("\nDebug launch: new game as %s; movie playback disabled\n", debugLaunch.newGameCharacter);
+        mainNewGame();
     }
 
     if (mainMenuWindowInit() == 0) {
@@ -111,37 +134,7 @@ int falloutMain(int argc, char** argv)
                 mainMenuWindowHide(true);
                 mainMenuWindowFree();
                 if (characterSelectorOpen() == 2) {
-                    gameMoviePlay(MOVIE_ELDER, GAME_MOVIE_STOP_MUSIC);
-                    randomSeedPrerandom(-1);
-
-                    // SFALL: Override starting map.
-                    char* mapName = nullptr;
-                    if (configGetString(&gSfallConfig, SFALL_CONFIG_MISC_KEY, SFALL_CONFIG_STARTING_MAP_KEY, &mapName)) {
-                        if (*mapName == '\0') {
-                            mapName = nullptr;
-                        }
-                    }
-
-                    char* mapNameCopy = compat_strdup(mapName != nullptr ? mapName : _mainMap);
-                    _main_load_new(mapNameCopy);
-                    free(mapNameCopy);
-
-                    // SFALL: AfterNewGameStartHook.
-                    sfall_gl_scr_exec_start_proc();
-
-                    mainLoop();
-                    paletteFadeTo(gPaletteWhite);
-
-                    // NOTE: Uninline.
-                    main_unload_new();
-
-                    // NOTE: Uninline.
-                    main_reset_system();
-
-                    if (_main_show_death_scene != 0) {
-                        showDeath();
-                        _main_show_death_scene = 0;
-                    }
+                    mainNewGame();
                 }
 
                 mainMenuWindowInit();
@@ -225,6 +218,39 @@ int falloutMain(int argc, char** argv)
     autorunMutexClose();
 
     return 0;
+}
+
+// Both interactive selection and explicit debug launches use the same session
+// setup/hooks/teardown. Neither path saves or loads a slot automatically.
+static void mainNewGame()
+{
+    gameMoviePlay(MOVIE_ELDER, GAME_MOVIE_STOP_MUSIC);
+    randomSeedPrerandom(-1);
+
+    // SFALL: Override starting map.
+    char* mapName = nullptr;
+    if (configGetString(&gSfallConfig, SFALL_CONFIG_MISC_KEY, SFALL_CONFIG_STARTING_MAP_KEY, &mapName)) {
+        if (*mapName == '\0') {
+            mapName = nullptr;
+        }
+    }
+
+    char* mapNameCopy = compat_strdup(mapName != nullptr ? mapName : _mainMap);
+    _main_load_new(mapNameCopy);
+    free(mapNameCopy);
+
+    // SFALL: AfterNewGameStartHook.
+    sfall_gl_scr_exec_start_proc();
+
+    mainLoop();
+    paletteFadeTo(gPaletteWhite);
+    main_unload_new();
+    main_reset_system();
+
+    if (_main_show_death_scene != 0) {
+        showDeath();
+        _main_show_death_scene = 0;
+    }
 }
 
 // 0x480CC0

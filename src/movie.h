@@ -27,6 +27,9 @@ typedef int(MovieBlitFunc)(int win, unsigned char* data, int width, int height, 
 
 void movieInit();
 void movieExit();
+// Process-local test policy, retained across new/load/reset and never saved.
+void movieSetSkipPlayback(bool skip);
+bool movieIsPlaybackSkipped();
 void _movieStop();
 int movieSetFlags(int a1);
 void _movieSetPaletteFunc(MovieSetPaletteEntriesProc* proc);

@@ -145,6 +145,29 @@ static FrmImage _previousButtonPressedFrmImage;
 
 static std::vector<PremadeCharacterDescription> gCustomPremadeCharacterDescriptions;
 
+bool characterSelectorLoadPremade(const char* name)
+{
+    if (name == nullptr) {
+        return false;
+    }
+
+    int index;
+    if (strcmp(name, "narg") == 0) {
+        index = PREMADE_CHARACTER_NARG;
+    } else if (strcmp(name, "chitsa") == 0) {
+        index = PREMADE_CHARACTER_CHITSA;
+    } else if (strcmp(name, "mingun") == 0) {
+        index = PREMADE_CHARACTER_MINGUN;
+    } else {
+        return false;
+    }
+
+    char path[COMPAT_MAX_PATH];
+    snprintf(path, sizeof(path), "%s.gcd", gPremadeCharacterDescriptions[index].fileName);
+    premadeCharactersLocalizePath(path);
+    return _proto_dude_init(path) == 0;
+}
+
 // 0x4A71D0
 int characterSelectorOpen()
 {

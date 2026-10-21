@@ -139,6 +139,19 @@ int gameMoviesSave(File* stream)
 // 0x44E690
 int gameMoviePlay(int movie, int flags)
 {
+    if (movie < 0 || movie >= MOVIE_COUNT) {
+        return -1;
+    }
+
+    if (movieIsPlaybackSkipped()) {
+        debugPrint("\nDebug launch: skipped movie %s\n", gMovieFileNames[movie]);
+        if ((flags & GAME_MOVIE_STOP_MUSIC) != 0) {
+            backgroundSoundDelete();
+        }
+        gGameMoviesSeen[movie] = 1;
+        return 0;
+    }
+
     gGameMovieIsPlaying = true;
 
     const char* movieFileName = gMovieFileNames[movie];

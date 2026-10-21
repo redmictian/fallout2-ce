@@ -22,6 +22,8 @@
 
 namespace fallout {
 
+static bool gMovieSkipPlayback = false;
+
 typedef struct MovieSubtitleListNode {
     int num;
     char* text;
@@ -767,6 +769,11 @@ static bool _localMovieCallback()
 // 0x487AC8
 int _movieRun(int win, char* filePath)
 {
+    if (gMovieSkipPlayback) {
+        debugPrint("\nDebug launch: skipped window movie %s\n", filePath);
+        return 0;
+    }
+
     if (_running) {
         return 1;
     }
@@ -783,6 +790,11 @@ int _movieRun(int win, char* filePath)
 // 0x487B1C
 int _movieRunRect(int win, char* filePath, int a3, int a4, int a5, int a6)
 {
+    if (gMovieSkipPlayback) {
+        debugPrint("\nDebug launch: skipped window movie %s\n", filePath);
+        return 0;
+    }
+
     if (_running) {
         return 1;
     }
@@ -795,6 +807,16 @@ int _movieRunRect(int win, char* filePath, int a3, int a4, int a5, int a6)
     _movieSubRectFlag = 1;
 
     return _movieStart(win, filePath);
+}
+
+void movieSetSkipPlayback(bool skip)
+{
+    gMovieSkipPlayback = skip;
+}
+
+bool movieIsPlaybackSkipped()
+{
+    return gMovieSkipPlayback;
 }
 
 // 0x487B7C

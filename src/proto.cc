@@ -115,9 +115,6 @@ static char* _proto_path_base = _aProto_0;
 // 0x51C538
 static int _init_true = 0;
 
-// 0x51C53C
-static int _retval = 0;
-
 // 0x66452C
 static char* _mp_perk_code_None;
 
@@ -904,9 +901,7 @@ int _proto_dude_init(const char* path)
     gDude->data.critter.combat.team = 0;
     _ResetPlayer();
 
-    if (gcdLoad(path) == -1) {
-        _retval = -1;
-    }
+    int result = gcdLoad(path);
 
     proto->critter.data.baseStats[STAT_DAMAGE_RESISTANCE_EMP] = 100;
     proto->critter.data.bodyType = 0;
@@ -928,11 +923,11 @@ int _proto_dude_init(const char* path)
     critterUpdateDerivedStats(gDude);
     critterAdjustHitPoints(gDude, 10000);
 
-    if (_retval) {
+    if (result == -1) {
         debugPrint("\n ** Error in proto_dude_init()! **\n");
     }
 
-    return 0;
+    return result;
 }
 
 // 0x49FBBC
