@@ -23,3 +23,7 @@ LICENSE text eol=lf
 
 # Force CRLF
 *.bat text eol=crlf
+
+# Linux container entrypoints and shell tools must survive Windows checkouts.
+tools/nixboy/** text eol=lf
+tools/build-nixboy-windows.sh text eol=lf

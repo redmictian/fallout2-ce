@@ -1,0 +1,2 @@
+docker==7.2.0
+pywin32==312; sys_platform == "win32"

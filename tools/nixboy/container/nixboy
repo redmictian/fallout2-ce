@@ -1,0 +1,61 @@
+#!/usr/bin/env python3
+"""Small Linux-side API: live game context and named integer results."""
+
+import argparse
+import json
+import subprocess
+import sys
+
+sys.path.insert(0, "/opt/nixboy")
+from control import request
+from protocol import ProtocolError, validate_event
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    commands = parser.add_subparsers(dest="command", required=True)
+    context = commands.add_parser("context", help="read current game parameters")
+    context.add_argument("key", nargs="?")
+    emit = commands.add_parser("emit", help="send a named signed integer result")
+    emit.add_argument("name")
+    emit.add_argument("value", type=int)
+    run = commands.add_parser("run", help="run Linux argv and emit its exit status")
+    run.add_argument("name")
+    run.add_argument("argv", nargs=argparse.REMAINDER)
+    args = parser.parse_args()
+    try:
+        if args.command == "context":
+            values = request({"type": "context"})["values"]
+            if args.key is not None:
+                if args.key not in values:
+                    parser.error("context key is not present")
+                print(values[args.key])
+            else:
+                print(json.dumps(values, sort_keys=True))
+            return 0
+        validate_event(args.name, args.value if args.command == "emit" else 0)
+        if args.name == "terminal_exit":
+            raise ProtocolError("terminal_exit is reserved for the actual shell exit")
+        if args.command == "emit":
+            result = args.value
+        else:
+            argv = args.argv[1:] if args.argv[:1] == ["--"] else args.argv
+            if not argv:
+                parser.error("run requires a Linux command and optional arguments")
+            try:
+                result = subprocess.run(argv, check=False).returncode
+                # Bash-compatible status for processes killed by a signal.
+                result = 128 - result if result < 0 else result
+            except FileNotFoundError:
+                result = 127
+            except PermissionError:
+                result = 126
+        request({"type": "emit", "name": args.name, "value": result})
+        return result if args.command == "run" else 0
+    except (OSError, ProtocolError, ValueError) as exc:
+        print(f"nixboy: {exc}", file=sys.stderr)
+        return 125
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
