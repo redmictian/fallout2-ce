@@ -8,8 +8,8 @@ See [protocol.md](protocol.md) for the wire format and trust boundaries.
 
 ## Status and prerequisites
 
-On October 21, 2026, all 31 Python tests passed under WSL Python 3.14.4. Native
-Windows Python 3.12.14 passed 29 tests with two Linux socket tests skipped. These
+On October 21, 2026, all 33 Python tests passed under WSL Python 3.14.4. Native
+Windows Python 3.12.14 passed 30 tests with three Linux-only tests skipped. These
 cover fake-Docker lifecycle and socket streams, authentication before Docker
 operations, protocol bounds, startup failure, disconnection, graceful shutdown,
 context, events, reserved exit names, actual exit status and Linux control sockets.
@@ -17,8 +17,11 @@ The actual Docker smoke also passed with Docker Engine 29.9.2 in WSL, including
 PTY I/O/signals/resize, context/results/exits, isolation, quiet/repeated sessions,
 failed-start recovery and close/disconnect/shutdown cleanup. The native Windows
 C++ client reached that bridge through Windows localhost and passed PTY/context/
-result/exit checks with every created container removed. The game itself has not
-been launched with this mod; Pip-Boy/input/rendering and save effects remain pending.
+result/exit checks with every created container removed. A separate Windows game
+copy also passed the Pip-Boy button/hotkey, shell/editor controls, configured
+integer results, actual shell exits, visible karma effect and save/reload checks.
+The test used temporary reserved globals and a karma binding; these are not
+defaults or a claim that arbitrary quest globals are safe for other mods.
 
 The tested workstation deployment uses the existing `Ubuntu-26.04` Docker Engine;
 Docker Desktop is not required for that route. Native Windows named pipes remain
@@ -141,6 +144,13 @@ F10 or the modal Close button leaves Nix-Boy. Esc and Ctrl+C go to Linux, as do
 the other function keys. The engine terminal supports ASCII and box drawing;
 unsupported Unicode characters appear as `?`.
 
+For disposable test runs, launch this feature executable with
+`--debug-new-game=narg` (also `chitsa` or `mingun`) to start a fresh original
+premade without the main menu, character selection or MVE playback. Use
+`--debug-no-movies` for menu/selection tests. These switches are opt-in and do
+not save/load automatically or fix the RNG seed. Slideshow images and dialogue
+are separate from MVE playback. Avoid using debug runs for production saves.
+
 The engine snapshot includes `game.time_ticks`, `game.map`, `player.tile`,
 `player.elevation`, and `player.hp`, plus configured `global.NAME` bindings.
 Opening the terminal supplies the current values. Helpers can read the live map;
@@ -219,9 +229,11 @@ exit codes, final shell status, event delivery before exit, a 12-second quiet
 session, repeated sessions, failed-image startup/recovery, isolation and
 close/disconnect/active-shutdown cleanup. Receive waits and collected output are
 bounded. It never pulls images implicitly, installs Docker, or launches the game.
-The WSL Docker/backend and Windows-client route are runtime-verified at the
-recorded configuration; in-game acceptance is still required. See the root
-`MODLOG.md` for exact evidence and remaining work.
+The WSL Docker/backend, Windows-client route and bounded game scenarios above
+were verified on this workstation. Native MSVC, macOS, Docker Desktop and
+non-ASCII font rendering remain outside those results. Canonical development
+tracking and detailed acceptance evidence live in the project workspace's
+`mod_nix-boy/` folder, separate from this redistributable operator guide.
 
 The pinned SDK's [named-pipe implementation](https://github.com/docker/docker-py/blob/7.2.0/docker/transport/npipesocket.py)
 and [socket helpers](https://github.com/docker/docker-py/blob/7.2.0/docker/utils/socket.py)

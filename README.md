@@ -9,10 +9,16 @@ There is also [Fallout Community Edition](https://github.com/alexbatalov/fallout
 This feature branch includes **Nix-Boy**, an opt-in Pip-Boy Linux terminal with
 a Docker backend and named game parameter/result bindings. See the
 [Nix-Boy setup and protocol guide](tools/nixboy/README.md) and
-[implementation/validation log](MODLOG.md). It requires a separate local bridge;
+[development workspace pointer](MODLOG.md). It requires a separate local bridge;
 copying the executable alone does not start Docker. Runtime is disabled unless
 `nixboy.ini` enables it; [example configuration](nixboy.ini.example) has no game
 variable bindings enabled. CMake `-DFALLOUT_NIXBOY=OFF` excludes the terminal.
+
+For disposable test runs, `--debug-new-game=narg` bypasses the main menu and
+character selection and starts a fresh original premade with MVE playback off.
+`chitsa` and `mingun` are also accepted. `--debug-no-movies` keeps normal menus
+and suppresses MVE playback. These explicit switches do not save or load slots
+automatically; launch without them for ordinary play.
 
 ## Installation
 

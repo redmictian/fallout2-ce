@@ -19,13 +19,13 @@ Copy-Item -LiteralPath $executablePath -Destination (Join-Path $destinationPath 
 
 # Explicit source allowlist: no game assets, saves, runtime config or tokens.
 $files = @(
-    'LICENSE.md', 'MODLOG.md', 'nixboy.ini.example',
+    'LICENSE.md', 'nixboy.ini.example',
     'tools/nixboy/README.md', 'tools/nixboy/protocol.md', 'tools/nixboy/.dockerignore',
     'tools/nixboy/requirements.txt', 'tools/nixboy/bridge.py',
     'tools/nixboy/protocol.py', 'tools/nixboy/smoke_docker.py',
     'tools/nixboy/smoke_windows_wsl.py',
     'tools/nixboy/container/Dockerfile', 'tools/nixboy/container/control.py',
-    'tools/nixboy/container/nixboy',
+    'tools/nixboy/container/nixboy', 'tools/nixboy/container/shell.py',
     'third_party/libvterm/LICENSE', 'third_party/libvterm/README.nixboy.md',
     'third_party/fpattern/LICENSE', 'third_party/sdl2/LICENSE', 'third_party/zlib/LICENSE'
 )
@@ -46,10 +46,13 @@ Read tools/nixboy/README.md before setup. Docker and a local Python bridge are
 required for Linux. Enable nixboy.ini in a separate owned-data test installation.
 No game assets, saves, runtime configuration or authentication tokens are included.
 
-The Windows executable and automated protocol/VT checks were built/verified.
-Live Docker Engine in WSL and native Windows C++ client -> WSL -> Docker checks
-passed. In-game Pip-Boy/input/binding/save acceptance remains pending; see
-MODLOG.md for exact scope. This package is an implementation test build.
+Windows x64, live WSL Docker, in-game terminal controls, explicitly bound game
+results and save/reload were checked in a disposable owned-data installation.
+See tools/nixboy/README.md for deployment limits. This is a foundation test build.
+
+For fast disposable tests, --debug-new-game=narg starts a fresh predetermined
+character without menus or MVE movies. --debug-no-movies keeps normal menus.
+Neither option saves or loads automatically. Never test in your clean game copy.
 "@
 Set-Content -LiteralPath (Join-Path $destinationPath 'READ-ME.txt') -Value $notice -Encoding utf8
 $checksum = (Get-FileHash -LiteralPath (Join-Path $destinationPath 'fallout2-ce.exe') -Algorithm SHA256).Hash.ToLowerInvariant()
