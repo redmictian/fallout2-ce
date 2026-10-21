@@ -392,3 +392,8 @@ FodyWeavers.xsd
 /out
 /build
 CMakeUserPresets.json
+# Nix-Boy local configuration and authentication; never commit tokens.
+nixboy.ini
+nixboy.token
+.venv/
+__pycache__/

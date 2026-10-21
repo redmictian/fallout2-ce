@@ -1,0 +1,14 @@
+; Copy to nixboy.ini in a separate Fallout 2 CE test installation.
+; Start the local bridge and use the token file it generated in that directory.
+[nixboy]
+enabled=1
+port=47821
+token_file=nixboy.token
+
+; Named results can only write explicitly listed existing global indexes.
+; No bindings are enabled by default. Choose indexes owned by YOUR mod;
+; arbitrary vanilla indexes will change existing quests or character state.
+; The starting value is sent to Linux as context key global.<name>.
+[bindings]
+; challenge_result=YOUR_MOD_GLOBAL_INDEX
+; terminal_exit=YOUR_MOD_EXIT_GLOBAL_INDEX

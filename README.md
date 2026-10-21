@@ -6,6 +6,14 @@ Popular Fallout 2 total conversion mods are partially supported. Original versio
 
 There is also [Fallout Community Edition](https://github.com/alexbatalov/fallout1-ce).
 
+This feature branch includes **Nix-Boy**, an opt-in Pip-Boy Linux terminal with
+a Docker backend and named game parameter/result bindings. See the
+[Nix-Boy setup and protocol guide](tools/nixboy/README.md) and
+[implementation/validation log](MODLOG.md). It requires a separate local bridge;
+copying the executable alone does not start Docker. Runtime is disabled unless
+`nixboy.ini` enables it; [example configuration](nixboy.ini.example) has no game
+variable bindings enabled. CMake `-DFALLOUT_NIXBOY=OFF` excludes the terminal.
+
 ## Installation
 
 You must own the game to play. Purchase your copy on [GOG](https://www.gog.com/game/fallout_2), [Epic Games](https://store.epicgames.com/p/fallout-2) or [Steam](https://store.steampowered.com/app/38410). Download latest [release](https://github.com/alexbatalov/fallout2-ce/releases) or build from source. You can also check latest [debug](https://github.com/alexbatalov/fallout2-ce/actions) build intended for testers.

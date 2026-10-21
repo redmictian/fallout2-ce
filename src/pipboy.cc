@@ -27,6 +27,7 @@
 #include "memory.h"
 #include "message.h"
 #include "mouse.h"
+#include "nixboy.h"
 #include "object.h"
 #include "party_member.h"
 #include "platform_compat.h"
@@ -396,6 +397,7 @@ unsigned char _stat_flag;
 
 static int gPipboyPrevTab;
 static bool pipboy_available_at_game_start = false;
+static bool gPipboyNixboyEnabled = false;
 
 static FrmImage _pipboyFrmImages[PIPBOY_FRM_COUNT];
 
@@ -454,7 +456,12 @@ int pipboyOpen(int intent)
             break;
         }
 
-        if (keyCode == KEY_F12) {
+        if (gPipboyNixboyEnabled && (keyCode == 529 || keyCode == KEY_LOWERCASE_N || keyCode == KEY_UPPERCASE_N)) {
+            nixboyOpen();
+            gPipboyLastEventTimestamp = getTicks();
+            mouseGetPositionInWindow(gPipboyWindow, &gPipboyPreviousMouseX, &gPipboyPreviousMouseY);
+            windowRefresh(gPipboyWindow);
+        } else if (keyCode == KEY_F12) {
             takeScreenshot();
         } else if (keyCode >= 500 && keyCode <= 504) {
             // CE: Save previous tab selected so that the underlying handlers
@@ -605,6 +612,23 @@ static int pipboyWindowInit(int intent)
         }
 
         y += 27;
+    }
+
+    gPipboyNixboyEnabled = nixboyIsEnabled();
+    if (gPipboyNixboyEnabled) {
+        // Use the original unused row between STATUS and AUTOMAPS.
+        int button = buttonCreate(gPipboyWindow, 53, 368,
+            _pipboyFrmImages[PIPBOY_FRM_LITTLE_RED_BUTTON_UP].getWidth(),
+            _pipboyFrmImages[PIPBOY_FRM_LITTLE_RED_BUTTON_UP].getHeight(),
+            -1, -1, -1, 529,
+            _pipboyFrmImages[PIPBOY_FRM_LITTLE_RED_BUTTON_UP].getData(),
+            _pipboyFrmImages[PIPBOY_FRM_LITTLE_RED_BUTTON_DOWN].getData(),
+            nullptr, BUTTON_FLAG_TRANSPARENT);
+        if (button != -1) {
+            buttonSetCallbacks(button, _gsound_red_butt_press, _gsound_red_butt_release);
+        }
+        fontDrawText(gPipboyWindowBuffer + PIPBOY_WINDOW_WIDTH * 367 + 80,
+            "NIX-BOY", 140, PIPBOY_WINDOW_WIDTH, _colorTable[992]);
     }
 
     if (intent == PIPBOY_OPEN_INTENT_REST) {

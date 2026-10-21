@@ -21,6 +21,11 @@ set(CMAKE_CXX_STANDARD_REQUIRED YES)
 set(CMAKE_CXX_EXTENSIONS NO)
 
 option(FALLOUT_VENDORED "Use vendored third-party libraries" ON)
+option(FALLOUT_NIXBOY "Build the desktop Nix-Boy terminal (runtime opt-in)" ON)
+
+if(ANDROID OR IOS)
+    set(FALLOUT_NIXBOY OFF)
+endif()
 
 if(ANDROID)
     add_library(${EXECUTABLE_NAME} SHARED)
@@ -249,6 +254,8 @@ target_sources(${EXECUTABLE_NAME} PUBLIC
 )
 
 target_sources(${EXECUTABLE_NAME} PUBLIC
+    "src/nixboy.cc"
+    "src/nixboy.h"
     "src/audio_engine.cc"
     "src/audio_engine.h"
     "src/delay.cc"
@@ -360,6 +367,19 @@ endif()
 
 add_subdirectory("third_party/fpattern")
 target_link_libraries(${EXECUTABLE_NAME} fpattern::fpattern)
+
+if(FALLOUT_NIXBOY)
+    add_subdirectory("third_party/libvterm")
+    target_sources(${EXECUTABLE_NAME} PRIVATE
+        "src/nixboy_client.cc"
+        "src/nixboy_terminal.cc"
+    )
+    target_compile_definitions(${EXECUTABLE_NAME} PRIVATE FALLOUT_NIXBOY)
+    target_link_libraries(${EXECUTABLE_NAME} nixboy-vterm)
+    if(WIN32)
+        target_link_libraries(${EXECUTABLE_NAME} ws2_32)
+    endif()
+endif()
 
 if(FALLOUT_VENDORED)
     add_subdirectory("third_party/zlib")
