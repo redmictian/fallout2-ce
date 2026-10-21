@@ -12,6 +12,15 @@ if(WIN32)
 endif()
 add_test(NAME nixboy-client COMMAND nixboy-client-test)
 
+# Opt-in live probe; never run Docker as part of the ordinary unit test suite.
+add_executable(nixboy-live-probe EXCLUDE_FROM_ALL nixboy_live_probe.cc ../src/nixboy_client.cc)
+target_include_directories(nixboy-live-probe PRIVATE ../src)
+target_compile_features(nixboy-live-probe PRIVATE cxx_std_17)
+target_link_libraries(nixboy-live-probe PRIVATE Threads::Threads)
+if(WIN32)
+    target_link_libraries(nixboy-live-probe PRIVATE ws2_32)
+endif()
+
 add_subdirectory(../third_party/libvterm ${CMAKE_CURRENT_BINARY_DIR}/libvterm)
 add_executable(nixboy-terminal-test nixboy_terminal_tests.cc)
 target_link_libraries(nixboy-terminal-test PRIVATE nixboy-vterm)

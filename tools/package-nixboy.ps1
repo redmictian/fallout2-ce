@@ -1,6 +1,7 @@
 param(
     [Parameter(Mandatory = $true)][string]$Executable,
-    [Parameter(Mandatory = $true)][string]$Destination
+    [Parameter(Mandatory = $true)][string]$Destination,
+    [string]$LiveProbe
 )
 $ErrorActionPreference = 'Stop'
 $sourceDir = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path
@@ -22,6 +23,7 @@ $files = @(
     'tools/nixboy/README.md', 'tools/nixboy/protocol.md', 'tools/nixboy/.dockerignore',
     'tools/nixboy/requirements.txt', 'tools/nixboy/bridge.py',
     'tools/nixboy/protocol.py', 'tools/nixboy/smoke_docker.py',
+    'tools/nixboy/smoke_windows_wsl.py',
     'tools/nixboy/container/Dockerfile', 'tools/nixboy/container/control.py',
     'tools/nixboy/container/nixboy',
     'third_party/libvterm/LICENSE', 'third_party/libvterm/README.nixboy.md',
@@ -45,12 +47,19 @@ required for Linux. Enable nixboy.ini in a separate owned-data test installation
 No game assets, saves, runtime configuration or authentication tokens are included.
 
 The Windows executable and automated protocol/VT checks were built/verified.
-Live Docker/Windows named-pipe and owned-data gameplay validation remain pending;
-see MODLOG.md for exact scope. This package is an implementation test build.
+Live Docker Engine in WSL and native Windows C++ client -> WSL -> Docker checks
+passed. In-game Pip-Boy/input/binding/save acceptance remains pending; see
+MODLOG.md for exact scope. This package is an implementation test build.
 "@
 Set-Content -LiteralPath (Join-Path $destinationPath 'READ-ME.txt') -Value $notice -Encoding utf8
 $checksum = (Get-FileHash -LiteralPath (Join-Path $destinationPath 'fallout2-ce.exe') -Algorithm SHA256).Hash.ToLowerInvariant()
 Set-Content -LiteralPath (Join-Path $destinationPath 'SHA256.txt') -Value "$checksum  fallout2-ce.exe" -Encoding ascii
+if ($LiveProbe) {
+    $probePath = (Resolve-Path -LiteralPath $LiveProbe).Path
+    Copy-Item -LiteralPath $probePath -Destination (Join-Path $destinationPath 'nixboy-live-probe.exe')
+    $probeChecksum = (Get-FileHash -LiteralPath $probePath -Algorithm SHA256).Hash.ToLowerInvariant()
+    Add-Content -LiteralPath (Join-Path $destinationPath 'SHA256.txt') -Value "$probeChecksum  nixboy-live-probe.exe" -Encoding ascii
+}
 $archivePath = "$destinationPath.zip"
 if (Test-Path -LiteralPath $archivePath) { throw 'Archive already exists.' }
 Compress-Archive -LiteralPath $destinationPath -DestinationPath $archivePath

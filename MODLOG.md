@@ -102,15 +102,12 @@ after committing. The explicit package allowlist contains no assets or tokens.
 
 ## Remaining runtime acceptance
 
-Implementation is complete as a test build; live runtime acceptance is pending.
-Docker was not available and no new Docker installation was authorized during
-implementation. Follow `tools/nixboy/README.md` to install pinned Python
-dependencies, build the image and run `smoke_docker.py --run`. This must establish
-real Linux PTY interaction, Ctrl+C, resize, context/results, actual exits and
-container removal on the selected Docker Desktop/WSL route. Test both quiet
-sessions and graceful service shutdown on Windows named pipes. Hard process kills
-or a lost Docker create response can still leave a labeled container; recovery
-is documented and cleanup never prunes unrelated containers.
+The initial unavailable-Docker limitation above was resolved by the user's WSL
+Engine setup. The live backend/Windows-client checks below now pass; in-game
+acceptance remains pending. Native Docker Desktop/named-pipe execution was not
+tested and is not required by the selected WSL deployment. Hard process kills or
+a lost Docker create response can still leave a labeled container; recovery is
+documented and cleanup never prunes unrelated containers.
 
 Then use a new owned-data test installation with a working audio device. Back up
 any test saves before launch. Check: disabled config hides the button; enabled
@@ -129,3 +126,66 @@ desktop implementation, mobile build disabled; native MSVC/macOS runtime pending
 Container defaults to network-none, unprivileged read-only root and bounded
 resources; packages are supplied in a custom image. This is Linux userspace on
 Docker's Linux kernel, not a VM/kernel or systemd session.
+
+## Live WSL Engine follow-up (October 21, 2026)
+
+Continued on `mod/nix-boy` from `73eb064` after the user installed Docker Engine
+in the existing `Ubuntu-26.04` distribution. No Desktop installation, additional
+distribution, daemon TCP listener or system network change was made here.
+Verified regular-user client/server Docker 29.9.2, API 1.56 (minimum 1.40), Linux/amd64.
+Python 3.14.4's isolated host environment uses docker 7.2.0, requests 2.34.2,
+urllib3 2.8.0, certifi 2026.10.19, charset-normalizer 3.5.2 and idna 3.20.
+
+Built the existing pinned Dockerfile successfully. Local image inspect ID:
+`sha256:2aa3950887028ef0fdbeae64dbbe6205822b36198bc93c18fb9bebdf0ae758db`.
+Buildx used config blob
+`sha256:7e2543b00adc1080d3c1fdc4af408edaad567608d207d44599f028c3baf3768d`;
+the inspected ID is the local image index, not that config blob. No image was
+pushed or established as remotely pullable. Debian base remains pinned in the
+Dockerfile; apt package resolution occurred at this image build.
+
+The first actual Docker smoke passed its functional checks but exposed Python
+3.14 HTTPResponse finalizer warnings. Fixed `Duplex.close` to wake readers, then
+close the Docker SDK's owning response before raw SocketIO. A regression uses
+real stdlib HTTPResponse/socket I/O; the subsequent live tests completed without
+those warnings. **31 Python tests passed in WSL; 29 passed on Windows with two
+Linux-only skips.**
+
+Expanded live Linux smoke **passed**: actual PTY input/output, Ctrl+C recovery,
+size changes, initial/live context, signed named results, command status7, final
+shell status23, acknowledged results before EXIT, UID1000/read-only root/network
+none/256MiB/no host binds, a 12-second quiet session, repeated exits0/7/42, missing
+image startup and recovery, explicit CLOSE, disconnect and active service
+shutdown. Each created container was removed. The shutdown assertion drains
+already-buffered prompt output before requiring EOF. Receive time and output
+collection now have explicit total budgets.
+
+The optional native Windows x64 `nixboy-live-probe` uses the shipped C++ Client
+against a temporary WSL bridge and the real Docker daemon. **Three successive
+Windows-to-WSL-to-Docker runs passed** PTY24x80, context73, named result-19,
+EXIT23 and exact owned-container removal. Tokens are generated in memory and
+passed through anonymous stdin pipes, never command arguments/files/output.
+WSL's Windows localhost listener can appear just after Linux bind; the test
+supervisor waits at most five seconds for it, then launches the unchanged
+250ms-connect-deadline client. The first immediate-connect attempt established
+this startup timing issue before creating any container; no network setting or
+engine timeout was changed.
+
+Reproduce the live Linux check after building the image and installing the
+pinned requirements into a Linux environment:
+
+```sh
+python tools/nixboy/smoke_docker.py --run
+```
+
+Build `nixboy-live-probe` from the standalone `tests` CMake project for Windows,
+then from native Windows Python:
+
+```powershell
+python tools/nixboy/smoke_windows_wsl.py --run --probe PATH/nixboy-live-probe.exe --wsl-python /path/to/linux/venv/bin/python
+```
+
+The live probe is opt-in and is not registered as an automatic CTest/Docker run.
+No modified game, proprietary assets, saves or local game configuration were
+opened/changed by these checks. In-game rendering/input, actual mod-owned global
+effects and save/reload still need the acceptance procedure above.

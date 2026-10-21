@@ -8,16 +8,21 @@ See [protocol.md](protocol.md) for the wire format and trust boundaries.
 
 ## Status and prerequisites
 
-On October 21, 2026, all 30 Python tests passed under WSL Python 3.14.4. Native
-Windows Python 3.12.14 passed 28 tests with two Linux socket tests skipped. These
+On October 21, 2026, all 31 Python tests passed under WSL Python 3.14.4. Native
+Windows Python 3.12.14 passed 29 tests with two Linux socket tests skipped. These
 cover fake-Docker lifecycle and socket streams, authentication before Docker
 operations, protocol bounds, startup failure, disconnection, graceful shutdown,
 context, events, reserved exit names, actual exit status and Linux control sockets.
-They do not establish real Docker PTY or in-game runtime compatibility.
+The actual Docker smoke also passed with Docker Engine 29.9.2 in WSL, including
+PTY I/O/signals/resize, context/results/exits, isolation, quiet/repeated sessions,
+failed-start recovery and close/disconnect/shutdown cleanup. The native Windows
+C++ client reached that bridge through Windows localhost and passed PTY/context/
+result/exit checks with every created container removed. The game itself has not
+been launched with this mod; Pip-Boy/input/rendering and save effects remain pending.
 
-Docker is not installed or configured by this feature. Real Docker image build,
-native Windows named pipe transport, PTY integration smoke, and gameplay remain
-pending until run on a machine with a working Linux-container daemon. The bridge
+The tested workstation deployment uses the existing `Ubuntu-26.04` Docker Engine;
+Docker Desktop is not required for that route. Native Windows named pipes remain
+untested. Docker is not installed or configured by this feature. The bridge
 needs Python 3.10+ and dependencies in [requirements.txt](requirements.txt):
 [Docker SDK 7.2.0](https://pypi.org/project/docker/7.2.0/) and, on Windows,
 [pywin32 312](https://pypi.org/project/pywin32/312/). The SDK's
@@ -33,7 +38,7 @@ local named pipe or Unix socket. Remote SSH/TCP endpoints and `DOCKER_HOST` are
 deliberately unsupported; Docker contexts are not inherited. Start the daemon
 yourself, then build the image explicitly.
 
-## Windows setup
+## Alternative: native Windows bridge with Docker Desktop
 
 From the engine worktree in PowerShell, using a normal local CPython installation:
 
@@ -88,10 +93,26 @@ game's `token_file` there. For example, while the WSL bridge is stopped:
 cp "$HOME/.local/state/nixboy/game.token" /mnt/c/Games/Fallout2-NixBoy-Test/nixboy.token
 ```
 
-This cross-platform route additionally requires Windows-to-WSL localhost
-forwarding; that deployment has not been verified. Running the bridge natively on
-Windows is the direct route for a Windows game. Do not expose either service on a
-LAN to work around forwarding. Keep token copies private and identical.
+The Windows-game-to-WSL route was verified with the shipped native C++ client.
+It uses Windows-to-WSL localhost forwarding; it does not expose the Docker daemon
+over TCP. Forwarding can appear shortly after the WSL bridge announces its Linux
+listener, so let the listener become reachable before opening Nix-Boy. A transient
+connect failure is visible in the modal and can be retried by closing/reopening.
+Do not expose either service on a LAN. Keep token copies private and identical.
+
+To reproduce the Windows transport check without game assets, build the optional
+`nixboy-live-probe` target in the standalone `tests` project for Windows, or use
+the probe included in the test package. From native Windows Python:
+
+```powershell
+py -3 tools/nixboy/smoke_windows_wsl.py --run --probe .\nixboy-live-probe.exe --wsl-python /path/to/linux/venv/bin/python
+```
+
+Substitute the Linux Python environment where you installed the requirements.
+The supervisor starts a temporary WSL bridge, waits up to five seconds for
+Windows localhost readiness, runs the unchanged C++ client, and stops the bridge
+and verifies its containers were removed. Authentication tokens exist only in
+memory and anonymous stdin pipes. The probe does not launch Fallout 2.
 
 ## Game binding and Linux helpers
 
@@ -125,6 +146,9 @@ The engine snapshot includes `game.time_ticks`, `game.map`, `player.tile`,
 Opening the terminal supplies the current values. Helpers can read the live map;
 `NIXBOY_CONTEXT_JSON` is a startup environment snapshot and
 `NIXBOY_CONTEXT_PATH` points at the atomically replaced current JSON file.
+
+Configured binding names are case-sensitive and at most 57 characters, leaving
+space for `global.` in the outgoing context. At most 120 bindings are supported.
 
 Inside Nix-Boy:
 
@@ -191,15 +215,19 @@ python -m unittest discover -s tools/nixboy/tests -v
 For real Docker, build the image as above, install the pinned requirements into a
 virtual environment, then run `python tools/nixboy/smoke_docker.py --run`. It checks
 Linux PTY input/output, Ctrl+C, resize, initial/live context, named results, command
-exit codes, final shell status, event delivery before exit, and disconnect
-cleanup. It never pulls images implicitly, installs Docker, or launches the game.
-Real Docker and game validation are required before calling this mod runtime
-verified. See the root `MODLOG.md` for coordinated engine validation and remaining
-work.
+exit codes, final shell status, event delivery before exit, a 12-second quiet
+session, repeated sessions, failed-image startup/recovery, isolation and
+close/disconnect/active-shutdown cleanup. Receive waits and collected output are
+bounded. It never pulls images implicitly, installs Docker, or launches the game.
+The WSL Docker/backend and Windows-client route are runtime-verified at the
+recorded configuration; in-game acceptance is still required. See the root
+`MODLOG.md` for exact evidence and remaining work.
 
 The pinned SDK's [named-pipe implementation](https://github.com/docker/docker-py/blob/7.2.0/docker/transport/npipesocket.py)
 and [socket helpers](https://github.com/docker/docker-py/blob/7.2.0/docker/utils/socket.py)
 were source-checked: the bridge uses `recv_into` for named-pipe timeout support,
 treats Windows pipe-ended error 109 as EOF, handles partial writes, and disables
 the HTTP timeout on the long-lived PTY. Fake stream regression tests cover these
-adaptations; native Docker Desktop execution remains pending.
+adaptations; native Docker Desktop execution remains pending. Live WSL tests
+additionally verified that the owning SDK HTTP response is closed before its
+raw SocketIO, avoiding Python 3.14 finalizer warnings on cleanup.

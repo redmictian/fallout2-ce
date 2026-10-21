@@ -1,4 +1,5 @@
 import io
+import http.client
 import json
 import os
 from pathlib import Path
@@ -257,6 +258,20 @@ class ProtocolTests(unittest.TestCase):
         partial = Partial()
         bridge.Duplex(partial).write(b"abcde")
         self.assertEqual(partial.data, b"abcde")
+
+    def test_duplex_closes_http_response_before_its_raw_stream(self):
+        # Match docker-py's Unix-socket ownership chain using real stdlib I/O.
+        # Closing raw first leaves HTTPResponse.flush looking at a closed file.
+        left, right = socket.socketpair()
+        with left, right:
+            response = http.client.HTTPResponse(left)
+            raw = response.fp.raw
+            raw._response = response
+            duplex = bridge.Duplex(raw)
+            duplex.close()
+            self.assertTrue(response.closed)
+            self.assertTrue(raw.closed)
+            duplex.close()  # Cleanup can be reached by several session workers.
 
 
 class BridgeTests(unittest.TestCase):

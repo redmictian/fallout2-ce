@@ -124,11 +124,21 @@ class Duplex:
                 self.socket.close()
             except Exception:
                 pass
-            return
-        try:
-            self.socket.shutdown(socket.SHUT_RDWR)
-        except (AttributeError, OSError):
-            pass
+        else:
+            try:
+                self.socket.shutdown(socket.SHUT_RDWR)
+            except (AttributeError, OSError):
+                pass
+        # docker-py keeps the owning requests response on the raw stream.
+        # Close that owner before its SocketIO; Python 3.14 HTTPResponse.close
+        # flushes the buffered file and otherwise sees an already-closed raw
+        # file during finalization. Shutdown above first wakes blocked readers.
+        response = getattr(self.stream, "_response", None)
+        if response is not None:
+            try:
+                response.close()
+            except OSError:
+                pass
         try:
             self.stream.close()
         except OSError:
