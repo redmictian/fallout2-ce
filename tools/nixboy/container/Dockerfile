@@ -9,6 +9,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 COPY protocol.py /opt/nixboy/protocol.py
 COPY container/control.py /opt/nixboy/control.py
+COPY container/shell.py /opt/nixboy/shell.py
 COPY container/nixboy /usr/local/bin/nixboy
 RUN chmod 0755 /usr/local/bin/nixboy
 USER 1000:1000

@@ -243,14 +243,15 @@ class DockerSession:
         self.control.duplex.timeout(None)
         self.connected()
         self.exec_id = self.client.api.exec_create(
-            self.container.id, ["/bin/bash", "--noprofile", "--norc", "-i"],
+            self.container.id, ["python3", "/opt/nixboy/shell.py", str(rows), str(cols)],
             stdin=True, stdout=True, stderr=True, tty=True, user="1000:1000",
             environment={"NIXBOY_CONTEXT_JSON": json.dumps(context, separators=(",", ":")),
                          "PS1": "nix-boy:\\w$ "},
         )["Id"]
         self.tty = Duplex(self.client.api.exec_start(self.exec_id, tty=True, socket=True))
         self.tty.timeout(None)  # A quiet shell must outlive the HTTP API timeout.
-        self.client.api.exec_resize(self.exec_id, height=rows, width=cols)
+        # The container launcher sets the actual PTY size before execing Bash.
+        # Resizing after exec_start races Readline's initial width cache.
         self.connected()
         self.send(READY)
         # Start readers only after READY: Bash can produce its first prompt at once.

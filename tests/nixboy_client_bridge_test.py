@@ -51,7 +51,7 @@ def run(executable, scenario):
                 assert chunk, "C++ input stream closed early"
                 actual.extend(chunk)
             assert actual == expected, "binary INPUT differs across languages"
-            eventually(lambda: client.sizes[-1] == (30, 100))
+            eventually(lambda: client.sizes and client.sizes[-1] == (30, 100))
             eventually(lambda: client.context == {"quest.updated": -17})
             assert client.options["network_mode"] == "none"
             client.tty_peer.sendall(b"Linux \0\x1b[32mready\r\n")

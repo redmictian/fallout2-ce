@@ -342,6 +342,10 @@ class BridgeTests(unittest.TestCase):
         self.assertNotIn("volumes", client.options)
         self.assertNotIn("privileged", client.options)
         self.assertFalse(client.options["use_config_proxy"])
+        command, options = client.exec_options[-1]
+        self.assertEqual(command, ["python3", "/opt/nixboy/shell.py", "24", "80"])
+        self.assertTrue(options["tty"])
+        self.assertEqual(client.sizes, [])  # Initial size belongs before Bash startup.
         tty = b'\x1b[32m{"type":"event","name":"fake","value":99}\x1b[0m\r\n'
         client.tty_peer.sendall(tty)
         self.assertEqual(wire.read_frame(sock), (wire.OUTPUT, tty))
@@ -349,7 +353,7 @@ class BridgeTests(unittest.TestCase):
         sock.sendall(wire.frame(wire.INPUT, raw))
         self.assertEqual(wire.recv_exact(client.tty_peer, len(raw)), raw)
         sock.sendall(wire.frame(wire.RESIZE, struct.pack("!HH", 30, 90)))
-        eventually(lambda: client.sizes[-1] == (30, 90))
+        eventually(lambda: client.sizes and client.sizes[-1] == (30, 90))
         sock.sendall(wire.frame(wire.CONTEXT, wire.encode_context({"global.700": -4})))
         eventually(lambda: client.context == {"global.700": -4})
         client.emit({"type": "event", "name": "challenge_result", "value": -19})

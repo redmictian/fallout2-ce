@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import socket
+import struct
 import sys
 import tempfile
 import threading
@@ -64,6 +65,44 @@ class HelperTests(unittest.TestCase):
             self.assertEqual(helper.main(), 0)
         self.assertEqual(output.getvalue(), "47\n")
         request.assert_called_once_with({"type": "context"})
+
+
+class ShellLaunchTests(unittest.TestCase):
+    def setUp(self):
+        spec = importlib.util.spec_from_file_location("nixboy_shell_test", HERE / "container" / "shell.py")
+        self.shell = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(self.shell)
+
+    def test_invalid_dimensions_rejected_before_platform_io(self):
+        for rows, cols in ((0, 80), (201, 80), (24, 0), (24, 301), (True, 80), (24, "80")):
+            with self.subTest(rows=rows, cols=cols), mock.patch.object(self.shell.os, "execv") as execute:
+                with self.assertRaises(ValueError):
+                    self.shell.launch(rows, cols)
+                execute.assert_not_called()
+
+    @unittest.skipUnless(sys.platform.startswith("linux"), "shell launcher requires a Linux PTY")
+    def test_real_pty_dimensions_are_set_before_bash_exec(self):
+        import fcntl
+        import termios
+
+        master, slave = os.openpty()
+        try:
+            for rows, cols in ((35, 139), (24, 80), (31, 92)):
+                fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 80, 0, 0))
+
+                def at_exec(path, arguments):
+                    size = fcntl.ioctl(slave, termios.TIOCGWINSZ, b"\0" * 8)
+                    self.assertEqual(struct.unpack("HHHH", size)[:2], (rows, cols))
+                    self.assertEqual(path, "/bin/bash")
+                    self.assertEqual(arguments, ["/bin/bash", "--noprofile", "--norc", "-i"])
+
+                with mock.patch.object(self.shell.sys, "stdin", types.SimpleNamespace(fileno=lambda: slave)):
+                    with mock.patch.object(self.shell.os, "execv", side_effect=at_exec) as execute:
+                        self.shell.launch(rows, cols)
+                execute.assert_called_once()
+        finally:
+            os.close(slave)
+            os.close(master)
 
 
 @unittest.skipUnless(os.name == "posix", "container control server uses Linux Unix sockets")

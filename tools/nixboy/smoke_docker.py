@@ -41,12 +41,12 @@ def main():
     thread.start()
     sock = None
 
-    def connect():
+    def connect(rows=24, cols=80):
         if not server.handlers_done.wait(5):
             raise AssertionError("previous session did not finish cleanup")
         connection = socket.create_connection(server.server_address, timeout=20)
         connection.sendall(frame(AUTH, token) + frame(
-            OPEN, struct.pack("!HH", 24, 80) + encode_context({"player.hp": 73})))
+            OPEN, struct.pack("!HH", rows, cols) + encode_context({"player.hp": 73})))
         kind, payload = read_frame(connection)
         if kind != READY:
             raise AssertionError((kind, payload))
@@ -163,6 +163,32 @@ def main():
             sock = None
             removed(repeat_id)
 
+        # Readline must know the game width for its very first input line.
+        # A resize after Bash starts can leave its first prompt cached at 80
+        # columns even while stty/COLUMNS later report the requested 139.
+        for _ in range(6):
+            sock, width_id = connect(35, 139)
+            receive_until(OUTPUT, b"nix-boy:~$ ")
+            tail = secrets.token_hex(8).encode("ascii")
+            line = b"# " + b"ABCDEFGHIJKLMNOPQRSTUVWXYZ" * 3 + tail
+            assert 80 < len(line) + len(b"nix-boy:~$ ") < 139
+            # Fragment like interactive input; the last marker only exists in
+            # echo, since this test deliberately has not sent Enter yet.
+            for offset in range(0, len(line), 16):
+                sock.sendall(frame(INPUT, line[offset:offset + 16]))
+            output, _, _ = receive_until(OUTPUT, tail)
+            assert line in output and b"\r" not in output, output
+            sock.sendall(frame(INPUT, b"\n"))
+            receive_until(OUTPUT, b"nix-boy:~$ ")
+            output, _ = command("printf '\\n%dx%d\\n' \"$LINES\" \"$COLUMNS\"; stty size")
+            assert b"\r\n35x139\r\n" in output and b"35 139\r\n" in output, output
+            sock.sendall(frame(INPUT, b"exit 0\n"))
+            _, _, payload = receive_until(EXIT)
+            assert struct.unpack("!i", payload)[0] == 0, payload
+            sock.close()
+            sock = None
+            removed(width_id)
+
         if not server.handlers_done.wait(5):
             raise AssertionError("cleanup did not release failed-startup test slot")
         server.image = "fallout2-nixboy-smoke-missing:" + secrets.token_hex(12)
@@ -202,7 +228,7 @@ def main():
         sock.close()
         sock = None
         removed(shutdown_id)
-        print("PASS: real Linux PTY, isolation, idle recovery, Ctrl+C, resize, live context, results, exits, repeated sessions, failed-start recovery and close/disconnect/shutdown cleanup")
+        print("PASS: real Linux PTY, initial Readline width, isolation, idle recovery, Ctrl+C, resize, live context, results, exits, repeated sessions, failed-start recovery and close/disconnect/shutdown cleanup")
     finally:
         if sock:
             sock.close()
