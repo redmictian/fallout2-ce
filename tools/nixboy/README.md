@@ -233,7 +233,7 @@ The WSL Docker/backend, Windows-client route and bounded game scenarios above
 were verified on this workstation. Native MSVC, macOS, Docker Desktop and
 non-ASCII font rendering remain outside those results. Canonical development
 tracking and detailed acceptance evidence live in the project workspace's
-`mod_nix-boy/` folder, separate from this redistributable operator guide.
+`mods/nix-boy/` folder, separate from this redistributable operator guide.
 
 The pinned SDK's [named-pipe implementation](https://github.com/docker/docker-py/blob/7.2.0/docker/transport/npipesocket.py)
 and [socket helpers](https://github.com/docker/docker-py/blob/7.2.0/docker/utils/socket.py)
