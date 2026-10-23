@@ -4,6 +4,7 @@
 #include <vterm.h>
 
 #include <algorithm>
+#include <array>
 #include <deque>
 #include <memory>
 #include <mutex>
@@ -17,6 +18,7 @@
 #include "kb.h"
 #include "mouse.h"
 #include "nixboy_terminal_input.h"
+#include "nixboy_terminal_view.h"
 #include "svga.h"
 #include "text_font.h"
 #include "window_manager.h"
@@ -27,7 +29,7 @@ namespace {
     constexpr int kCloseEvent = 19901;
     constexpr unsigned int kStartupTimeoutMs = 15000;
     constexpr size_t kMaxInputEvents = 256;
-    constexpr int kMargin = 12;
+    constexpr int kMargin = 22;
 
     // SDL may call filters from threads which push events. Only queue event copies
     // here; libvterm, the socket and all game state stay on the modal's UI thread.
@@ -418,15 +420,134 @@ namespace {
         return result;
     }
 
-    void renderTerminal(int window, int width, int height, int cellWidth, int cellHeight,
-        int rows, int cols, VTerm* term, VTermScreen* screen, const TerminalState& state)
+    unsigned char metalColor(int red, int green, int blue)
+    {
+        return _colorTable[(red << 10) | (green << 5) | blue];
+    }
+
+    void drawBevel(int window, int x, int y, int width, int height, bool inset)
+    {
+        const int light = metalColor(17, 18, 13);
+        const int dark = metalColor(3, 4, 3);
+        windowDrawLine(window, x, y, x + width - 1, y, inset ? dark : light);
+        windowDrawLine(window, x, y, x, y + height - 1, inset ? dark : light);
+        windowDrawLine(window, x + 1, y + height - 1, x + width - 1, y + height - 1, inset ? light : dark);
+        windowDrawLine(window, x + width - 1, y + 1, x + width - 1, y + height - 1, inset ? light : dark);
+    }
+
+    void drawTerminalFrame(int window, const nixboy::TerminalViewLayout& layout, int cellHeight)
     {
         unsigned char* buffer = windowGetBuffer(window);
-        const int top = 3 * cellHeight;
+        const unsigned char grain[] = { metalColor(9, 10, 7), metalColor(10, 11, 8), metalColor(11, 12, 9) };
+        for (int y = 0; y < layout.height; y++) {
+            for (int x = 0; x < layout.width; x++) {
+                const uint32_t hash = static_cast<uint32_t>(x) * 374761393u
+                    + static_cast<uint32_t>(y) * 668265263u;
+                buffer[y * layout.width + x] = grain[((hash ^ (hash >> 13)) >> 8) % 3];
+            }
+        }
+        // Original indexed artwork: olive cast metal, recessed glass, machined
+        // edges, slotted screws and ventilation cuts. No original game art or
+        // cool-retro-term code/assets are embedded in the terminal.
+        drawBevel(window, 0, 0, layout.width, layout.height, false);
+        drawBevel(window, 2, 2, layout.width - 4, layout.height - 4, false);
+        drawBevel(window, layout.glassX - 5, layout.glassY - 5,
+            layout.glassWidth + 10, layout.glassHeight + 10, true);
+        windowDrawRect(window, layout.glassX - 2, layout.glassY - 2,
+            layout.glassX + layout.glassWidth + 1, layout.glassY + layout.glassHeight + 1, metalColor(1, 2, 1));
+        for (int x : { 8, layout.width - 15 }) {
+            for (int y : { 8, layout.height - 15 }) {
+                windowFill(window, x, y, 7, 7, metalColor(5, 6, 4));
+                drawBevel(window, x, y, 7, 7, false);
+                windowDrawLine(window, x + 2, y + 3, x + 4, y + 3, metalColor(1, 2, 1));
+            }
+        }
+        for (int y = layout.glassY + 12; y < layout.glassY + layout.glassHeight - 12; y += 9) {
+            windowDrawLine(window, 7, y, 11, y, metalColor(3, 4, 2));
+            windowDrawLine(window, layout.width - 12, y, layout.width - 8, y, metalColor(3, 4, 2));
+        }
+        const int labelColor = metalColor(23, 24, 16);
+        fontDrawText(buffer + 10 * layout.width + kMargin, "nix-boy", layout.width / 2,
+            layout.width, labelColor);
+        fontDrawText(buffer + (10 + cellHeight) * layout.width + kMargin,
+            "PERSONAL TERMINAL / NX-01", layout.width / 2, layout.width, metalColor(17, 18, 12));
+        drawBevel(window, kMargin - 4, layout.statusY - 4,
+            layout.width - 2 * kMargin + 8, 3 * cellHeight + 3, true);
+    }
+
+    struct TerminalPresentation {
+        nixboy::TerminalViewLayout layout;
+        nixboy::TerminalCrt crt;
+        std::vector<unsigned char> source;
+        std::array<unsigned char, 256> luminance;
+        std::array<unsigned char, 256> phosphor;
+
+        bool initialize(int cellWidth, int cellHeight, const NixboyTerminalOptions& options)
+        {
+            if (!nixboy::terminalViewLayout(screenGetWidth(), screenGetHeight(),
+                    cellWidth, cellHeight, options.fullscreen, layout)
+                || !crt.initialize(layout.glassWidth, layout.glassHeight, options.retro)) {
+                return false;
+            }
+            source.resize(static_cast<size_t>(layout.glassWidth) * layout.glassHeight);
+            for (int index = 0; index < 256; index++) {
+                const int red = _cmap[index * 3];
+                const int green = _cmap[index * 3 + 1];
+                const int blue = _cmap[index * 3 + 2];
+                // ANSI hues retain useful brightness when converted to green;
+                // saturated blue/red warnings must not disappear into the glass.
+                const int peak = std::max({ red, green, blue });
+                const int weighted = (red * 77 + green * 150 + blue * 29) / 256;
+                luminance[index] = std::min(255, (peak * 3 + weighted) * 9 / 8);
+                phosphor[index] = metalColor(index * 10 / 255, index * 31 / 255, index * 12 / 255);
+            }
+            return true;
+        }
+    };
+
+    void drawStatus(int window, const nixboy::TerminalViewLayout& layout, int cellHeight,
+        const TerminalState& state)
+    {
+        unsigned char* buffer = windowGetBuffer(window);
+        const int textWidth = layout.width - 2 * kMargin;
+        const int textColor = metalColor(18, 26, 13);
+        windowFill(window, kMargin, layout.statusY, textWidth, 3 * cellHeight - 2, metalColor(4, 5, 3));
+        std::string status = plainStatus(state.status);
+        for (int line = 0; line < 2 && !status.empty(); line++) {
+            size_t length = 0;
+            size_t wordBreak = 0;
+            int width = 0;
+            while (length < status.size()) {
+                const int next = fontGetCharacterWidth(status[length]) + fontGetLetterSpacing();
+                if (width + next > textWidth) break;
+                width += next;
+                if (status[length] == ' ') wordBreak = length;
+                length++;
+            }
+            if (length < status.size() && wordBreak != 0) length = wordBreak;
+            const std::string label = status.substr(0, length);
+            fontDrawText(buffer + (layout.statusY + line * cellHeight) * layout.width + kMargin,
+                label.c_str(), textWidth, layout.width, textColor);
+            status.erase(0, length);
+            if (!status.empty() && status.front() == ' ') status.erase(0, 1);
+        }
+        fontDrawText(buffer + (layout.statusY + 2 * cellHeight) * layout.width + kMargin,
+            state.training ? "F5 Check  F6 Hub  F7 Reset  F8 Abandon  F10 Close"
+                           : "Esc / Ctrl+C: Linux     F10: Close",
+            textWidth, layout.width, metalColor(22, 23, 15));
+    }
+
+    void renderTerminal(int window, TerminalPresentation& presentation, int cellWidth, int cellHeight,
+        VTerm* term, VTermScreen* screen, const TerminalState& state)
+    {
+        const auto& layout = presentation.layout;
+        const int pitch = layout.glassWidth;
+        unsigned char* source = presentation.source.data();
+        std::fill(presentation.source.begin(), presentation.source.end(), _colorTable[0]);
         VTermPos cursor;
         vterm_state_get_cursorpos(vterm_obtain_state(term), &cursor);
-        for (int row = 0; row < rows; row++) {
-            for (int col = 0; col < cols; col++) {
+        for (int row = 0; row < layout.rows; row++) {
+            for (int col = 0; col < layout.cols; col++) {
                 VTermScreenCell cell = {};
                 vterm_screen_get_cell(screen, { row, col }, &cell);
                 unsigned char foreground = paletteColor(screen, cell.fg);
@@ -436,29 +557,25 @@ namespace {
                     reverse = !reverse;
                 }
                 if (reverse) std::swap(foreground, background);
-                const int x = kMargin + col * cellWidth;
-                const int y = top + row * cellHeight;
-                windowFill(window, x, y, cellWidth, cellHeight, background);
+                const int x = layout.textX + col * cellWidth;
+                const int y = layout.textY + row * cellHeight;
+                for (int offset = 0; offset < cellHeight; offset++) {
+                    std::fill_n(source + (y + offset) * pitch + x, cellWidth, background);
+                }
                 if (cell.chars[0] == UINT32_MAX || cell.attrs.conceal) continue;
                 const char glyph[2] = { legacyGlyph(cell.chars[0]), '\0' };
                 const int inset = std::max(0, (cellWidth - fontGetCharacterWidth(glyph[0])) / 2);
-                fontDrawText(buffer + y * width + x + inset, glyph,
-                    cellWidth - inset, width, foreground);
+                fontDrawText(source + y * pitch + x + inset, glyph,
+                    cellWidth - inset, pitch, foreground);
                 if (cell.attrs.underline) {
-                    windowDrawLine(window, x, y + cellHeight - 2,
-                        x + cellWidth - 1, y + cellHeight - 2, foreground);
+                    std::fill_n(source + (y + cellHeight - 2) * pitch + x, cellWidth, foreground);
                 }
             }
         }
-        const int textColor = _colorTable[992];
-        const int statusY = height - 3 * cellHeight;
-        windowFill(window, kMargin, statusY, width - 2 * kMargin, 3 * cellHeight - 4, _colorTable[0]);
-        const std::string status = plainStatus(state.status);
-        fontDrawText(buffer + statusY * width + kMargin, status.c_str(), width - 2 * kMargin, width, textColor);
-        fontDrawText(buffer + (statusY + cellHeight) * width + kMargin,
-            state.training ? "F5 Check / F6 Hub / F7 Reset / F8 Abandon / F10 Close (keeps exercise)"
-                           : "Esc/Ctrl+C go to Linux. F10 closes. ASCII font: other glyphs appear as ?.",
-            width - 2 * kMargin, width, textColor);
+        unsigned char* buffer = windowGetBuffer(window);
+        presentation.crt.render(source, buffer + layout.glassY * layout.width + layout.glassX,
+            layout.width, presentation.luminance, presentation.phosphor);
+        drawStatus(window, layout, cellHeight, state);
         windowRefresh(window);
     }
 
@@ -467,7 +584,8 @@ namespace {
 bool nixboyTerminalOpen(uint16_t port, const std::string& token,
     const nixboy::Context& context,
     const std::function<void(const std::string&, int32_t)>& onResult,
-    const NixboyTrainingCallbacks& training)
+    const NixboyTrainingCallbacks& training,
+    const NixboyTerminalOptions& options)
 {
     ModalState modal;
     fontSetCurrent(0);
@@ -480,21 +598,19 @@ bool nixboyTerminalOpen(uint16_t port, const std::string& token,
     }
     const int cellHeight = fontGetLineHeight() + 1;
     if (cellHeight <= 1) return false;
-    const int width = std::min(screenGetWidth(), 1280);
-    const int height = std::min(screenGetHeight(), 900);
-    const int cols = std::min(300, (width - 2 * kMargin) / cellWidth);
-    const int rows = std::min(200, (height - 7 * cellHeight) / cellHeight);
-    if (cols < 20 || rows < 10) return false;
-
-    modal.window = windowCreate((screenGetWidth() - width) / 2,
-        (screenGetHeight() - height) / 2, width, height, _colorTable[0], WINDOW_MODAL | WINDOW_MOVE_ON_TOP);
+    TerminalPresentation presentation;
+    if (!presentation.initialize(cellWidth, cellHeight, options)) return false;
+    const auto& layout = presentation.layout;
+    const int rows = layout.rows;
+    const int cols = layout.cols;
+    modal.window = windowCreate(layout.x, layout.y, layout.width, layout.height,
+        metalColor(10, 11, 8), WINDOW_MODAL | WINDOW_MOVE_ON_TOP);
     if (modal.window == -1) return false;
+    drawTerminalFrame(modal.window, layout, cellHeight);
     const char* closeTitle = "Close [F10]";
-    if (_win_register_text_button(modal.window, width - fontGetStringWidth(closeTitle) - 2 * kMargin - 16,
-            kMargin, -1, -1, -1, kCloseEvent, closeTitle, 0)
+    if (_win_register_text_button(modal.window, layout.width - fontGetStringWidth(closeTitle) - kMargin - 16,
+            10, -1, -1, -1, kCloseEvent, closeTitle, 0)
         == -1) return false;
-    windowDrawText(modal.window, "nix-boy / Linux terminal", width / 2,
-        kMargin, kMargin, _colorTable[992]);
 
     TerminalState state;
     state.training = training.enabled;
@@ -518,7 +634,7 @@ bool nixboyTerminalOpen(uint16_t port, const std::string& token,
     vterm_screen_set_default_colors(screen, &foreground, &background);
     vterm_screen_reset(screen, 1);
     TerminalInput input;
-    renderTerminal(modal.window, width, height, cellWidth, cellHeight, rows, cols, term, screen, state);
+    renderTerminal(modal.window, presentation, cellWidth, cellHeight, term, screen, state);
     renderPresent();
 
     std::string error;
@@ -641,7 +757,7 @@ bool nixboyTerminalOpen(uint16_t port, const std::string& token,
         if (overflow) state.textInput.reset();
         vterm_screen_flush_damage(screen);
         if (state.dirty) {
-            renderTerminal(modal.window, width, height, cellWidth, cellHeight, rows, cols, term, screen, state);
+            renderTerminal(modal.window, presentation, cellWidth, cellHeight, term, screen, state);
             state.dirty = false;
         }
         renderPresent();

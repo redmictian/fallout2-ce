@@ -8,6 +8,7 @@
 #include <limits>
 #include <string>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 #include "color.h"
@@ -35,6 +36,7 @@ namespace {
     struct Options {
         bool enabled = false;
         bool training = true;
+        NixboyTerminalOptions terminal;
         uint16_t port = 47821;
         std::string tokenFile = "nixboy.token";
         nixboy::Hotkey hotkey { nixboy::HotkeyKind::ControlLetter, 'N' };
@@ -94,6 +96,18 @@ namespace {
                 options.training = false;
             else {
                 error = "nixboy.ini: training must be 1/true or 0/false.";
+                return false;
+            }
+        }
+        for (const auto& flag : { std::make_pair("fullscreen", &options.terminal.fullscreen),
+                 std::make_pair("retro_terminal", &options.terminal.retro) }) {
+            if (!configGetString(&config, "nixboy", flag.first, &value)) continue;
+            if (std::string(value) == "1" || std::string(value) == "true") {
+                *flag.second = true;
+            } else if (std::string(value) == "0" || std::string(value) == "false") {
+                *flag.second = false;
+            } else {
+                error = std::string("nixboy.ini: ") + flag.first + " must be 1/true or 0/false.";
                 return false;
             }
         }
@@ -284,7 +298,7 @@ void nixboyOpen()
         }
         // The modal's game thread is the only writer. Never accept an index or
         // pointer from the container; bounds are checked again by the game API.
-        gameSetGlobalVar(binding->second, value); }, training);
+        gameSetGlobalVar(binding->second, value); }, training, options.terminal);
     if (!opened) {
         showError("Cannot create the nix-boy terminal window. Check available memory and game fonts.");
     }

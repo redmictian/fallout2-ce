@@ -379,6 +379,7 @@ if(FALLOUT_NIXBOY)
     target_sources(${EXECUTABLE_NAME} PRIVATE
         "src/nixboy_client.cc"
         "src/nixboy_terminal.cc"
+        "src/nixboy_terminal_view.cc"
     )
     target_compile_definitions(${EXECUTABLE_NAME} PRIVATE FALLOUT_NIXBOY)
     target_link_libraries(${EXECUTABLE_NAME} nixboy-vterm)
