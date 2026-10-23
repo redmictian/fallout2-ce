@@ -12,6 +12,11 @@ target_include_directories(nixboy-hotkey-test PRIVATE ../src)
 target_compile_features(nixboy-hotkey-test PRIVATE cxx_std_17)
 add_test(NAME nixboy-hotkey COMMAND nixboy-hotkey-test)
 
+add_executable(nixboy-terminal-view-test nixboy_terminal_view_test.cc ../src/nixboy_terminal_view.cc)
+target_include_directories(nixboy-terminal-view-test PRIVATE ../src)
+target_compile_features(nixboy-terminal-view-test PRIVATE cxx_std_17)
+add_test(NAME nixboy-terminal-view COMMAND nixboy-terminal-view-test)
+
 add_executable(nixboy-training-state-test nixboy_training_state_test.cc ../src/nixboy_training_state.cc)
 target_include_directories(nixboy-training-state-test PRIVATE ../src)
 target_compile_features(nixboy-training-state-test PRIVATE cxx_std_17)

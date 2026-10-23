@@ -15,6 +15,19 @@ shell and configured integer bindings remain available with `training=0` in
 `nixboy.ini`. The foundation description below applies to that legacy mode;
 training owns resumable attempts and uses trusted completion receipts instead.
 
+## Terminal appearance
+
+The default terminal is a centered metal-framed window, leaving the surrounding
+game visible. Set `fullscreen=1` in the `[nixboy]` section of `nixboy.ini` to fill
+the game's internal screen instead. This setting controls the in-game modal;
+the game's own operating-system display mode stays in its existing configuration.
+
+`retro_terminal=1` (the default) enables curved green CRT glass with phosphor glow,
+scanlines and shaded edges. Set `retro_terminal=0` for a flat terminal with its
+original ANSI colors. The flags are independent, accept `1`/`true` or `0`/`false`,
+and reload when the terminal opens. F10 and the unwarped Close button remain local.
+The CRT is an original software effect; it does not embed cool-retro-term or Qt.
+
 nix-boy adds an in-game terminal backed by Debian Linux containers.
 The host bridge uses the official Docker Python SDK, a real Bash PTY and a separate
 structured control channel. The game supplies integer context; Linux helpers send
