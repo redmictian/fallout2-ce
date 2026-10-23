@@ -12,6 +12,10 @@ if (Test-Path -LiteralPath $destinationPath) {
 }
 $sourceCommit = (& git -C $sourceDir rev-parse HEAD).Trim()
 if ($LASTEXITCODE -ne 0) { throw 'Cannot determine source revision.' }
+$modVersion = (Get-Content -LiteralPath (Join-Path $sourceDir 'nixboy.version') -Raw).Trim()
+if ($modVersion -notmatch '^\d+\.\d+\.\d+$') { throw 'nixboy.version must contain one semantic release version.' }
+$sourceBranch = (& git -C $sourceDir branch --show-current).Trim()
+if ($LASTEXITCODE -ne 0) { throw 'Cannot determine source branch.' }
 $sourceStatus = & git -C $sourceDir status --porcelain
 if ($sourceStatus) { throw 'Commit the reviewed source before packaging.' }
 New-Item -ItemType Directory -Path $destinationPath | Out-Null
@@ -19,7 +23,7 @@ Copy-Item -LiteralPath $executablePath -Destination (Join-Path $destinationPath 
 
 # Explicit source allowlist: no game assets, saves, runtime config or tokens.
 $files = @(
-    'LICENSE.md', 'nixboy.ini.example',
+    'LICENSE.md', 'nixboy.ini.example', 'nixboy.version',
     'tools/nixboy/README.md', 'tools/nixboy/TRAINING.md', 'tools/nixboy/protocol.md', 'tools/nixboy/.dockerignore',
     'tools/nixboy/requirements.txt', 'tools/nixboy/bridge.py',
     'tools/nixboy/protocol.py', 'tools/nixboy/training.py',
@@ -48,20 +52,21 @@ foreach ($relativePath in $files) {
     Copy-Item -LiteralPath (Join-Path $sourceDir $relativePath) -Destination $targetPath
 }
 $notice = @"
-NIX-BOY TRAINING - modified Fallout 2 Community Edition
-Source branch: mod/nix-boy
+nix-boy $modVersion - modified Fallout 2 Community Edition
+Source branch: $sourceBranch
 Source commit: $sourceCommit
 
-This copy has been modified to add Nix-Boy and a Windows build portability fix.
+This copy has been modified to add the nix-boy terminal, its challenge-based
+skill progression and a Windows build portability fix. These are one mod.
 See LICENSE.md for the engine's terms and third_party/*/LICENSE for dependencies.
 
 Read tools/nixboy/README.md before setup. Docker and a local Python bridge are
 required for Linux. Enable nixboy.ini in a separate owned-data test installation.
 No game assets, saves, runtime configuration or authentication tokens are included.
 
-Windows x64, live WSL Docker, in-game training, earned skill improvement and
-save/reload were checked in a disposable owned-data installation. Unarmed and
-Science each have two levels with five challenge options per level.
+Unarmed and Science each have two current-skill bands with five challenge
+options per level. Release identity is recorded in nixboy.version and the
+source commit above; see the mod workspace's acceptance record for actual checks.
 Read tools/nixboy/TRAINING.md for setup, controls and current limits.
 
 For fast disposable tests, --debug-new-game=narg starts a fresh predetermined

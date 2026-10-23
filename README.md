@@ -6,9 +6,10 @@ Popular Fallout 2 total conversion mods are partially supported. Original versio
 
 There is also [Fallout Community Edition](https://github.com/alexbatalov/fallout1-ce).
 
-This feature branch includes **Nix-Boy**, an opt-in Pip-Boy Linux terminal with
-a Docker backend and named game parameter/result bindings. See the
-[Nix-Boy setup and protocol guide](tools/nixboy/README.md) and
+This feature branch includes **nix-boy**, one mod combining a Pip-Boy Linux
+terminal, Docker-backed challenges and earned Fallout skill progression.
+Its release version is in [nixboy.version](nixboy.version). See the
+[nix-boy setup and protocol guide](tools/nixboy/README.md) and
 [development workspace pointer](MODLOG.md). It requires a separate local bridge;
 copying the executable alone does not start Docker. Runtime is disabled unless
 `nixboy.ini` enables it; [example configuration](nixboy.ini.example) has no game

@@ -57,6 +57,12 @@ int main()
             require(skillGetValue(&other, SKILL_SCIENCE) == 30, "player training does not change other critters");
         }
         training.reset();
+        require(training.ensureProfile(), "sparse skill identity");
+        int sparseBefore = skillGetValue(gDude, SKILL_SCIENCE);
+        require(training.accept(SKILL_SCIENCE, 2, receipt)
+                && skillGetValue(gDude, SKILL_SCIENCE) == sparseBefore + 5,
+            "entering level two directly grants one five-point bonus");
+        training.reset();
         int noTags[NUM_TAGGED_SKILLS] { -1, -1, -1, -1 };
         skillsSetTagged(noTags, NUM_TAGGED_SKILLS);
         playerProto.critter.data.skills[SKILL_SCIENCE] = 277;

@@ -2,7 +2,12 @@
 ; Start the local bridge and use the token file it generated in that directory.
 [nixboy]
 enabled=1
-; Learning hub: two skill tracks, two levels each, five options per level.
+; Default opening shortcut in gameplay/Pip-Boy. Restart game after changing.
+; Case-insensitive: Ctrl+A..Z (except H/I/M), Alt+A..Z, A..Z, F1..F12, or none.
+; The configured shortcut takes precedence over the game's action for that key.
+; Use none to keep only the Pip-Boy nix-boy button. Invalid values disable it.
+hotkey=Ctrl+N
+; nix-boy hub: two skill tracks, two current-skill bands each, five options per level.
 ; Set to 0 for the original ephemeral shell and explicit legacy bindings.
 training=1
 port=47821

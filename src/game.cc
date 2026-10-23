@@ -37,6 +37,7 @@
 #include "mouse.h"
 #include "movie.h"
 #include "movie_effect.h"
+#include "nixboy.h"
 #include "nixboy_training_state.h"
 #include "object.h"
 #include "options.h"
@@ -545,6 +546,34 @@ int gameHandleKey(int eventCode, bool isInCombatMode)
     }
 
     if (_gmouse_is_scrolling()) {
+        return 0;
+    }
+
+    // An explicitly configured shortcut takes precedence over its vanilla
+    // action. With the default Ctrl+N, plain N still cycles weapon actions.
+    if (nixboyIsHotkey(eventCode)) {
+        if (interfaceBarEnabled()) {
+            if (isInCombatMode) {
+                soundPlayFile("iisxxxx1");
+            } else {
+                soundPlayFile("ib1p1xx1");
+                ScopedGameMode gm(GameMode::kPipboy);
+                int oldCursor = gameMouseGetCursor();
+                bool mouseObjectsWereVisible = gameMouseObjectsIsVisible();
+                bool isoWasEnabled = isoDisable();
+                bool colorCycleWasEnabled = colorCycleEnabled();
+                colorCycleDisable();
+                bool indicatorBarWasVisible = indicatorBarHide();
+                if (mouseObjectsWereVisible) gameMouseObjectsHide();
+                nixboyOpen();
+                if (colorCycleWasEnabled) colorCycleEnable();
+                if (indicatorBarWasVisible) indicatorBarShow();
+                if (mouseObjectsWereVisible) gameMouseObjectsShow();
+                if (isoWasEnabled) isoEnable();
+                gameMouseSetCursor(oldCursor);
+                interfaceBarRefresh();
+            }
+        }
         return 0;
     }
 

@@ -1,13 +1,16 @@
-# Nix-Boy Docker bridge
+# nix-boy terminal and Docker bridge
 
-The current game opens the **learning hub** by default: Unarmed and Science,
-two progression levels each, with five authored challenge options per level.
+nix-boy is the mod and terminal name. The terminal and its skill-progression
+feature are released together, using the version in
+[`nixboy.version`](../../nixboy.version). The current game opens the **training
+hub** by default: Unarmed and Science, two levels each selected from the
+character's current skill percentage, with five authored options per level.
 Read [training setup and controls](TRAINING.md) first. The original ephemeral
 shell and configured integer bindings remain available with `training=0` in
 `nixboy.ini`. The foundation description below applies to that legacy mode;
 training owns resumable attempts and uses trusted completion receipts instead.
 
-Nix-Boy adds an in-game terminal backed by an ephemeral Debian Linux container.
+nix-boy adds an in-game terminal backed by Debian Linux containers.
 The host bridge uses the official Docker Python SDK, a real Bash PTY and a separate
 structured control channel. The game supplies integer context; Linux helpers send
 named integer results. Only explicit engine bindings can affect game globals.
@@ -15,7 +18,9 @@ See [protocol.md](protocol.md) for the wire format and trust boundaries.
 
 ## Status and prerequisites
 
-On October 21, 2026, all 33 Python tests passed under WSL Python 3.14.4. Native
+The following October 21, 2026 observations describe the terminal foundation,
+before current-skill bands and detachable training were added. All 33 Python
+tests passed under WSL Python 3.14.4. Native
 Windows Python 3.12.14 passed 30 tests with three Linux-only tests skipped. These
 cover fake-Docker lifecycle and socket streams, authentication before Docker
 operations, protocol bounds, startup failure, disconnection, graceful shutdown,
@@ -37,8 +42,10 @@ needs Python 3.10+ and dependencies in [requirements.txt](requirements.txt):
 [Docker SDK 7.2.0](https://pypi.org/project/docker/7.2.0/) and, on Windows,
 [pywin32 312](https://pypi.org/project/pywin32/312/). The SDK's
 [exec and socket APIs](https://docker-py.readthedocs.io/en/stable/api.html)
-are the implementation interface. The bridge does not launch the Docker CLI or a
-host command shell.
+are the interface for container inspection and PTY attachment. Training invokes
+Docker Compose with bounded argument arrays for its environment topology; the
+legacy free-shell mode uses the SDK alone. Neither mode invokes a host command
+shell from game requests.
 
 Use an already configured Docker Desktop in Linux-container mode on Windows, or
 Docker Engine accessible through a local Unix socket on Linux/WSL. The bridge
@@ -106,7 +113,7 @@ cp "$HOME/.local/state/nixboy/game.token" /mnt/c/Games/Fallout2-NixBoy-Test/nixb
 The Windows-game-to-WSL route was verified with the shipped native C++ client.
 It uses Windows-to-WSL localhost forwarding; it does not expose the Docker daemon
 over TCP. Forwarding can appear shortly after the WSL bridge announces its Linux
-listener, so let the listener become reachable before opening Nix-Boy. A transient
+listener, so let the listener become reachable before opening nix-boy. A transient
 connect failure is visible in the modal and can be retried by closing/reopening.
 Do not expose either service on a LAN. Keep token copies private and identical.
 
@@ -137,6 +144,7 @@ applying them. A schematic configuration is:
 ```ini
 [nixboy]
 enabled=1
+hotkey=Ctrl+N
 port=47821
 token_file=nixboy.token
 
@@ -146,9 +154,34 @@ token_file=nixboy.token
 ; terminal_exit=701
 ```
 
-Click NIX-BOY on the Pip-Boy's left button row, or press N while in the Pip-Boy.
-F10 or the modal Close button leaves Nix-Boy. Esc and Ctrl+C go to Linux, as do
-the other function keys. The engine terminal supports ASCII and box drawing;
+`hotkey` selects the opening shortcut; omitted means `Ctrl+N`. Values are
+case-insensitive, with optional surrounding whitespace:
+
+| Value | Meaning |
+| --- | --- |
+| `Ctrl+A` through `Ctrl+Z`, except H/I/M | Control plus one letter |
+| `Alt+A` through `Alt+Z` | Alt plus one letter |
+| `A` through `Z` | One letter, matching either case |
+| `F1` through `F12` | One function key |
+| `none` | Disable the shortcut; retain the Pip-Boy button |
+
+The selected shortcut takes precedence over an existing game action in gameplay
+and the Pip-Boy. Choosing bare `N` therefore overrides attack-mode cycling;
+the default avoids that conflict. Combined modifiers, modified function keys,
+numeric key codes and empty values are invalid. An invalid value disables the
+shortcut and is logged; the button reports the configuration error. Restart the
+game after changing `hotkey` or `enabled`, because shortcut configuration is
+cached for the process.
+
+Ctrl+H, Ctrl+I and Ctrl+M are rejected because the game's input layer shares
+their key codes with Backspace, Tab and Enter.
+
+Click nix-boy on the Pip-Boy's left button row, or use the configured opening
+shortcut in gameplay or the Pip-Boy (default Ctrl+N). Plain N keeps its normal
+game action with the default configuration. F10 or the modal Close button
+leaves nix-boy. Esc and Ctrl+C go to Linux. In training mode F5–F8 control
+Check, Hub, Reset and Abandon; in free-shell mode those keys reach Linux.
+The engine terminal supports ASCII and box drawing;
 unsupported Unicode characters appear as `?`.
 
 For disposable test runs, launch this feature executable with
@@ -167,7 +200,7 @@ Opening the terminal supplies the current values. Helpers can read the live map;
 Configured binding names are case-sensitive and at most 57 characters, leaving
 space for `global.` in the outgoing context. At most 120 bindings are supported.
 
-Inside Nix-Boy:
+Inside nix-boy:
 
 ```sh
 nixboy context
@@ -218,7 +251,7 @@ If Docker itself is unavailable, removal may fail; the bridge logs the container
 ID when known. A daemon losing the initial create response can leave an unknown
 ID, and a hard-killed bridge cannot guarantee cleanup. After Docker recovers, inspect
 `docker ps -a --filter label=org.fallout2-ce.nixboy=session`, then remove only the
-listed stale Nix-Boy IDs with `docker rm -f CONTAINER_ID`. Never run a global prune
+listed stale nix-boy IDs with `docker rm -f CONTAINER_ID`. Never run a global prune
 as feature cleanup.
 
 ## Validation

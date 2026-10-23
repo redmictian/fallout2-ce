@@ -13,28 +13,33 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import bridge
 import protocol as wire
 from training import AttemptManager, TrainingSession
+from challenge_content import Catalog
 from test_bridge import FakeClient, TOKEN, eventually
 
 
-def context(completed=0, receipt=None):
-    result = {"training.version": 1, "training.profile.0": -1,
+def context(claimed=0, receipt=None, unarmed=None, science=10, receipt_level=1):
+    result = {"training.version": 2, "training.profile.0": -1,
               "training.profile.1": 2, "training.profile.2": 3, "training.profile.3": 4,
-              "training.completed.unarmed": completed, "training.completed.science": 0,
-              "skill.unarmed": 40 + completed * 5, "skill.science": 30}
+              "training.claimed.unarmed": claimed, "training.claimed.science": 0,
+              "skill.unarmed": 15 + claimed.bit_count() * 5 if unarmed is None else unarmed,
+              "skill.science": science}
     if receipt:
         for index, word in enumerate(struct.unpack("!4i", receipt)):
-            result[f"training.receipt.unarmed.1.{index}"] = word
+            result[f"training.receipt.unarmed.{receipt_level}.{index}"] = word
     return result
 
 
-class FakeCatalog:
+class FakeCatalog(Catalog):
+    def __init__(self):
+        self.tracks = Catalog().tracks
+
     def pool(self, skill, level):
         return [f"{skill}-{level}-{index}" for index in range(5)]
 
     def get(self, identifier):
         skill, level, option = map(int, identifier.split("-"))
         return types.SimpleNamespace(id=identifier, skill=skill, level=level,
-                                     title=f"Exercise {identifier}", lesson="Structured lesson.",
+                                     title=f"Exercise {identifier}",
                                      instructions="Create {name}.")
 
     def instantiate(self, identifier, seed):
@@ -115,8 +120,8 @@ class TrainingProtocolTests(unittest.TestCase):
                 wire.decode_training_ack(invalid)
 
     def test_invalid_handshakes(self):
-        for key, value in (("training.version", 2), ("training.completed.science", 3),
-                           ("training.profile.0", None)):
+        for key, value in (("training.version", 1), ("training.claimed.science", 4),
+                           ("training.profile.0", None), ("skill.science", None)):
             values = context()
             values[key] = value
             with self.assertRaises(wire.ProtocolError):
@@ -129,6 +134,7 @@ class AttemptTests(unittest.TestCase):
         self.environments = []
         self.manager = self.make_manager()
         self.profile, self.completed = wire.training_context(context())
+        self.manager.observe(self.profile, self.completed, context())
 
     def make_manager(self):
         def create(*args, **kwargs):
@@ -195,7 +201,97 @@ class AttemptTests(unittest.TestCase):
         with self.assertRaises(wire.ProtocolError):
             self.manager.observe(self.profile, {3: 1, 12: 0}, context(1, bytes([99]) * 16))
 
+    def test_current_skill_exclusively_selects_its_band_independently_per_track(self):
+        for skill, name, cases in ((3, "unarmed", ((14, None), (15, 1), (19, 1), (20, 2), (24, 2), (25, None))),
+                                   (12, "science", ((9, None), (10, 1), (14, 1), (15, 2), (19, 2), (20, None)))):
+            for value, expected in cases:
+                with self.subTest(skill=skill, value=value):
+                    values = context()
+                    values["skill." + name] = value
+                    self.manager.observe(self.profile, self.completed, values)
+                    self.assertEqual(self.manager.current_level(self.profile, skill), expected)
+                    other = 12 if skill == 3 else 3
+                    self.assertEqual(self.manager.current_level(self.profile, other), 1)
+                    for level in (1, 2):
+                        if level != expected:
+                            with self.assertRaises(ValueError):
+                                self.manager.select(self.profile, skill, level)
+                        else:
+                            self.manager.select(self.profile, skill, level)
+                            self.manager.abandon(self.profile)
+
+    def test_ordinary_skill_spending_can_skip_level_one_without_fabricating_it(self):
+        self.manager.observe(self.profile, self.completed, context(unarmed=20))
+        self.manager.select(self.profile, 3, 2)
+        self.manager.prepare(self.profile)
+        self.assertTrue(self.manager.check(self.profile)["rewarded"])
+        state = self.manager.snapshot(self.profile)
+        self.assertEqual(state["claimed"]["3"], 2)
+        self.assertNotIn("3:1", state["receipts"])
+        reward = self.manager.pending_rewards(self.profile, self.completed)
+        self.assertEqual([(skill, level) for skill, level, _ in reward], [(3, 2)])
+        self.assertEqual(self.manager.pending_rewards(self.profile, {3: 2, 12: 0}), [])
+        with self.assertRaises(ValueError):
+            self.manager.select(self.profile, 3, 2)
+        self.manager.select(self.profile, 3, 2, "practice")
+
+    def test_sparse_game_receipt_recovery_imports_only_its_claimed_slot(self):
+        receipt = bytes(range(1, 17))
+        self.manager.observe(self.profile, {3: 2, 12: 0}, context(2, receipt, receipt_level=2))
+        state = self.manager.snapshot(self.profile)
+        self.assertEqual(state["claimed"]["3"], 2)
+        self.assertEqual(state["receipts"], {"3:2": receipt.hex()})
+        self.assertEqual(self.manager.pending_rewards(self.profile, self.completed), [(3, 2, receipt.hex())])
+
+    def test_changed_skill_band_preserves_attempt_and_refuses_stale_reward(self):
+        attempt = self.manager.select(self.profile, 3, 1)
+        self.manager.prepare(self.profile)
+        before = self.manager.snapshot(self.profile)["queues"]["3:1"]
+        self.manager.observe(self.profile, self.completed, context(unarmed=20))
+        result = self.manager.check(self.profile)
+        self.assertEqual(result["status"], "error")
+        self.assertIn("abandon", result["feedback"])
+        self.assertEqual(self.manager.snapshot(self.profile)["attempt"]["id"], attempt["id"])
+        self.assertEqual(self.manager.snapshot(self.profile)["queues"]["3:1"], before)
+        self.assertFalse(self.environments[-1].closed)
+        self.assertEqual(self.manager.pending_rewards(self.profile, self.completed), [])
+        self.manager.abandon(self.profile)
+        self.manager.select(self.profile, 3, 2)
+
+    def test_skill_change_during_validator_cannot_issue_reward(self):
+        self.manager.select(self.profile, 3, 1)
+        self.manager.prepare(self.profile)
+        def check():
+            self.manager.observe(self.profile, self.completed, context(unarmed=20))
+            return {"status": "passed", "feedback": "All objectives met"}
+        self.environments[-1].check = check
+        self.assertEqual(self.manager.check(self.profile)["status"], "error")
+        self.assertEqual(self.manager.pending_rewards(self.profile, self.completed), [])
+        self.assertIsNotNone(self.manager.snapshot(self.profile)["attempt"])
+
+    def test_version_one_migration_preserves_queue_attempt_and_exact_receipts(self):
+        attempt = self.manager.select(self.profile, 3, 1)
+        self.manager.close()
+        data = json.loads(self.manager.path.read_text())
+        profile = data["profiles"][self.profile]
+        queue_before = list(profile["queues"]["3:1"])
+        data["version"] = 1
+        profile.pop("claimed")
+        profile["earned"] = {"3": 0, "12": 2}
+        profile["receipts"] = {"12:1": "01" * 16, "12:2": "02" * 16}
+        self.manager.path.write_text(json.dumps(data), encoding="utf-8")
+        self.manager = self.make_manager()
+        restored = self.manager.snapshot(self.profile)
+        self.assertEqual(restored["claimed"], {"3": 0, "12": 3})
+        self.assertEqual(restored["queues"]["3:1"], queue_before)
+        self.assertEqual(restored["attempt"]["id"], attempt["id"])
+        self.assertEqual(restored["attempt"]["status"], "needs_reset")
+        self.assertEqual(restored["receipts"], profile["receipts"])
+        self.assertEqual(json.loads(self.manager.path.read_text())["version"], 2)
+        self.assertNotIn("earned", restored)
+
     def test_shutdown_recreates_same_attempt_after_restart(self):
+        self.manager.observe(self.profile, self.completed, context(science=15))
         attempt = self.manager.select(self.profile, 12, 2, "practice")
         self.manager.prepare(self.profile)
         self.manager.close()
@@ -385,19 +481,15 @@ class TrainingSocketTests(unittest.TestCase):
         self.assertEqual(sock.recv(1), b"")
         self.assertEqual(self.clients, [])
 
-    def test_lesson_preserves_linux_braces_and_formats_only_authored_parameters(self):
-        original = self.manager.catalog.get
-        def get(identifier):
-            spec = original(identifier)
-            spec.lesson = "Use awk '{print $2}' on {name}; shell ${HOME} remains ordinary text."
-            return spec
-        self.manager.catalog.get = get
+    def test_menu_offers_only_practice_assessment_and_hub(self):
         sock = self.connect()
-        sock.sendall(wire.frame(wire.INPUT, b"1\rl\r"))
-        output = self.until_output(sock, b"${HOME}")
-        self.assertIn(b"awk '{print $2}'", output)
-        self.assertIn(b"sample-0", output)
-        self.assertIn(b"${HOME}", output)
+        sock.sendall(wire.frame(wire.INPUT, b"1\r"))
+        output = self.until_output(sock, b"Choose a letter")
+        self.assertIn(b"Unarmed 15% - level 1 (15-19%)", output)
+        self.assertIn(b"[P] Practice", output)
+        self.assertIn(b"[A] Assessment", output)
+        self.assertNotIn(b"[L]", output)
+        self.assertNotIn(b"Lesson", output)
         self.assertEqual(self.clients, [])
 
     def test_missing_recovery_receipt_returns_useful_error_before_docker(self):

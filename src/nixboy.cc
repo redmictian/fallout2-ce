@@ -16,8 +16,10 @@
 #include "dbox.h"
 #include "debug.h"
 #include "game.h"
+#include "kb.h"
 #include "map.h"
 #include "nixboy_client.h"
+#include "nixboy_hotkey.h"
 #include "nixboy_terminal.h"
 #include "obj_types.h"
 #include "object.h"
@@ -35,6 +37,7 @@ namespace {
         bool training = true;
         uint16_t port = 47821;
         std::string tokenFile = "nixboy.token";
+        nixboy::Hotkey hotkey { nixboy::HotkeyKind::ControlLetter, 'N' };
         std::unordered_map<std::string, int> bindings;
     };
 
@@ -65,7 +68,7 @@ namespace {
     {
         Config config;
         if (!configInit(&config)) {
-            error = "Cannot allocate Nix-Boy configuration.";
+            error = "Cannot allocate nix-boy configuration.";
             return false;
         }
         struct Cleanup {
@@ -79,6 +82,11 @@ namespace {
         if (!options.enabled) return true;
 
         char* value = nullptr;
+        if (configGetString(&config, "nixboy", "hotkey", &value)
+            && !nixboy::parseHotkey(value, options.hotkey)) {
+            error = "nixboy.ini: hotkey must be Ctrl+A..Z (except H/I/M), Alt+A..Z, A..Z, F1..F12 or none.";
+            return false;
+        }
         if (configGetString(&config, "nixboy", "training", &value)) {
             if (std::string(value) == "1" || std::string(value) == "true")
                 options.training = true;
@@ -152,14 +160,17 @@ namespace {
             for (int skill = 0; skill < SKILL_COUNT; skill++) {
                 context.emplace_back(std::string("skill.") + skillNames[skill], skillGetValue(gDude, skill));
             }
-            context.emplace_back("training.version", 1);
+            context.emplace_back("training.version", 2);
             for (size_t index = 0; index < 4; index++) {
                 context.emplace_back("training.profile." + std::to_string(index), nixboy::trainingState().profileWord(index));
             }
             context.emplace_back("training.completed.unarmed", nixboy::trainingState().completed(SKILL_UNARMED));
             context.emplace_back("training.completed.science", nixboy::trainingState().completed(SKILL_SCIENCE));
+            context.emplace_back("training.claimed.unarmed", nixboy::trainingState().claimedMask(SKILL_UNARMED));
+            context.emplace_back("training.claimed.science", nixboy::trainingState().claimedMask(SKILL_SCIENCE));
             for (int skill : { SKILL_UNARMED, SKILL_SCIENCE }) {
-                for (int level = 1; level <= nixboy::trainingState().completed(skill); level++) {
+                for (int level = 1; level <= 2; level++) {
+                    if (!(nixboy::trainingState().claimedMask(skill) & (1 << (level - 1)))) continue;
                     auto receipt = nixboy::trainingState().receipt(skill, level);
                     for (int index = 0; index < 4; index++) {
                         const uint8_t* bytes = receipt.data() + index * 4;
@@ -187,6 +198,48 @@ bool nixboyIsEnabled()
     readOptions(options, error);
     // Keep the button reachable so malformed enabled configuration has feedback.
     return options.enabled;
+#else
+    return false;
+#endif
+}
+
+bool nixboyIsHotkey(int eventCode)
+{
+#ifdef FALLOUT_NIXBOY
+    // Negative values are mouse/idle events. Do not read configuration on each
+    // frame: capture the shortcut once, before dispatching the first key event.
+    if (eventCode <= 0) return false;
+    static const nixboy::Hotkey hotkey = []() {
+        Options options;
+        std::string error;
+        if (!readOptions(options, error)) {
+            debugPrint("nix-boy shortcut disabled: %s\n", error.c_str());
+            return nixboy::Hotkey {};
+        }
+        return options.enabled ? options.hotkey : nixboy::Hotkey {};
+    }();
+    static constexpr int altKeys[] = {
+        KEY_ALT_A, KEY_ALT_B, KEY_ALT_C, KEY_ALT_D, KEY_ALT_E, KEY_ALT_F,
+        KEY_ALT_G, KEY_ALT_H, KEY_ALT_I, KEY_ALT_J, KEY_ALT_K, KEY_ALT_L,
+        KEY_ALT_M, KEY_ALT_N, KEY_ALT_O, KEY_ALT_P, KEY_ALT_Q, KEY_ALT_R,
+        KEY_ALT_S, KEY_ALT_T, KEY_ALT_U, KEY_ALT_V, KEY_ALT_W, KEY_ALT_X,
+        KEY_ALT_Y, KEY_ALT_Z
+    };
+    switch (hotkey.kind) {
+    case nixboy::HotkeyKind::Letter:
+        return eventCode == hotkey.key || eventCode == hotkey.key - 'A' + 'a';
+    case nixboy::HotkeyKind::ControlLetter:
+        static_assert(KEY_CTRL_A == 1 && KEY_CTRL_N == 14 && KEY_CTRL_Z == 26,
+            "Control-letter logical keys must match ASCII control codes");
+        return eventCode == hotkey.key - 'A' + 1;
+    case nixboy::HotkeyKind::AltLetter:
+        return eventCode == altKeys[hotkey.key - 'A'];
+    case nixboy::HotkeyKind::Function:
+        return eventCode == (hotkey.key <= 10 ? KEY_F1 + hotkey.key - 1 : KEY_F11 + hotkey.key - 11);
+    case nixboy::HotkeyKind::None:
+        return false;
+    }
+    return false;
 #else
     return false;
 #endif
@@ -221,7 +274,7 @@ void nixboyOpen()
         valid = valid && ((ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f') || (ch >= 'A' && ch <= 'F'));
     }
     if (!valid || stream.gcount() == static_cast<std::streamsize>(sizeof(bytes))) {
-        showError("Cannot read a 64-digit authentication token. Start the Nix-Boy bridge first.");
+        showError("Cannot read a 64-digit authentication token. Start the nix-boy bridge first.");
         return;
     }
 
@@ -249,7 +302,7 @@ void nixboyOpen()
         // pointer from the container; bounds are checked again by the game API.
         gameSetGlobalVar(binding->second, value); }, training);
     if (!opened) {
-        showError("Cannot create the Nix-Boy terminal window. Check available memory and game fonts.");
+        showError("Cannot create the nix-boy terminal window. Check available memory and game fonts.");
     }
 #endif
 }
