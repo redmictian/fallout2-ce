@@ -29,12 +29,24 @@ namespace nixboy {
     bool terminalViewLayout(int screenWidth, int screenHeight, int cellWidth,
         int cellHeight, bool fullscreen, TerminalViewLayout& layout, int chromeCellHeight = 0);
 
+    constexpr int kTerminalCrtStrengthMin = 0;
+    constexpr int kTerminalCrtStrengthMax = 100;
+    constexpr int kTerminalCrtPersistenceMinMs = 0;
+    constexpr int kTerminalCrtPersistenceMaxMs = 2000;
+
+    struct TerminalCrtSettings {
+        int warp = 100;
+        int glow = 20;
+        // Time for old light to fall to one tenth intensity. Zero clears it at once.
+        int persistenceMs = 120;
+    };
+
     // Original RGB CRT renderer. Projection and working buffers are allocated once;
     // timed frames add persistence, two scales of bloom and restrained tube noise.
     // Output pixels are SDL RGB888 / 0x00RRGGBB, without palette quantization.
     class TerminalCrt {
     public:
-        bool initialize(int width, int height);
+        bool initialize(int width, int height, const TerminalCrtSettings& settings = {});
         void update(const unsigned char* source, const std::array<unsigned char, 256>& luminance);
         void render(uint32_t* destination, int pitchPixels, uint32_t ticks);
 
@@ -60,6 +72,7 @@ namespace nixboy {
         bool hasPreviousTicks_ = false;
         bool lightDirty_ = false;
         bool hasTrails_ = false;
+        TerminalCrtSettings settings_;
         std::vector<Sample> samples_;
         std::vector<uint8_t> glass_;
         std::vector<uint8_t> current_;

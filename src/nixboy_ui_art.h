@@ -3,8 +3,9 @@
 
 namespace fallout {
 
-// Loads the installed game's dialog/options FRMs through the normal art cache.
-// All corners and texture pixels retain their native size; edges are tiled.
+// Reuses the installed game's automap CRT surround through the normal art cache.
+// Normal margins preserve native corner/bevel thickness and one top-center latch;
+// long edge runs are extended continuously rather than repeating texture tiles.
 bool nixboyDrawTerminalFrame(int window, int width, int height,
     int glassX, int glassY, int glassWidth, int glassHeight, int statusY);
 

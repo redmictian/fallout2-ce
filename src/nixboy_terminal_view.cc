@@ -31,9 +31,9 @@ namespace nixboy {
         layout.x = (screenWidth - layout.width) / 2;
         layout.y = (screenHeight - layout.height) / 2;
         const int header = std::max(36, 2 * chromeCellHeight + 12);
-        const int footer = 3 * chromeCellHeight + 24;
+        layout.glassY = header;
         layout.glassWidth = std::min({ layout.width - 2 * kBezel, kMaxGlassWidth, 300 * cellWidth + 2 * kTextPadding });
-        layout.glassHeight = std::min({ layout.height - header - footer, kMaxGlassHeight, 200 * cellHeight + 2 * kTextPadding });
+        layout.glassHeight = std::min({ layout.height - layout.glassY - kBezel, kMaxGlassHeight, 200 * cellHeight + 2 * kTextPadding });
         layout.cols = (layout.glassWidth - 2 * kTextPadding) / cellWidth;
         layout.rows = (layout.glassHeight - 2 * kTextPadding) / cellHeight;
         if (layout.cols < 20 || layout.rows < 10) {
@@ -41,21 +41,26 @@ namespace nixboy {
             return false;
         }
         layout.glassX = (layout.width - layout.glassWidth) / 2;
-        layout.glassY = header + (layout.height - header - footer - layout.glassHeight) / 2;
         layout.textX = (layout.glassWidth - layout.cols * cellWidth) / 2;
         layout.textY = (layout.glassHeight - layout.rows * cellHeight) / 2;
-        layout.statusY = layout.height - footer + 18;
+        layout.statusY = layout.glassY + layout.glassHeight;
         return true;
     }
 
-    bool TerminalCrt::initialize(int width, int height)
+    bool TerminalCrt::initialize(int width, int height, const TerminalCrtSettings& settings)
     {
         width_ = 0;
         height_ = 0;
         samples_.clear();
-        if (width < 8 || width > kMaxGlassWidth || height < 8 || height > kMaxGlassHeight) return false;
+        if (width < 8 || width > kMaxGlassWidth || height < 8 || height > kMaxGlassHeight
+            || settings.warp < kTerminalCrtStrengthMin || settings.warp > kTerminalCrtStrengthMax
+            || settings.glow < kTerminalCrtStrengthMin || settings.glow > kTerminalCrtStrengthMax
+            || settings.persistenceMs < kTerminalCrtPersistenceMinMs || settings.persistenceMs > kTerminalCrtPersistenceMaxMs) {
+            return false;
+        }
         width_ = width;
         height_ = height;
+        settings_ = settings;
         bloomWidth_ = std::max(2, (width + kBloomScale - 1) / kBloomScale);
         bloomHeight_ = std::max(2, (height + kBloomScale - 1) / kBloomScale);
         const size_t pixels = static_cast<size_t>(width) * height;
@@ -94,9 +99,11 @@ namespace nixboy {
                 // Symmetric radial barrel lens: cardinal edges move as well as the
                 // corners. Aperture and text use the same original transform.
                 const double radialSquared = nx * nx + ny * ny;
-                const double radial = 1.0 + 0.055 * radialSquared + 0.002 * radialSquared * radialSquared;
-                const double sx = (nx * radial + 1.0) * width / 2 - 0.5;
-                const double sy = (ny * radial + 1.0) * height / 2 - 0.5;
+                const double radial = 1.0 + settings_.warp / 100.0 * (0.055 * radialSquared + 0.002 * radialSquared * radialSquared);
+                // The zero setting must not acquire fractional sampling through
+                // floating-point roundoff: it preserves the source pixel positions.
+                const double sx = settings_.warp == 0 ? x : (nx * radial + 1.0) * width / 2 - 0.5;
+                const double sy = settings_.warp == 0 ? y : (ny * radial + 1.0) * height / 2 - 0.5;
                 const double dx = std::max(std::abs(sx - (width - 1) / 2.0) - (width / 2.0 - radius), 0.0);
                 const double dy = std::max(std::abs(sy - (height - 1) / 2.0) - (height / 2.0 - radius), 0.0);
                 const double roundedDistance = radius - std::sqrt(dx * dx + dy * dy);
@@ -171,13 +178,16 @@ namespace nixboy {
     void TerminalCrt::updateLight(unsigned int elapsed)
     {
         if (!lightDirty_ && !hasTrails_) return;
-        const int decay = static_cast<int>(std::pow(0.1, elapsed / 600.0) * 256);
+        const int decay = settings_.persistenceMs == 0 ? 0
+                                                       : static_cast<int>(std::pow(0.1, elapsed / static_cast<double>(settings_.persistenceMs)) * 256);
         hasTrails_ = false;
         for (size_t index = 0; index < current_.size(); index++) {
             history_[index] = static_cast<uint8_t>(std::max<int>(current_[index], history_[index] * decay / 256));
             hasTrails_ = hasTrails_ || history_[index] > current_[index];
             emission_[index] = static_cast<uint8_t>(std::max<int>(current_[index], history_[index] * 3 / 8));
         }
+        lightDirty_ = false;
+        if (settings_.glow == 0) return;
         for (int by = 0; by < bloomHeight_; by++) {
             for (int bx = 0; bx < bloomWidth_; bx++) {
                 int sum = 0;
@@ -204,7 +214,6 @@ namespace nixboy {
         blur(scratch_, bloomWide_, 3, false);
         blur(bloomWide_, scratch_, 3, true);
         blur(scratch_, bloomWide_, 3, false);
-        lightDirty_ = false;
     }
 
     int TerminalCrt::bloomAt(const std::vector<uint16_t>& bloom, int x, int y) const
@@ -220,7 +229,7 @@ namespace nixboy {
     void TerminalCrt::render(uint32_t* destination, int pitchPixels, uint32_t ticks)
     {
         if (destination == nullptr || pitchPixels < width_ || width_ == 0) return;
-        const unsigned int elapsed = hasPreviousTicks_ ? std::clamp(ticks - previousTicks_, 1u, 1000u) : 33u;
+        const unsigned int elapsed = hasPreviousTicks_ ? std::min(ticks - previousTicks_, 20000u) : 33u;
         previousTicks_ = ticks;
         hasPreviousTicks_ = true;
         updateLight(elapsed);
@@ -237,9 +246,9 @@ namespace nixboy {
                 int core = emission_[index] * sample.shade / 255;
                 core = core * ((y & 1) ? 238 : 256) / 256;
                 core = core * flicker / 256;
-                const int near = bloomAt(bloomNear_, x, y);
-                const int wide = bloomAt(bloomWide_, x, y);
-                const int glow = (near * 3 / 4 + wide / 2) / 256;
+                const int near = settings_.glow == 0 ? 0 : bloomAt(bloomNear_, x, y);
+                const int wide = settings_.glow == 0 ? 0 : bloomAt(bloomWide_, x, y);
+                const int glow = (near * 3 / 4 + wide / 2) * settings_.glow / (256 * 100);
                 uint32_t hash = static_cast<uint32_t>(x) * 374761393u
                     + static_cast<uint32_t>(y) * 668265263u + noiseFrame * 2246822519u;
                 hash = (hash ^ (hash >> 13)) * 1274126177u;
