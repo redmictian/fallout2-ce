@@ -594,6 +594,16 @@ void mouseGetRect(Rect* rect)
     rect->bottom = gMouseCursorHeight + gMouseCursorY - 1;
 }
 
+const unsigned char* mouseGetShape(int* width, int* height, int* pitch, unsigned char* transparent)
+{
+    if (!gMouseInitialized || gCursorIsHidden || _mouse_shape == nullptr) return nullptr;
+    *width = gMouseCursorWidth;
+    *height = gMouseCursorHeight;
+    *pitch = gMouseCursorPitch;
+    *transparent = static_cast<unsigned char>(_mouse_trans);
+    return _mouse_shape;
+}
+
 // 0x4CA9DC
 void mouseGetPosition(int* xPtr, int* yPtr)
 {

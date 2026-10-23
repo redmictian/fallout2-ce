@@ -1,6 +1,8 @@
 #ifndef FALLOUT_SVGA_H_
 #define FALLOUT_SVGA_H_
 
+#include <cstdint>
+
 #include <SDL.h>
 
 #include "fps_limiter.h"
@@ -44,7 +46,11 @@ int screenGetWidth();
 int screenGetHeight();
 int screenGetVisibleHeight();
 void handleWindowSizeChanged();
-void renderPresent();
+// Optional composition belongs to this presentation call only. It is drawn in
+// logical game coordinates after the indexed canvas, before SDL presents it.
+typedef void(RenderOverlayProc)(void* context);
+uint32_t renderGetGeneration();
+void renderPresent(RenderOverlayProc* overlay = nullptr, void* context = nullptr);
 
 } // namespace fallout
 

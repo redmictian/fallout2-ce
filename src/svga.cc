@@ -33,6 +33,7 @@ SDL_Surface* gSdlSurface = nullptr;
 SDL_Renderer* gSdlRenderer = nullptr;
 SDL_Texture* gSdlTexture = nullptr;
 SDL_Surface* gSdlTextureSurface = nullptr;
+static uint32_t gRendererGeneration = 0;
 
 // TODO: Remove once migration to update-render cycle is completed.
 FpsLimiter sharedFpsLimiter;
@@ -385,6 +386,9 @@ static bool createRenderer(int width, int height)
 
 static void destroyRenderer()
 {
+    // SDL invalidates every dependent texture even when the next renderer is
+    // allocated at the same address. Scoped overlays use this generation token.
+    gRendererGeneration++;
     if (gSdlTextureSurface != nullptr) {
         SDL_FreeSurface(gSdlTextureSurface);
         gSdlTextureSurface = nullptr;
@@ -404,14 +408,24 @@ static void destroyRenderer()
 void handleWindowSizeChanged()
 {
     destroyRenderer();
-    createRenderer(screenGetWidth(), screenGetHeight());
+    if (createRenderer(screenGetWidth(), screenGetHeight())
+        && gSdlSurface != nullptr && gSdlTextureSurface != nullptr) {
+        SDL_BlitSurface(gSdlSurface, nullptr, gSdlTextureSurface, nullptr);
+    }
 }
 
-void renderPresent()
+uint32_t renderGetGeneration()
 {
+    return gRendererGeneration;
+}
+
+void renderPresent(RenderOverlayProc* overlay, void* context)
+{
+    if (gSdlRenderer == nullptr || gSdlTexture == nullptr || gSdlTextureSurface == nullptr) return;
     SDL_UpdateTexture(gSdlTexture, nullptr, gSdlTextureSurface->pixels, gSdlTextureSurface->pitch);
     SDL_RenderClear(gSdlRenderer);
     SDL_RenderCopy(gSdlRenderer, gSdlTexture, nullptr, nullptr);
+    if (overlay != nullptr) overlay(context);
     SDL_RenderPresent(gSdlRenderer);
 }
 

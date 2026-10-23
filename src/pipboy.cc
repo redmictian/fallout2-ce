@@ -28,7 +28,7 @@
 #include "message.h"
 #include "mouse.h"
 #include "nixboy.h"
-#include "nixboy_pipboy_plaque.h"
+#include "nixboy_ui_art.h"
 #include "object.h"
 #include "party_member.h"
 #include "platform_compat.h"
@@ -637,25 +637,11 @@ static int pipboyWindowInit(int intent)
         if (button != -1) {
             buttonSetCallbacks(button, _gsound_red_butt_press, _gsound_red_butt_release);
         }
-        for (int y = 0; y < kNixboyPipboyPlaqueHeight; y++) {
-            for (int x = 0; x < kNixboyPipboyPlaqueWidth; x++) {
-                unsigned int pixel = kNixboyPipboyPlaquePixels[y * kNixboyPipboyPlaqueWidth + x];
-                int alpha = pixel >> 15;
-                if (alpha == 0) {
-                    continue;
-                }
-                unsigned char* destination = gPipboyWindowBuffer + PIPBOY_WINDOW_WIDTH * (363 + y) + 77 + x;
-                int rgb = pixel & 0x7FFF;
-                if (alpha != 255) {
-                    int background = Color2RGB(*destination);
-                    int red = (((rgb >> 10) & 31) * alpha + ((background >> 10) & 31) * (255 - alpha) + 127) / 255;
-                    int green = (((rgb >> 5) & 31) * alpha + ((background >> 5) & 31) * (255 - alpha) + 127) / 255;
-                    int blue = ((rgb & 31) * alpha + (background & 31) * (255 - alpha) + 127) / 255;
-                    rgb = (red << 10) | (green << 5) | blue;
-                }
-                *destination = _colorTable[rgb];
-            }
-        }
+        nixboyDrawPipboyLabel(gPipboyWindowBuffer, PIPBOY_WINDOW_WIDTH, PIPBOY_WINDOW_HEIGHT,
+            _pipboyFrmImages[PIPBOY_FRM_BACKGROUND].getWidth() == PIPBOY_WINDOW_WIDTH
+                    && _pipboyFrmImages[PIPBOY_FRM_BACKGROUND].getHeight() == PIPBOY_WINDOW_HEIGHT
+                ? _pipboyFrmImages[PIPBOY_FRM_BACKGROUND].getData()
+                : nullptr);
     }
 
     if (intent == PIPBOY_OPEN_INTENT_REST) {

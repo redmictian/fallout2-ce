@@ -11,26 +11,27 @@ namespace nixboy {
         constexpr int kMaxGlassWidth = 2048;
         constexpr int kMaxGlassHeight = 1536;
         constexpr int kBezel = 18;
-        constexpr int kTextPadding = 12;
+        constexpr int kTextPadding = 20;
+        constexpr int kBloomScale = 4;
 
     } // namespace
 
     bool terminalViewLayout(int screenWidth, int screenHeight, int cellWidth,
-        int cellHeight, bool fullscreen, TerminalViewLayout& layout)
+        int cellHeight, bool fullscreen, TerminalViewLayout& layout, int chromeCellHeight)
     {
         layout = {};
-        // The limits also keep all pixel, font and protocol arithmetic bounded.
+        if (chromeCellHeight == 0) chromeCellHeight = cellHeight;
         if (screenWidth < 320 || screenHeight < 240 || screenWidth > 16384
             || screenHeight > 16384 || cellWidth <= 0 || cellWidth > 64
-            || cellHeight <= 1 || cellHeight > 64) {
+            || cellHeight <= 1 || cellHeight > 64 || chromeCellHeight < 2 || chromeCellHeight > 64) {
             return false;
         }
         layout.width = fullscreen ? screenWidth : std::min(1280, screenWidth - std::max(32, screenWidth / 8));
         layout.height = fullscreen ? screenHeight : std::min(900, screenHeight - std::max(32, screenHeight / 7));
         layout.x = (screenWidth - layout.width) / 2;
         layout.y = (screenHeight - layout.height) / 2;
-        const int header = std::max(36, 2 * cellHeight + 12);
-        const int footer = 3 * cellHeight + 14;
+        const int header = std::max(36, 2 * chromeCellHeight + 12);
+        const int footer = 3 * chromeCellHeight + 24;
         layout.glassWidth = std::min({ layout.width - 2 * kBezel, kMaxGlassWidth, 300 * cellWidth + 2 * kTextPadding });
         layout.glassHeight = std::min({ layout.height - header - footer, kMaxGlassHeight, 200 * cellHeight + 2 * kTextPadding });
         layout.cols = (layout.glassWidth - 2 * kTextPadding) / cellWidth;
@@ -43,84 +44,211 @@ namespace nixboy {
         layout.glassY = header + (layout.height - header - footer - layout.glassHeight) / 2;
         layout.textX = (layout.glassWidth - layout.cols * cellWidth) / 2;
         layout.textY = (layout.glassHeight - layout.rows * cellHeight) / 2;
-        layout.statusY = layout.height - footer + 8;
+        layout.statusY = layout.height - footer + 18;
         return true;
     }
 
-    bool TerminalCrt::initialize(int width, int height, bool retro)
+    bool TerminalCrt::initialize(int width, int height)
     {
         width_ = 0;
         height_ = 0;
         samples_.clear();
-        if (width < 2 || width > kMaxGlassWidth || height < 2 || height > kMaxGlassHeight) return false;
+        if (width < 8 || width > kMaxGlassWidth || height < 8 || height > kMaxGlassHeight) return false;
         width_ = width;
         height_ = height;
-        retro_ = retro;
-        if (!retro) return true;
-        samples_.reserve(static_cast<size_t>(width) * height);
+        bloomWidth_ = std::max(2, (width + kBloomScale - 1) / kBloomScale);
+        bloomHeight_ = std::max(2, (height + kBloomScale - 1) / kBloomScale);
+        const size_t pixels = static_cast<size_t>(width) * height;
+        samples_.reserve(pixels);
+        glass_.resize(pixels);
+        current_.assign(pixels, 0);
+        history_.assign(pixels, 0);
+        emission_.assign(pixels, 0);
+        const size_t bloomPixels = static_cast<size_t>(bloomWidth_) * bloomHeight_;
+        downsampled_.assign(bloomPixels, 0);
+        bloomNear_.assign(bloomPixels, 0);
+        bloomWide_.assign(bloomPixels, 0);
+        scratch_.assign(bloomPixels, 0);
+        bloomX_.resize(width);
+        bloomY_.resize(height);
+        bloomXFraction_.resize(width);
+        bloomYFraction_.resize(height);
+        for (int value = 0; value < 256; value++) {
+            tone_[value] = static_cast<uint8_t>(std::pow(value / 255.0, 0.85) * 255.0 + 0.5);
+        }
+        for (int x = 0; x < width; x++) {
+            const double position = std::clamp((x + 0.5) / kBloomScale - 0.5, 0.0, static_cast<double>(bloomWidth_ - 1));
+            bloomX_[x] = std::min(static_cast<int>(position), bloomWidth_ - 2);
+            bloomXFraction_[x] = static_cast<uint8_t>(std::clamp(static_cast<int>((position - bloomX_[x]) * 255), 0, 255));
+        }
+        for (int y = 0; y < height; y++) {
+            const double position = std::clamp((y + 0.5) / kBloomScale - 0.5, 0.0, static_cast<double>(bloomHeight_ - 1));
+            bloomY_[y] = std::min(static_cast<int>(position), bloomHeight_ - 2);
+            bloomYFraction_[y] = static_cast<uint8_t>(std::clamp(static_cast<int>((position - bloomY_[y]) * 255), 0, 255));
+        }
+        const double radius = std::min(28.0, std::min(width, height) * 0.12);
         for (int y = 0; y < height; y++) {
             const double ny = (2.0 * y + 1.0) / height - 1.0;
             for (int x = 0; x < width; x++) {
                 const double nx = (2.0 * x + 1.0) / width - 1.0;
-                // Inverse barrel projection bends straight grid edges inward. The
-                // source includes padding, so the entire first/last cell survives.
-                const double u = nx * (1.0 + 0.09 * ny * ny);
-                const double v = ny * (1.0 + 0.09 * nx * nx);
-                if (std::abs(u) > 1.0 || std::abs(v) > 1.0) {
-                    samples_.push_back({ -1, 0, 0, 0 });
+                // Symmetric radial barrel lens: cardinal edges move as well as the
+                // corners. Aperture and text use the same original transform.
+                const double radialSquared = nx * nx + ny * ny;
+                const double radial = 1.0 + 0.055 * radialSquared + 0.002 * radialSquared * radialSquared;
+                const double sx = (nx * radial + 1.0) * width / 2 - 0.5;
+                const double sy = (ny * radial + 1.0) * height / 2 - 0.5;
+                const double dx = std::max(std::abs(sx - (width - 1) / 2.0) - (width / 2.0 - radius), 0.0);
+                const double dy = std::max(std::abs(sy - (height - 1) / 2.0) - (height / 2.0 - radius), 0.0);
+                const double roundedDistance = radius - std::sqrt(dx * dx + dy * dy);
+                const double edge = std::min({ sx + 0.5, sy + 0.5, width - 0.5 - sx, height - 0.5 - sy, roundedDistance });
+                const int coverage = std::clamp(static_cast<int>((edge + 0.5) * 255), 0, 255);
+                if (coverage == 0) {
+                    samples_.push_back({ -1, 0, 0, 0, 0 });
+                    glass_[static_cast<size_t>(y) * width + x] = 0;
                     continue;
                 }
-                // Work at pixel centers, like a texture sampler. Using outer pixel
-                // edges would mask the entire border on even-sized apertures, where
-                // no pixel lies exactly on the horizontal or vertical centerline.
-                const double sourceX = std::clamp((u + 1.0) * width / 2 - 0.5, 0.0, static_cast<double>(width - 1));
-                const double sourceY = std::clamp((v + 1.0) * height / 2 - 0.5, 0.0, static_cast<double>(height - 1));
-                const int sx = std::min(static_cast<int>(sourceX), width - 2);
-                const int sy = std::min(static_cast<int>(sourceY), height - 2);
-                int shade = 250 - static_cast<int>(22 * (nx * nx + ny * ny));
-                // A restrained three-pixel scan pattern keeps small engine fonts
-                // readable at 640x480; it never blanks a complete glyph row.
-                if (y % 3 == 2) shade = shade * 88 / 100;
-                samples_.push_back({ sy * width + sx,
-                    static_cast<uint8_t>(std::clamp(static_cast<int>((sourceX - sx) * 255), 0, 255)),
-                    static_cast<uint8_t>(std::clamp(static_cast<int>((sourceY - sy) * 255), 0, 255)),
-                    static_cast<uint8_t>(shade) });
+                const double sourceX = std::clamp(sx, 0.0, static_cast<double>(width - 1));
+                const double sourceY = std::clamp(sy, 0.0, static_cast<double>(height - 1));
+                const int ix = std::min(static_cast<int>(sourceX), width - 2);
+                const int iy = std::min(static_cast<int>(sourceY), height - 2);
+                const int shade = 255 - static_cast<int>(28 * (nx * nx + ny * ny));
+                samples_.push_back({ iy * width + ix,
+                    static_cast<uint8_t>(std::clamp(static_cast<int>((sourceX - ix) * 255), 0, 255)),
+                    static_cast<uint8_t>(std::clamp(static_cast<int>((sourceY - iy) * 255), 0, 255)),
+                    static_cast<uint8_t>(shade), static_cast<uint8_t>(coverage) });
+                const double reflection = std::max(0.0, 1.0 - edge / 3.0) * (1.0 - ny) * 3.0;
+                glass_[static_cast<size_t>(y) * width + x] = static_cast<uint8_t>(8 + (1.0 - ny) * 2 + reflection);
             }
         }
+        hasPreviousTicks_ = false;
+        lightDirty_ = true;
+        hasTrails_ = false;
         return true;
     }
 
-    void TerminalCrt::render(const unsigned char* source, unsigned char* destination, int pitch,
-        const std::array<unsigned char, 256>& luminance,
-        const std::array<unsigned char, 256>& phosphor) const
+    void TerminalCrt::update(const unsigned char* source, const std::array<unsigned char, 256>& luminance)
     {
-        if (source == nullptr || destination == nullptr || pitch < width_ || width_ == 0) return;
-        if (!retro_) {
-            for (int y = 0; y < height_; y++) {
-                std::copy_n(source + y * width_, width_, destination + y * pitch);
+        if (source == nullptr || width_ == 0) return;
+        for (size_t index = 0; index < samples_.size(); index++) {
+            const Sample& sample = samples_[index];
+            if (sample.offset < 0) {
+                current_[index] = 0;
+                continue;
             }
-            return;
+            const unsigned char* pixels = source + sample.offset;
+            const int a = luminance[pixels[0]];
+            const int b = luminance[pixels[1]];
+            const int c = luminance[pixels[width_]];
+            const int d = luminance[pixels[width_ + 1]];
+            const int top = a * (255 - sample.xFraction) + b * sample.xFraction;
+            const int bottom = c * (255 - sample.xFraction) + d * sample.xFraction;
+            const int light = (top * (255 - sample.yFraction) + bottom * sample.yFraction) / 65025;
+            current_[index] = tone_[light];
         }
+        lightDirty_ = true;
+    }
+
+    void TerminalCrt::blur(const std::vector<uint16_t>& source, std::vector<uint16_t>& destination,
+        int radius, bool horizontal)
+    {
+        const int lines = horizontal ? bloomHeight_ : bloomWidth_;
+        const int length = horizontal ? bloomWidth_ : bloomHeight_;
+        const int stride = horizontal ? 1 : bloomWidth_;
+        for (int line = 0; line < lines; line++) {
+            const int base = horizontal ? line * bloomWidth_ : line;
+            unsigned int sum = 0;
+            for (int step = -radius; step <= radius; step++) {
+                sum += source[base + std::clamp(step, 0, length - 1) * stride];
+            }
+            for (int position = 0; position < length; position++) {
+                destination[base + position * stride] = static_cast<uint16_t>(sum / (2 * radius + 1));
+                sum -= source[base + std::clamp(position - radius, 0, length - 1) * stride];
+                sum += source[base + std::clamp(position + radius + 1, 0, length - 1) * stride];
+            }
+        }
+    }
+
+    void TerminalCrt::updateLight(unsigned int elapsed)
+    {
+        if (!lightDirty_ && !hasTrails_) return;
+        const int decay = static_cast<int>(std::pow(0.1, elapsed / 600.0) * 256);
+        hasTrails_ = false;
+        for (size_t index = 0; index < current_.size(); index++) {
+            history_[index] = static_cast<uint8_t>(std::max<int>(current_[index], history_[index] * decay / 256));
+            hasTrails_ = hasTrails_ || history_[index] > current_[index];
+            emission_[index] = static_cast<uint8_t>(std::max<int>(current_[index], history_[index] * 3 / 8));
+        }
+        for (int by = 0; by < bloomHeight_; by++) {
+            for (int bx = 0; bx < bloomWidth_; bx++) {
+                int sum = 0;
+                int peak = 0;
+                int count = 0;
+                for (int y = by * kBloomScale; y < std::min(height_, (by + 1) * kBloomScale); y++) {
+                    for (int x = bx * kBloomScale; x < std::min(width_, (bx + 1) * kBloomScale); x++) {
+                        const int light = emission_[static_cast<size_t>(y) * width_ + x];
+                        sum += light;
+                        peak = std::max(peak, light);
+                        count++;
+                    }
+                }
+                // Keep 8.8 precision through every blur pass: faint wide halos must
+                // not disappear through repeated integer rounding in a dark scene.
+                downsampled_[by * bloomWidth_ + bx] = static_cast<uint16_t>((sum * 256 / std::max(1, count) + peak * 256) / 2);
+            }
+        }
+        blur(downsampled_, scratch_, 1, true);
+        blur(scratch_, bloomNear_, 1, false);
+        blur(bloomNear_, scratch_, 1, true);
+        blur(scratch_, bloomNear_, 1, false);
+        blur(downsampled_, scratch_, 3, true);
+        blur(scratch_, bloomWide_, 3, false);
+        blur(bloomWide_, scratch_, 3, true);
+        blur(scratch_, bloomWide_, 3, false);
+        lightDirty_ = false;
+    }
+
+    int TerminalCrt::bloomAt(const std::vector<uint16_t>& bloom, int x, int y) const
+    {
+        const int offset = bloomY_[y] * bloomWidth_ + bloomX_[x];
+        const int xf = bloomXFraction_[x];
+        const int yf = bloomYFraction_[y];
+        const int top = (bloom[offset] * (255 - xf) + bloom[offset + 1] * xf) / 255;
+        const int bottom = (bloom[offset + bloomWidth_] * (255 - xf) + bloom[offset + bloomWidth_ + 1] * xf) / 255;
+        return (top * (255 - yf) + bottom * yf) / 255;
+    }
+
+    void TerminalCrt::render(uint32_t* destination, int pitchPixels, uint32_t ticks)
+    {
+        if (destination == nullptr || pitchPixels < width_ || width_ == 0) return;
+        const unsigned int elapsed = hasPreviousTicks_ ? std::clamp(ticks - previousTicks_, 1u, 1000u) : 33u;
+        previousTicks_ = ticks;
+        hasPreviousTicks_ = true;
+        updateLight(elapsed);
+        const int flicker = 250 + static_cast<int>(3 * std::sin(ticks * 0.017) + 2 * std::sin(ticks * 0.0113));
+        const uint32_t noiseFrame = ticks / 33;
         for (int y = 0; y < height_; y++) {
             for (int x = 0; x < width_; x++) {
-                const Sample& sample = samples_[static_cast<size_t>(y) * width_ + x];
+                const size_t index = static_cast<size_t>(y) * width_ + x;
+                const Sample& sample = samples_[index];
                 if (sample.offset < 0) {
-                    destination[y * pitch + x] = phosphor[0];
+                    destination[y * pitchPixels + x] = 0;
                     continue;
                 }
-                const unsigned char* pixels = source + sample.offset;
-                const int a = luminance[pixels[0]];
-                const int b = luminance[pixels[1]];
-                const int c = luminance[pixels[width_]];
-                const int d = luminance[pixels[width_ + 1]];
-                const int top = a * (255 - sample.xFraction) + b * sample.xFraction;
-                const int bottom = c * (255 - sample.xFraction) + d * sample.xFraction;
-                const int light = (top * (255 - sample.yFraction) + bottom * sample.yFraction) / 65025;
-                // Bilinear phosphor plus a local halo retains one-pixel strokes
-                // under minification. Both foreground and inverse video stay legible.
-                const int glow = std::max({ a, b, c, d }) / 12;
-                const int intensity = std::min(255, light + glow) * sample.shade / 255;
-                destination[y * pitch + x] = phosphor[intensity];
+                int core = emission_[index] * sample.shade / 255;
+                core = core * ((y & 1) ? 238 : 256) / 256;
+                core = core * flicker / 256;
+                const int near = bloomAt(bloomNear_, x, y);
+                const int wide = bloomAt(bloomWide_, x, y);
+                const int glow = (near * 3 / 4 + wide / 2) / 256;
+                uint32_t hash = static_cast<uint32_t>(x) * 374761393u
+                    + static_cast<uint32_t>(y) * 668265263u + noiseFrame * 2246822519u;
+                hash = (hash ^ (hash >> 13)) * 1274126177u;
+                const int noise = static_cast<int>((hash >> 29) & 3) - 1;
+                const int ambient = glass_[index];
+                const int red = std::clamp(1 + core * 12 / 255 + glow / 24, 0, 255) * sample.coverage / 255;
+                const int green = std::clamp(ambient + core * 204 / 255 + glow + noise, 0, 255) * sample.coverage / 255;
+                const int blue = std::clamp(3 + core * 104 / 255 + glow * 3 / 8 + noise / 2, 0, 255) * sample.coverage / 255;
+                destination[y * pitchPixels + x] = static_cast<uint32_t>((red << 16) | (green << 8) | blue);
             }
         }
     }
