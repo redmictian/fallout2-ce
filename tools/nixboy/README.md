@@ -8,6 +8,8 @@ character's current skill percentage, with five authored options per level.
 The shipped catalog maps Unarmed to **Filesystem** and Science to
 **Networking**. Track labels, skill bands and additional levels are data in the
 editable catalog, rather than a two-track engine limit.
+Each level can set `reward_points` (1–300, default 5); earned amounts stay fixed
+after completion even when the catalog changes.
 Read [training setup and controls](TRAINING.md) first. The original ephemeral
 shell and configured integer bindings remain available with `training=0` in
 `nixboy.ini`. The foundation description below applies to that legacy mode;

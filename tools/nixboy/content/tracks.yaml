@@ -9,10 +9,12 @@ tracks:
         title: Files and navigation
         min_skill: 15
         max_skill: 19
+        reward_points: 5
       2:
         title: Ownership and permissions
         min_skill: 20
         max_skill: 24
+        reward_points: 5
   - id: science
     title: Science
     knowledge_title: Networking
@@ -22,7 +24,9 @@ tracks:
         title: Text processing
         min_skill: 10
         max_skill: 14
+        reward_points: 5
       2:
         title: SSH and networking
         min_skill: 15
         max_skill: 19
+        reward_points: 5

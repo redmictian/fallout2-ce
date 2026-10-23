@@ -151,6 +151,31 @@ class CatalogTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "duplicate YAML key"):
                 Catalog(root)
 
+    def test_level_reward_points_are_configurable_bounded_integers_with_legacy_default(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = self.copy_content(directory)
+            path = root / "tracks.yaml"
+            data = yaml.safe_load(path.read_text())
+            first, second = data["tracks"][0]["levels"].values()
+            first.pop("reward_points")
+            second["reward_points"] = 7
+            path.write_text(yaml.safe_dump(data))
+            catalog = Catalog(root)
+            self.assertEqual(catalog.tracks[3]["levels"][1]["reward_points"], 5)
+            self.assertEqual(catalog.tracks[3]["levels"][2]["reward_points"], 7)
+            default_digest = catalog.digest("unarmed.files.copy-file")
+            first["reward_points"] = 5
+            path.write_text(yaml.safe_dump(data))
+            self.assertEqual(Catalog(root).digest("unarmed.files.copy-file"), default_digest)
+            first["reward_points"] = 300
+            path.write_text(yaml.safe_dump(data))
+            self.assertEqual(Catalog(root).tracks[3]["levels"][1]["reward_points"], 300)
+            for invalid in (0, -1, 301, True, False, 5.0, "5", None):
+                first["reward_points"] = invalid
+                path.write_text(yaml.safe_dump(data))
+                with self.subTest(value=invalid), self.assertRaisesRegex(ValueError, "reward_points"):
+                    Catalog(root)
+
 
 class EnvironmentBoundaryTests(unittest.TestCase):
     def make_env(self, identifier="science.network.ssh-upload", runner=None):

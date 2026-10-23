@@ -12,7 +12,7 @@ Its release version is in [nixboy.version](nixboy.version). See the
 [nix-boy setup and protocol guide](tools/nixboy/README.md) and
 [development workspace pointer](MODLOG.md). It requires a separate local bridge.
 Its [editable challenge catalog](tools/nixboy/content/README.md) maps Fallout
-skills to knowledge tracks and percentage bands.
+skills to knowledge tracks, percentage bands and per-level reward amounts.
 Copying the executable alone does not start Docker. Runtime is disabled unless
 `nixboy.ini` enables it; [example configuration](nixboy.ini.example) has no game
 variable bindings enabled. CMake `-DFALLOUT_NIXBOY=OFF` excludes the terminal.

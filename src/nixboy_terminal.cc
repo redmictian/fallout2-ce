@@ -576,8 +576,8 @@ bool nixboyTerminalOpen(uint16_t port, const std::string& token,
                 break;
             case nixboy::EventType::TrainingReward: {
                 if (!training.enabled || !state.ready || state.exited) break;
-                bool accepted = training.reward && training.reward(event.skill, event.level, event.receipt);
-                bool queued = state.client.acknowledgeTraining(event.skill, event.level, event.receipt, accepted);
+                bool accepted = training.reward && training.reward(event.skill, event.level, event.points, event.receipt);
+                bool queued = state.client.acknowledgeTraining(event.skill, event.level, event.points, event.receipt, accepted);
                 if (training.snapshot) queued = state.client.sendContext(training.snapshot()) && queued;
                 state.status = !queued ? "Reward response could not be sent. Reopen to reconcile training progress."
                     : accepted         ? "Training reward recorded. Save your game to keep this progress."

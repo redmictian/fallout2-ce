@@ -11,7 +11,7 @@ namespace fallout {
 
 struct NixboyTrainingCallbacks {
     bool enabled = false;
-    std::function<bool(uint8_t, uint16_t, const nixboy::TrainingReceipt&)> reward;
+    std::function<bool(uint8_t, uint16_t, uint16_t, const nixboy::TrainingReceipt&)> reward;
     std::function<nixboy::Context()> snapshot;
     std::function<std::vector<nixboy::TrainingClaim>()> progress;
 };

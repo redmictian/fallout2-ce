@@ -217,6 +217,7 @@ void start(Service& service, Client& client, const Context& context = {}, bool t
         for (const auto& claim : claims) {
             expected.push_back(claim.skill);
             put16(expected, claim.level);
+            put16(expected, claim.points);
             expected.insert(expected.end(), claim.receipt.begin(), claim.receipt.end());
         }
     }
@@ -288,13 +289,17 @@ void testValidation()
     require(!client.open(24, 80, {}, error, true), "training requires version context");
     require(!client.open(24, 80, { { "training.version", 1 } }, error, true), "legacy training context version rejected");
     require(!client.open(24, 80, { { "training.version", 2 } }, error, true), "previous training context version rejected");
-    require(!client.open(24, 80, { { "training.version", 4 } }, error, true), "unsupported training context version");
-    Context trainingContext { { "training.version", 3 } };
+    require(!client.open(24, 80, { { "training.version", 3 } }, error, true), "previous fixed-point training context version rejected");
+    require(!client.open(24, 80, { { "training.version", 5 } }, error, true), "unsupported training context version");
+    Context trainingContext { { "training.version", 4 } };
     TrainingReceipt receipt {};
     receipt.back() = 1;
     require(!client.open(24, 80, trainingContext, error, true, { { 18, 3, receipt } }), "invalid claim skill");
     require(!client.open(24, 80, trainingContext, error, true, { { 13, 0, receipt } }), "invalid claim level");
     require(!client.open(24, 80, trainingContext, error, true, { { 13, 3, {} } }), "invalid empty claim receipt");
+    require(!client.open(24, 80, trainingContext, error, true, { { 13, 3, receipt, 0 } })
+            && !client.open(24, 80, trainingContext, error, true, { { 13, 3, receipt, 301 } }),
+        "invalid claim amount");
     require(!client.open(24, 80, trainingContext, error, true, { { 13, 3, receipt }, { 13, 3, receipt } }), "duplicate claim key");
     require(!client.open(24, 80, trainingContext, error, true, { { 13, 3, receipt }, { 13, 4, receipt } }), "reused claim receipt");
     require(!client.open(24, 80, {}, error, false, { { 13, 3, receipt } }), "legacy session cannot carry claims");
@@ -359,8 +364,8 @@ void testRoundTrip()
 
 void testMalformedFrames()
 {
-    expectError(frame(21, Bytes(19, 1)));
-    expectError(frame(21, Bytes(19, 1)), true); // Legacy sessions cannot award training.
+    expectError(frame(21, Bytes(21, 1)));
+    expectError(frame(21, Bytes(21, 1)), true); // Legacy sessions cannot award training.
     expectError(frame(17, bytes("before-ready")));
     expectError(frame(18, { 1, 'x', 0, 0, 0, 1 }));
     expectError(frame(19, { 0, 0, 0, 0 }));
@@ -393,14 +398,14 @@ void testTrainingProtocol()
     using fallout::nixboy::TrainingReceipt;
     Service service;
     Client client;
-    Context context { { "training.version", 3 }, { "training.profile.0", INT32_MIN } };
+    Context context { { "training.version", 4 }, { "training.profile.0", INT32_MIN } };
     TrainingReceipt receipt {};
     receipt.back() = 37;
     TrainingReceipt prior {};
     prior.back() = 1;
-    start(service, client, context, true, { { 13, 300, prior }, { 17, UINT16_MAX, receipt } });
+    start(service, client, context, true, { { 13, 300, prior, 7 }, { 17, UINT16_MAX, receipt, 11 } });
     require(!client.sendTrainingAction(TrainingAction::Check), "actions wait for READY");
-    require(!client.acknowledgeTraining(3, 1, receipt, true), "ack waits for READY");
+    require(!client.acknowledgeTraining(3, 1, 5, receipt, true), "ack waits for READY");
     makeReady(service, client);
     for (int code = 1; code <= 4; code++)
         require(client.sendTrainingAction(static_cast<TrainingAction>(code)), "training action accepted");
@@ -409,17 +414,18 @@ void testTrainingProtocol()
     client.poll(events);
     for (int code = 1; code <= 4; code++)
         require(service.readFrame(8) == Bytes { static_cast<uint8_t>(code) }, "action wire encoding");
-    Bytes reward { 13, 0xff, 0xff };
+    Bytes reward { 13, 0xff, 0xff, 0, 7 };
     reward.insert(reward.end(), receipt.begin(), receipt.end());
     service.send(frame(21, reward));
     pollUntil(client, events, 1);
     require(events.size() == 1 && events[0].type == EventType::TrainingReward
-            && events[0].skill == 13 && events[0].level == UINT16_MAX && events[0].receipt == receipt,
+            && events[0].skill == 13 && events[0].level == UINT16_MAX && events[0].points == 7 && events[0].receipt == receipt,
         "typed reward receipt decoded");
-    require(client.acknowledgeTraining(13, UINT16_MAX, receipt, true), "queue accepted acknowledgment");
-    require(client.acknowledgeTraining(13, UINT16_MAX, receipt, false), "queue rejected acknowledgment");
-    require(!client.acknowledgeTraining(18, 1, receipt, true) && !client.acknowledgeTraining(13, 0, receipt, true)
-            && !client.acknowledgeTraining(13, 3, {}, true),
+    require(client.acknowledgeTraining(13, UINT16_MAX, 7, receipt, true), "queue accepted acknowledgment");
+    require(client.acknowledgeTraining(13, UINT16_MAX, 7, receipt, false), "queue rejected acknowledgment");
+    require(!client.acknowledgeTraining(18, 1, 5, receipt, true) && !client.acknowledgeTraining(13, 0, 5, receipt, true)
+            && !client.acknowledgeTraining(13, 3, 5, {}, true) && !client.acknowledgeTraining(13, 3, 0, receipt, true)
+            && !client.acknowledgeTraining(13, 3, 301, receipt, true),
         "invalid acknowledgments rejected locally");
     events.clear();
     client.poll(events);
@@ -431,7 +437,7 @@ void testTrainingProtocol()
     require(client.sendContext(context), "plain refreshed context carries no ledger");
     client.poll(events);
     require(service.readFrame(6) == contextBytes(context), "CONTEXT wire remains integer context");
-    service.send(frame(21, Bytes(18, 1)));
+    service.send(frame(21, Bytes(19, 1)));
     pollUntil(client, events, 1);
     require(events[0].type == EventType::Error && !client.isConnected(), "malformed reward length disconnects");
 
@@ -456,8 +462,8 @@ void testTrainingProtocol()
     Client legacy;
     start(legacyService, legacy);
     makeReady(legacyService, legacy);
-    require(!legacy.sendTrainingAction(TrainingAction::Check) && !legacy.acknowledgeTraining(3, 1, receipt, true), "legacy client cannot send training controls");
-    for (int mode = 0; mode < 3; mode++) {
+    require(!legacy.sendTrainingAction(TrainingAction::Check) && !legacy.acknowledgeTraining(3, 1, 5, receipt, true), "legacy client cannot send training controls");
+    for (int mode = 0; mode < 5; mode++) {
         Service invalidService;
         Client invalidClient;
         start(invalidService, invalidClient, context, true);
@@ -465,7 +471,12 @@ void testTrainingProtocol()
         auto invalid = reward;
         if (mode == 0) invalid[0] = 18;
         if (mode == 1) invalid[1] = invalid[2] = 0;
-        if (mode == 2) std::fill(invalid.begin() + 3, invalid.end(), 0);
+        if (mode == 2) std::fill(invalid.begin() + 5, invalid.end(), 0);
+        if (mode == 3) invalid[3] = invalid[4] = 0;
+        if (mode == 4) {
+            invalid[3] = 1;
+            invalid[4] = 45;
+        }
         invalidService.send(frame(21, invalid));
         events.clear();
         pollUntil(invalidClient, events, 1);

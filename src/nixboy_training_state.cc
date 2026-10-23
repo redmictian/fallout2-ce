@@ -10,7 +10,7 @@ namespace fallout {
 namespace nixboy {
     namespace {
         constexpr uint8_t kMagic[] = { 'N', 'X', 'B', 'T', 'R', 'A', 'I', 'N' };
-        constexpr uint32_t kVersion = 3;
+        constexpr uint32_t kVersion = 4;
         static_assert(SKILL_COUNT == 18, "Training wire skill IDs require an explicit migration if changed");
 
         bool empty(const TrainingReceipt& receipt)
@@ -76,7 +76,11 @@ namespace nixboy {
 
     int TrainingState::bonus(int skill) const
     {
-        return completed(skill) * 5;
+        int total = 0;
+        for (const auto& claim : claims_) {
+            if (claim.skill == skill) total += claim.points;
+        }
+        return total;
     }
 
     TrainingReceipt TrainingState::receipt(int skill, int level) const
@@ -87,15 +91,15 @@ namespace nixboy {
         return {};
     }
 
-    bool TrainingState::accept(int skill, int level, const TrainingReceipt& receipt)
+    bool TrainingState::accept(int skill, int level, const TrainingReceipt& receipt, int points)
     {
-        if (skill < 0 || skill >= SKILL_COUNT || level < 1 || level > UINT16_MAX || empty(profile_) || empty(receipt)) return false;
+        if (skill < 0 || skill >= SKILL_COUNT || level < 1 || level > UINT16_MAX || points < 1 || points > 300 || empty(profile_) || empty(receipt)) return false;
         for (const auto& claim : claims_) {
-            if (claim.skill == skill && claim.level == level) return claim.receipt == receipt;
+            if (claim.skill == skill && claim.level == level) return claim.receipt == receipt && claim.points == points;
             if (claim.receipt == receipt) return false;
         }
         if (claims_.size() >= kMaxClaims) return false;
-        claims_.push_back({ static_cast<uint8_t>(skill), static_cast<uint16_t>(level), receipt });
+        claims_.push_back({ static_cast<uint8_t>(skill), static_cast<uint16_t>(level), receipt, static_cast<uint16_t>(points) });
         return true;
     }
 
@@ -103,7 +107,7 @@ namespace nixboy {
     {
         std::vector<uint8_t> bytes(std::begin(kMagic), std::end(kMagic));
         append32(bytes, kVersion);
-        append32(bytes, static_cast<uint32_t>(18 + claims_.size() * 19));
+        append32(bytes, static_cast<uint32_t>(18 + claims_.size() * 21));
         bytes.insert(bytes.end(), profile_.begin(), profile_.end());
         bytes.push_back(static_cast<uint8_t>(claims_.size() >> 8));
         bytes.push_back(static_cast<uint8_t>(claims_.size()));
@@ -111,6 +115,8 @@ namespace nixboy {
             bytes.push_back(claim.skill);
             bytes.push_back(static_cast<uint8_t>(claim.level >> 8));
             bytes.push_back(static_cast<uint8_t>(claim.level));
+            bytes.push_back(static_cast<uint8_t>(claim.points >> 8));
+            bytes.push_back(static_cast<uint8_t>(claim.points));
             bytes.insert(bytes.end(), claim.receipt.begin(), claim.receipt.end());
         }
         append32(bytes, checksum(bytes.data(), bytes.size()));
@@ -147,17 +153,19 @@ namespace nixboy {
                     if (claimed && !candidate.accept(track == 0 ? SKILL_UNARMED : SKILL_SCIENCE, level + 1, receipt)) return false;
                 }
             }
-        } else if (version == kVersion) {
+        } else if (version == 3 || version == kVersion) {
+            size_t recordSize = version == 3 ? 19 : 21;
             size_t count = (size_t(bytes[32]) << 8) | bytes[33];
-            if (count > kMaxClaims || size != kMinTrailerSize + count * 19) return false;
+            if (count > kMaxClaims || size != kMinTrailerSize + count * recordSize) return false;
             for (size_t index = 0; index < count; index++) {
                 int skill = bytes[offset];
                 int level = (int(bytes[offset + 1]) << 8) | bytes[offset + 2];
+                int points = version == 3 ? 5 : (int(bytes[offset + 3]) << 8) | bytes[offset + 4];
                 TrainingReceipt receipt;
-                std::copy(bytes + offset + 3, bytes + offset + 19, receipt.begin());
+                std::copy(bytes + offset + recordSize - 16, bytes + offset + recordSize, receipt.begin());
                 // Even an exact repeated row is corrupt serialized progress.
-                if (!empty(candidate.receipt(skill, level)) || !candidate.accept(skill, level, receipt)) return false;
-                offset += 19;
+                if (!empty(candidate.receipt(skill, level)) || !candidate.accept(skill, level, receipt, points)) return false;
+                offset += recordSize;
             }
         } else
             return false;

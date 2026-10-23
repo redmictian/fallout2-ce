@@ -159,7 +159,7 @@ namespace {
             for (int skill = 0; skill < SKILL_COUNT; skill++) {
                 context.emplace_back(std::string("skill.") + skillNames[skill], skillGetValue(gDude, skill));
             }
-            context.emplace_back("training.version", 3);
+            context.emplace_back("training.version", 4);
             for (size_t index = 0; index < 4; index++) {
                 context.emplace_back("training.profile." + std::to_string(index), nixboy::trainingState().profileWord(index));
             }
@@ -267,9 +267,9 @@ void nixboyOpen()
     }
     NixboyTrainingCallbacks training;
     training.enabled = options.training;
-    training.reward = [](uint8_t skill, uint16_t level, const nixboy::TrainingReceipt& receipt) {
-        bool accepted = nixboy::trainingState().accept(skill, level, receipt);
-        debugPrint("Nix-Boy training: skill %d level %d %s.\n", skill, level, accepted ? "accepted" : "rejected");
+    training.reward = [](uint8_t skill, uint16_t level, uint16_t points, const nixboy::TrainingReceipt& receipt) {
+        bool accepted = nixboy::trainingState().accept(skill, level, receipt, points);
+        debugPrint("Nix-Boy training: skill %d level %d points %d %s.\n", skill, level, points, accepted ? "accepted" : "rejected");
         return accepted;
     };
     training.snapshot = [&options]() { return collectContext(options); };

@@ -43,10 +43,10 @@ class Probe:
         self.rewards = []
 
     def progress(self):
-        return {f"{skill}:{level}": receipt.hex() for (skill, level), receipt in self.receipts.items()}
+        return {f"{skill}:{level}": dict(claim) for (skill, level), claim in self.receipts.items()}
 
     def context(self):
-        values = {"training.version": 3}
+        values = {"training.version": 4}
         values.update({"skill." + name: self.skill_values[skill] for skill, name in enumerate(SKILL_NAMES)})
         for index, value in enumerate(struct.unpack("!4i", self.profile)):
             values[f"training.profile.{index}"] = value
@@ -80,8 +80,8 @@ class Probe:
             if len(self.output) > 2 * 1024 * 1024:
                 raise AssertionError("training smoke output budget exceeded")
         elif kind == TRAIN_REWARD:
-            skill, level, receipt_hex, _ = decode_training_ack(payload + b"\1")
-            key, receipt = (skill, level), bytes.fromhex(receipt_hex)
+            skill, level, points, receipt_hex, _ = decode_training_ack(payload + b"\1")
+            key, receipt = (skill, level), {"receipt": receipt_hex, "points": points}
             if key in self.receipts:
                 if self.receipts[key] != receipt:
                     raise AssertionError(f"changed receipt for completed level {key}")
@@ -139,18 +139,19 @@ class Probe:
             if not self.rewards:
                 self.until(lambda kind, data: kind == TRAIN_REWARD)
             payload = self.rewards.pop(0)
-            if self.receipts.get(struct.unpack("!BH", payload[:3])) == payload[3:]:
+            skill, level, points, receipt_hex, _ = decode_training_ack(payload + b"\1")
+            if self.receipts.get((skill, level)) == {"receipt": receipt_hex, "points": points}:
                 self.socket.sendall(frame(TRAIN_ACK, payload + b"\1")
                                     + frame(CONTEXT, encode_context(self.context())))
                 continue
             return payload
 
     def accept(self, payload):
-        skill, level, receipt_hex, _ = decode_training_ack(payload + b"\1")
+        skill, level, points, receipt_hex, _ = decode_training_ack(payload + b"\1")
         if (skill, level) in self.receipts:
             raise AssertionError("repeated reward")
-        self.receipts[skill, level] = bytes.fromhex(receipt_hex)
-        self.skill_values[skill] += 5
+        self.receipts[skill, level] = {"receipt": receipt_hex, "points": points}
+        self.skill_values[skill] += points
         self.socket.sendall(frame(TRAIN_ACK, payload + b"\1") + frame(CONTEXT, encode_context(self.context())))
 
     def close(self, explicit=True):
@@ -284,7 +285,7 @@ def main():
                     reward = probe.reward()
                     assert struct.unpack("!BH", reward[:3]) == (skill, level), {
                         "expected": [skill, level], "actual": list(struct.unpack("!BH", reward[:3])),
-                        "completed": probe.progress(), "receipt": reward[3:].hex(),
+                        "completed": probe.progress(), "receipt": reward[5:].hex(),
                     }
                     if skill == first_skill and level == first_level:
                         probe.close(explicit=False)  # Lost acknowledgment.
@@ -294,7 +295,7 @@ def main():
                     probe.accept(reward)
                     completed = sum(skill_id == skill for skill_id, _ in probe.receipts)
                     probe.until_output(f"completed {completed}/".encode())
-                    check = {"skill": skill, "level": level, "challenge": attempt["challenge"], "status": "passed"}
+                    check = {"skill": skill, "level": level, "challenge": attempt["challenge"], "reward_points": attempt["reward_points"], "status": "passed"}
                     checks.append(check)
                     print(json.dumps(check), flush=True)
                     if args.one:
@@ -302,7 +303,7 @@ def main():
                 if args.one:
                     break
             assert len(probe.progress()) == (1 if args.one else 4)
-            assert len(set(probe.receipts.values())) == (1 if args.one else 4)
+            assert len({claim["receipt"] for claim in probe.receipts.values()}) == (1 if args.one else 4)
             probe.close()
             probe.connect()
             assert not manager.pending_rewards(probe.identity, probe.progress())
