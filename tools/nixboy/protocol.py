@@ -104,7 +104,7 @@ def decode_context(payload):
 
 def training_context(values):
     """Validate the training handshake before catalog/state/Docker access."""
-    if values.get("training.version") != 1:
+    if values.get("training.version") != 2:
         raise ProtocolError("unsupported training version")
     chunks = []
     for index in range(4):
@@ -115,13 +115,16 @@ def training_context(values):
     profile = b"".join(chunks)
     if profile == bytes(16):
         raise ProtocolError("invalid training profile")
-    completed = {}
+    claimed = {}
     for skill, name in ((3, "unarmed"), (12, "science")):
-        level = values.get(f"training.completed.{name}")
-        if type(level) is not int or not 0 <= level <= 2:
+        mask = values.get(f"training.claimed.{name}")
+        if type(mask) is not int or not 0 <= mask <= 3:
             raise ProtocolError("invalid training progress")
-        completed[skill] = level
-    return profile.hex(), completed
+        value = values.get(f"skill.{name}")
+        if type(value) is not int or not -(2**31) <= value < 2**31:
+            raise ProtocolError("missing current training skill value")
+        claimed[skill] = mask
+    return profile.hex(), claimed
 
 
 def encode_training_reward(skill, level, receipt):

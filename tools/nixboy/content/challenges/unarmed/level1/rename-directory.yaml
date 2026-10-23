@@ -4,7 +4,6 @@ skill: 3
 level: 1
 title: Publish a draft folder
 kind: rename-directory
-lesson: "mv also renames directories, including the files inside them. Practice: mkdir -p practice-draft; touch practice-draft/note; mv practice-draft practice-final; ls practice-final."
 instructions: "Rename ~/lab/{name}-draft to ~/lab/{name}-final. Preserve the enclosed report.txt and remove the old directory path."
 parameters:
   name: [route, station, outpost]

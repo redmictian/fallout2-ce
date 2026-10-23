@@ -17,7 +17,6 @@ class Challenge:
     skill: int
     level: int
     title: str
-    lesson: str
     instructions: str
     kind: str
     parameters: dict
@@ -33,18 +32,30 @@ class Catalog:
             skill = track["skill"]
             if type(skill) is not int or skill not in (3, 12) or skill in self.tracks:
                 raise ValueError("unsupported or duplicate training skill")
-            self.tracks[skill] = {"id": track["id"], "title": track["title"], "levels": [1, 2]}
+            levels = track.get("levels")
+            if not isinstance(levels, dict) or set(levels) != {1, 2}:
+                raise ValueError("training track needs two explicit skill bands")
+            previous_max = -1
+            for level, band in sorted(levels.items()):
+                if not isinstance(band, dict) or set(band) != {"title", "min_skill", "max_skill"} \
+                        or not isinstance(band["title"], str) or not band["title"] \
+                        or any(type(band[key]) is not int for key in ("min_skill", "max_skill")) \
+                        or not 0 <= band["min_skill"] <= band["max_skill"] <= 300 \
+                        or band["min_skill"] <= previous_max:
+                    raise ValueError("invalid or overlapping training skill bands")
+                previous_max = band["max_skill"]
+            self.tracks[skill] = {"id": track["id"], "title": track["title"], "levels": levels}
         self.challenges = {}
         for path in sorted((self.root / "challenges").glob("*/*/*.yaml")):
             data = yaml.safe_load(path.read_text(encoding="utf-8"))
-            required = {"id", "version", "skill", "level", "title", "lesson", "instructions", "kind", "parameters"}
+            required = {"id", "version", "skill", "level", "title", "instructions", "kind", "parameters"}
             if not isinstance(data, dict) or set(data) != required:
                 raise ValueError(f"invalid challenge fields: {path}")
             if not IDENTIFIER.fullmatch(data["id"]) or data["id"] in self.challenges:
                 raise ValueError("invalid or duplicate challenge id")
             if any(type(data[key]) is not int for key in ("skill", "level", "version")) or data["skill"] not in self.tracks or data["level"] not in (1, 2) or data["version"] != 1:
                 raise ValueError("invalid challenge track, level or version")
-            for key in ("title", "lesson", "instructions", "kind"):
+            for key in ("title", "instructions", "kind"):
                 if not isinstance(data[key], str) or not data[key] or len(data[key]) > 4096:
                     raise ValueError(f"invalid challenge {key}")
             if not IDENTIFIER.fullmatch(data["kind"]) or not isinstance(data["parameters"], dict):
@@ -61,6 +72,15 @@ class Catalog:
 
     def pool(self, skill, level):
         return [item.id for item in self.challenges.values() if item.skill == skill and item.level == level]
+
+    def level_for_value(self, skill, value):
+        """Only an authored band matching this skill's current game value is eligible."""
+        if type(value) is not int:
+            return None
+        for level, band in self.tracks.get(skill, {}).get("levels", {}).items():
+            if band["min_skill"] <= value <= band["max_skill"]:
+                return level
+        return None
 
     def get(self, identifier):
         try:

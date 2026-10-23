@@ -446,6 +446,15 @@ int pipboyOpen(int intent)
             }
         }
 
+        if (gPipboyNixboyEnabled && nixboyIsHotkey(keyCode)) {
+            nixboyOpen();
+            gPipboyLastEventTimestamp = getTicks();
+            mouseGetPositionInWindow(gPipboyWindow, &gPipboyPreviousMouseX, &gPipboyPreviousMouseY);
+            windowRefresh(gPipboyWindow);
+            sharedFpsLimiter.throttle();
+            continue;
+        }
+
         if (keyCode == KEY_CTRL_Q || keyCode == KEY_CTRL_X || keyCode == KEY_F10) {
             showQuitConfirmationDialog();
             break;
@@ -456,7 +465,7 @@ int pipboyOpen(int intent)
             break;
         }
 
-        if (gPipboyNixboyEnabled && (keyCode == 529 || keyCode == KEY_LOWERCASE_N || keyCode == KEY_UPPERCASE_N)) {
+        if (gPipboyNixboyEnabled && keyCode == 529) {
             nixboyOpen();
             gPipboyLastEventTimestamp = getTicks();
             mouseGetPositionInWindow(gPipboyWindow, &gPipboyPreviousMouseX, &gPipboyPreviousMouseY);
@@ -628,7 +637,7 @@ static int pipboyWindowInit(int intent)
             buttonSetCallbacks(button, _gsound_red_butt_press, _gsound_red_butt_release);
         }
         fontDrawText(gPipboyWindowBuffer + PIPBOY_WINDOW_WIDTH * 367 + 80,
-            "NIX-BOY", 140, PIPBOY_WINDOW_WIDTH, _colorTable[992]);
+            "nix-boy", 140, PIPBOY_WINDOW_WIDTH, _colorTable[992]);
     }
 
     if (intent == PIPBOY_OPEN_INTENT_REST) {

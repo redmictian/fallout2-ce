@@ -479,8 +479,8 @@ namespace nixboy {
             error = "Nix-Boy session is disconnected or already open.";
             return false;
         }
-        if (training && std::find(context.begin(), context.end(), std::make_pair(std::string("training.version"), int32_t(1))) == context.end()) {
-            error = "Nix-Boy training requires context version 1.";
+        if (training && std::find(context.begin(), context.end(), std::make_pair(std::string("training.version"), int32_t(2))) == context.end()) {
+            error = "nix-boy training requires context version 2.";
             return false;
         }
         std::vector<uint8_t> payload;

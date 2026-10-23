@@ -21,6 +21,19 @@ TrainingReceipt receipt(uint8_t value)
     return bytes;
 }
 
+void seal(std::vector<uint8_t>& bytes)
+{
+    uint32_t crc = 0xffffffff;
+    for (size_t index = 0; index < bytes.size() - 4; index++) {
+        crc ^= bytes[index];
+        for (int bit = 0; bit < 8; bit++)
+            crc = (crc >> 1) ^ ((crc & 1) ? 0xedb88320 : 0);
+    }
+    crc = ~crc;
+    for (size_t index = 0; index < 4; index++)
+        bytes[bytes.size() - 4 + index] = static_cast<uint8_t>(crc >> (24 - index * 8));
+}
+
 void testProgression()
 {
     TrainingState state;
@@ -29,13 +42,13 @@ void testProgression()
     auto initial = state.encode();
     require(state.ensureProfile() && state.encode() == initial, "identity stable across reopen");
     require(!state.accept(fallout::SKILL_UNARMED, 1, {}), "zero receipt rejected");
-    require(!state.accept(fallout::SKILL_UNARMED, 2, receipt(2)), "cannot skip a level");
     require(!state.accept(fallout::SKILL_REPAIR, 1, receipt(1)), "unsupported skill rejected");
     require(!state.accept(fallout::SKILL_SCIENCE, 0, receipt(1)), "zero level rejected");
     require(!state.accept(fallout::SKILL_SCIENCE, 3, receipt(1)), "unsupported level rejected");
     require(state.accept(fallout::SKILL_UNARMED, 1, receipt(1)), "unarmed level one");
     require(state.completed(fallout::SKILL_UNARMED) == 1 && state.bonus(fallout::SKILL_UNARMED) == 5, "exact five-point additive bonus");
-    require(state.completed(fallout::SKILL_SCIENCE) == 0, "other track remains introductory");
+    require(state.completed(fallout::SKILL_SCIENCE) == 0, "other track remains unclaimed");
+    require(state.claimedMask(fallout::SKILL_UNARMED) == 1, "level-one claim bit");
     require(state.receipt(fallout::SKILL_UNARMED, 1) == receipt(1), "completed receipt available for bridge recovery");
     require(state.receipt(fallout::SKILL_UNARMED, 2) == TrainingReceipt {}
             && state.receipt(fallout::SKILL_SCIENCE, 1) == TrainingReceipt {}
@@ -54,7 +67,7 @@ void testProgression()
 
     TrainingState restored;
     auto bytes = state.encode();
-    require(bytes.size() == TrainingState::kTrailerSize, "fixed version-one trailer length");
+    require(bytes.size() == TrainingState::kTrailerSize && bytes[11] == 2, "fixed version-two trailer length");
     require(restored.decode(bytes.data(), bytes.size()), "save round trip");
     require(restored.encode() == bytes, "profile levels and receipts round trip");
     require(restored.accept(fallout::SKILL_UNARMED, 1, receipt(1)), "older receipt remains idempotent after later level");
@@ -67,6 +80,65 @@ void testProgression()
     require(restored.accept(fallout::SKILL_UNARMED, 2, receipt(2)) && restored.bonus(fallout::SKILL_UNARMED) == 10, "replayed receipt never stacks");
     restored.reset();
     require(restored.bonus(fallout::SKILL_UNARMED) == 0 && restored.profileWord(0) == 0, "new-game reset clears identity and bonuses");
+}
+
+void testSparseClaims()
+{
+    TrainingState state;
+    require(state.ensureProfile(), "sparse identity");
+    require(state.accept(fallout::SKILL_UNARMED, 2, receipt(2)), "current skill may start in level-two band");
+    require(state.claimedMask(fallout::SKILL_UNARMED) == 2
+            && state.completed(fallout::SKILL_UNARMED) == 1
+            && state.bonus(fallout::SKILL_UNARMED) == 5,
+        "sparse level-two claim gives only one reward");
+    require(state.receipt(fallout::SKILL_UNARMED, 1) == TrainingReceipt {}
+            && state.receipt(fallout::SKILL_UNARMED, 2) == receipt(2),
+        "sparse receipt slots retain actual level identity");
+    auto bytes = state.encode();
+    require(bytes[32] == 2 && state.decode(bytes.data(), bytes.size()), "sparse mask saved and loaded");
+    require(state.encode() == bytes && state.accept(fallout::SKILL_UNARMED, 2, receipt(2))
+            && state.bonus(fallout::SKILL_UNARMED) == 5,
+        "sparse duplicate after reload does not stack");
+    require(!state.accept(fallout::SKILL_SCIENCE, 1, receipt(2)), "sparse receipt cannot reward another track");
+    require(!state.accept(fallout::SKILL_UNARMED, 2, receipt(3)), "sparse claim rejects conflicting receipt");
+    require(state.accept(fallout::SKILL_UNARMED, 1, receipt(1))
+            && state.claimedMask(fallout::SKILL_UNARMED) == 3
+            && state.completed(fallout::SKILL_UNARMED) == 2
+            && state.bonus(fallout::SKILL_UNARMED) == 10,
+        "independent claims retain both level identities");
+}
+
+void testVersionOneMigration()
+{
+    TrainingState state;
+    require(state.ensureProfile(), "migration identity");
+    require(state.accept(fallout::SKILL_UNARMED, 1, receipt(1))
+            && state.accept(fallout::SKILL_UNARMED, 2, receipt(2))
+            && state.accept(fallout::SKILL_SCIENCE, 1, receipt(3)),
+        "migration receipts");
+    auto old = state.encode();
+    old[11] = 1;
+    old[32] = 2; // Version one stored sequential counts, not claim masks.
+    old[33] = 1;
+    seal(old);
+    require(state.decode(old.data(), old.size()), "valid version-one save remains loadable");
+    require(state.claimedMask(fallout::SKILL_UNARMED) == 3
+            && state.claimedMask(fallout::SKILL_SCIENCE) == 1
+            && state.bonus(fallout::SKILL_UNARMED) == 10
+            && state.bonus(fallout::SKILL_SCIENCE) == 5,
+        "old counts migrate to masks without changing earned bonus");
+    require(state.receipt(fallout::SKILL_UNARMED, 2) == receipt(2)
+            && state.receipt(fallout::SKILL_SCIENCE, 1) == receipt(3),
+        "migration preserves receipt identity");
+    auto migrated = state.encode();
+    require(migrated[11] == 2 && migrated[32] == 3 && migrated[33] == 1,
+        "next save writes version two");
+    require(state.accept(fallout::SKILL_UNARMED, 2, receipt(2))
+            && state.bonus(fallout::SKILL_UNARMED) == 10,
+        "old receipt replay remains idempotent");
+    old[32] = 3;
+    seal(old);
+    require(!state.decode(old.data(), old.size()), "invalid version-one count rejected despite valid CRC");
 }
 
 void testLegacyAndCorruption()
@@ -88,6 +160,18 @@ void testLegacyAndCorruption()
         damaged[index] ^= 0x80;
         require(!state.decode(damaged.data(), damaged.size()), "corrupt header payload or checksum rejected");
     }
+    auto semantic = bytes;
+    semantic[32] = 4;
+    seal(semantic);
+    require(!state.decode(semantic.data(), semantic.size()), "unsupported claim bits rejected despite valid CRC");
+    semantic = bytes;
+    semantic[32] = 2;
+    seal(semantic);
+    require(!state.decode(semantic.data(), semantic.size()), "receipt occupancy must match sparse mask");
+    semantic = bytes;
+    semantic[11] = 3;
+    seal(semantic);
+    require(!state.decode(semantic.data(), semantic.size()), "future save version rejected");
     bytes.push_back(0);
     require(!state.decode(bytes.data(), bytes.size()), "unexpected trailing bytes rejected");
     require(!state.decode(nullptr, TrainingState::kTrailerSize), "null nonempty buffer rejected");
@@ -98,6 +182,8 @@ int main()
 {
     try {
         testProgression();
+        testSparseClaims();
+        testVersionOneMigration();
         testLegacyAndCorruption();
         std::cout << "Nix-Boy training state: all tests passed\n";
         return EXIT_SUCCESS;

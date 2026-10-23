@@ -4,7 +4,6 @@ skill: 12
 level: 1
 title: Update a service configuration
 kind: replace-text
-lesson: "sed 's/old/new/g' changes every occurrence on each line. Without g only the first occurrence per line changes. Practice: printf 'old old\\n' | sed 's/old/new/g'. Redirection can preserve the input."
 instructions: "Read ~/lab/{name}.conf and write ~/lab/result.txt replacing every occurrence of 'offline' with 'online'. Preserve all other text and the source configuration."
 parameters:
   name: [communications, ventilation, lighting]
