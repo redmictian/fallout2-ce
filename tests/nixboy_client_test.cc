@@ -274,7 +274,8 @@ void testValidation()
     require(!client.open(24, 80, { { "bad name", 1 } }, error), "invalid name char");
     require(!client.open(24, 80, { { std::string(65, 'a'), 1 } }, error), "context name limit");
     require(!client.open(24, 80, {}, error, true), "training requires version context");
-    require(!client.open(24, 80, { { "training.version", 2 } }, error, true), "unsupported training context version");
+    require(!client.open(24, 80, { { "training.version", 1 } }, error, true), "legacy training context version rejected");
+    require(!client.open(24, 80, { { "training.version", 3 } }, error, true), "unsupported training context version");
     Context large;
     for (int index = 0; index < 129; index++) {
         large.emplace_back("value" + std::to_string(index), index);
@@ -369,7 +370,7 @@ void testTrainingProtocol()
     using fallout::nixboy::TrainingReceipt;
     Service service;
     Client client;
-    Context context { { "training.version", 1 }, { "training.profile.0", INT32_MIN } };
+    Context context { { "training.version", 2 }, { "training.profile.0", INT32_MIN }, { "training.claimed.unarmed", 2 } };
     start(service, client, context, true);
     TrainingReceipt receipt {};
     receipt.back() = 37;

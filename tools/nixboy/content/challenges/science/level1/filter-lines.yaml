@@ -4,7 +4,6 @@ skill: 12
 level: 1
 title: Extract failed service events
 kind: filter-lines
-lesson: "grep selects matching lines; > writes output to a file. Practice: printf 'OK ready\\nERROR stopped\\n' | grep '^ERROR '. Anchoring with ^ avoids unrelated text later in a line."
 instructions: "From ~/lab/{name}.log write every line beginning with 'ERROR ' to ~/lab/result.txt, keeping their original order and complete text. Do not include other lines or change the log."
 parameters:
   name: [reactor, radio, pump]

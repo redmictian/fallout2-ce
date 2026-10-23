@@ -1,9 +1,12 @@
 # Trusted training content
 
-This first catalog has two independent tracks, Unarmed (engine skill 3) and
+This nix-boy catalog has two independent tracks, Unarmed (engine skill 3) and
 Science (engine skill 12), with five distinct authored tasks at each of two
-levels. Each YAML file is a concrete pool entry; bounded parameters give that
-task several reproducible instances. Filenames never define the challenge ID.
+levels. `tracks.yaml` attaches each level to inclusive current effective Fallout
+skill bands: Unarmed 15–19 / 20–24%, Science 10–14 / 15–19%. Only the matching
+band is eligible; uncovered values offer no challenge. Each YAML file is a
+concrete pool entry; bounded parameters give that task several reproducible
+instances. Filenames never define the challenge ID.
 
 `challenge_content.py` safely loads data and checks the limited schema.
 `challenge_env.py` owns setup and state validators on the host; these trusted
@@ -11,10 +14,10 @@ modules are not installed into the learner images. Content cannot choose an
 executable, Docker endpoint, host path, arbitrary Compose file or reward value.
 New task kinds need reviewed application setup/validation code in this version.
 
-`lesson` is plain text with small practice commands. `instructions` is formatted
-with the saved resolved parameters and written to `~/CHALLENGE.txt`. The player
-can experiment in `~/practice.txt` without changing assessment fixtures. Practice
-uses the same task environment; its reward policy belongs to the training manager.
+`instructions` is formatted with the saved resolved parameters and written to
+`~/CHALLENGE.txt`. Practice uses the same task environment without a reward; its
+policy belongs to the training manager. Definitions contain the task objective
+and bounded fixture parameters, with setup and validation in trusted code.
 
 One-service file/text tasks use `compose/single.yaml`; SSH tasks use
 `compose/network.yaml` with a workstation and SSH server on an internal network.

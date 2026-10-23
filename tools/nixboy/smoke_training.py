@@ -34,17 +34,17 @@ class Probe:
         self.server, self.token, self.manager = server, token, manager
         self.profile = secrets.token_bytes(16)
         self.identity = self.profile.hex()
-        self.completed = {3: 0, 12: 0}
+        self.claimed = {3: 0, 12: 0}
         self.receipts = {}
         self.socket = None
         self.output = bytearray()
         self.rewards = []
 
     def context(self):
-        values = {"training.version": 1, "skill.unarmed": 40 + self.completed[3] * 5,
-                  "skill.science": 30 + self.completed[12] * 5,
-                  "training.completed.unarmed": self.completed[3],
-                  "training.completed.science": self.completed[12]}
+        values = {"training.version": 2, "skill.unarmed": 15 + self.claimed[3].bit_count() * 5,
+                  "skill.science": 10 + self.claimed[12].bit_count() * 5,
+                  "training.claimed.unarmed": self.claimed[3],
+                  "training.claimed.science": self.claimed[12]}
         for index, value in enumerate(struct.unpack("!4i", self.profile)):
             values[f"training.profile.{index}"] = value
         for (skill, level), receipt in self.receipts.items():
@@ -148,9 +148,10 @@ class Probe:
 
     def accept(self, payload):
         skill, level, receipt = payload[0], payload[1], payload[2:]
-        if len(payload) != 18 or skill not in self.completed or level != self.completed[skill] + 1:
-            raise AssertionError("invalid or out-of-order reward")
-        self.completed[skill] = level
+        if len(payload) != 18 or skill not in self.claimed or level not in (1, 2) \
+                or self.claimed[skill] & (1 << (level - 1)):
+            raise AssertionError("invalid or repeated reward")
+        self.claimed[skill] |= 1 << (level - 1)
         self.receipts[skill, level] = receipt
         self.socket.sendall(frame(TRAIN_ACK, payload + b"\1") + frame(CONTEXT, encode_context(self.context())))
 
@@ -219,29 +220,31 @@ def main():
                 inspector.close()
         try:
             probe.connect()
-            # An unsolved explicit check rotates exactly one shuffled pool entry.
-            attempt = probe.start(3)
-            before = manager.snapshot(probe.identity)["queues"]["3:1"]
-            probe.action(TRAIN_CHECK)
-            probe.until_output(b"Incomplete.")
-            after = manager.snapshot(probe.identity)["queues"]["3:1"]
-            assert after == before[1:] + before[:1]
-            assert not manager.pending_rewards(probe.identity, probe.completed)
-            checks.append("incomplete-rotates")
+            if not args.one:
+                # An unsolved explicit check rotates exactly one shuffled pool entry.
+                attempt = probe.start(3)
+                before = manager.snapshot(probe.identity)["queues"]["3:1"]
+                probe.action(TRAIN_CHECK)
+                probe.until_output(b"Incomplete.")
+                after = manager.snapshot(probe.identity)["queues"]["3:1"]
+                assert after == before[1:] + before[:1]
+                assert not manager.pending_rewards(probe.identity, probe.claimed)
+                checks.append("incomplete-rotates")
 
-            # The practice path exercises the same state validator without rewards.
-            attempt = probe.start(3, practice=True)
-            reference.solve(ShellSolution(probe, attempt, manager.catalog))
-            probe.action(TRAIN_CHECK)
-            probe.until_output(b"Practice completed; no reward")
-            assert not manager.pending_rewards(probe.identity, probe.completed)
-            checks.append("practice-no-reward")
+                # The practice path exercises the same state validator without rewards.
+                attempt = probe.start(3, practice=True)
+                reference.solve(ShellSolution(probe, attempt, manager.catalog))
+                probe.action(TRAIN_CHECK)
+                probe.until_output(b"Practice completed; no reward")
+                assert not manager.pending_rewards(probe.identity, probe.claimed)
+                checks.append("practice-no-reward")
 
-            for skill in (3, 12):
+            first_skill = 12 if args.one else 3
+            for skill in ((12,) if args.one else (3, 12)):
                 for level in (1, 2):
                     attempt = probe.start(skill)
                     assert attempt["level"] == level
-                    if skill == 3 and level == 1:
+                    if skill == first_skill and level == 1:
                         status, _, _ = probe.command(["touch", "/home/nixboy/reconnect-marker"])
                         assert status == 0
                         for _ in range(3):
@@ -272,15 +275,15 @@ def main():
                     reward = probe.reward()
                     assert reward[:2] == bytes((skill, level)), {
                         "expected": [skill, level], "actual": list(reward[:2]),
-                        "completed": probe.completed, "receipt": reward[2:].hex(),
+                        "completed": probe.claimed, "receipt": reward[2:].hex(),
                     }
-                    if skill == 3 and level == 1:
+                    if skill == first_skill and level == 1:
                         probe.close(explicit=False)  # Lost acknowledgment.
                         probe.connect()
                         assert probe.reward() == reward
                         checks.append("lost-ack-replays-exact-receipt")
                     probe.accept(reward)
-                    probe.until_output(f"completed {level}/2".encode())
+                    probe.until_output(f"completed {probe.claimed[skill].bit_count()}/2".encode())
                     check = {"skill": skill, "level": level, "challenge": attempt["challenge"], "status": "passed"}
                     checks.append(check)
                     print(json.dumps(check), flush=True)
@@ -288,11 +291,11 @@ def main():
                         break
                 if args.one:
                     break
-            assert probe.completed == ({3: 1, 12: 0} if args.one else {3: 2, 12: 2})
+            assert probe.claimed == ({3: 0, 12: 1} if args.one else {3: 3, 12: 3})
             assert len(set(probe.receipts.values())) == (1 if args.one else 4)
             probe.close()
             probe.connect()
-            assert not manager.pending_rewards(probe.identity, probe.completed)
+            assert not manager.pending_rewards(probe.identity, probe.claimed)
             assert manager.snapshot(probe.identity)["attempt"] is None
             checks.append("completed-tracks-reconnect-without-pending-rewards")
         finally:

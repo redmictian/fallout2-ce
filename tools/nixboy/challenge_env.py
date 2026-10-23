@@ -181,7 +181,7 @@ print(json.dumps(result))
         lab = "/home/nixboy/lab"
         self._mkdir("workstation", lab)
         task = self.spec.instructions.format(**self.params)
-        self._write("workstation", "/home/nixboy/CHALLENGE.txt", self.spec.title + "\n\n" + task + "\n\n" + self.spec.lesson + "\n")
+        self._write("workstation", "/home/nixboy/CHALLENGE.txt", self.spec.title + "\n\n" + task + "\n")
         self._write("workstation", "/home/nixboy/practice.txt", "Practice here. The lab task is separate.\n")
         if kind == "make-directory":
             self._write("workstation", lab + "/briefing.txt", self.payload)

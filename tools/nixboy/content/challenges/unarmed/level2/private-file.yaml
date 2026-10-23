@@ -4,7 +4,6 @@ skill: 3
 level: 2
 title: Protect a private report
 kind: private-file
-lesson: "ls -l displays owner/group/other permissions. r=4, w=2 and x=1. chmod changes permissions; symbolic forms like chmod go-rwx FILE are also valid. Practice on ~/practice.txt before editing the lab."
 instructions: "Set ~/lab/{name}.txt so its owner may read and write; group and others have no permissions; nobody may execute. Preserve the contents and ownership."
 parameters:
   name: [medical, confidential, personnel]

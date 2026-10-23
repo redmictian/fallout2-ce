@@ -41,6 +41,22 @@ class CatalogTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 catalog.instantiate(next(iter(catalog.challenges)), seed)
 
+    def test_skill_bands_include_boundaries_without_introductory_fallback(self):
+        catalog = Catalog()
+        for skill, boundaries in ((3, ((14, None), (15, 1), (19, 1), (20, 2), (24, 2), (25, None))),
+                                  (12, ((9, None), (10, 1), (14, 1), (15, 2), (19, 2), (20, None)))):
+            for value, expected in boundaries:
+                with self.subTest(skill=skill, value=value):
+                    self.assertEqual(catalog.level_for_value(skill, value), expected)
+        self.assertIsNone(catalog.level_for_value(4, 15))
+        self.assertIsNone(catalog.level_for_value(3, None))
+
+    def test_catalog_has_task_instructions_without_embedded_teaching_materials(self):
+        catalog = Catalog()
+        for spec in catalog.challenges.values():
+            self.assertFalse(hasattr(spec, "lesson"))
+            self.assertTrue(spec.instructions)
+
 
 class EnvironmentBoundaryTests(unittest.TestCase):
     def make_env(self, identifier="science.network.ssh-upload", runner=None):

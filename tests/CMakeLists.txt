@@ -7,6 +7,11 @@ target_include_directories(debug-launch-test PRIVATE ../src)
 target_compile_features(debug-launch-test PRIVATE cxx_std_17)
 add_test(NAME debug-launch COMMAND debug-launch-test)
 
+add_executable(nixboy-hotkey-test nixboy_hotkey_test.cc ../src/nixboy_hotkey.cc)
+target_include_directories(nixboy-hotkey-test PRIVATE ../src)
+target_compile_features(nixboy-hotkey-test PRIVATE cxx_std_17)
+add_test(NAME nixboy-hotkey COMMAND nixboy-hotkey-test)
+
 add_executable(nixboy-training-state-test nixboy_training_state_test.cc ../src/nixboy_training_state.cc)
 target_include_directories(nixboy-training-state-test PRIVATE ../src)
 target_compile_features(nixboy-training-state-test PRIVATE cxx_std_17)

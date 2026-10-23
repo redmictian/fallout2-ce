@@ -1,10 +1,14 @@
-# Nix-Boy local protocol, version 1
+# nix-boy local protocol
 
 The original OPEN mode below retains its ephemeral shell contract. Training
-extension version 1 uses TRAIN_OPEN instead, with the same frame header and
-bounded integer-context encoding; it requires `training.version=1`. The hub
+extension version 2 uses TRAIN_OPEN instead, with the same version-1 frame header
+and bounded integer-context encoding; it requires `training.version=2`. The hub
 becomes READY without provisioning Docker. See [TRAINING.md](TRAINING.md) in the
 runtime package for player controls and lifecycle.
+
+The game-configured opening shortcut (`[nixboy] hotkey`, default `Ctrl+N`) is a
+local input binding. It changes neither wire messages nor challenge selection;
+the Pip-Boy button opens the same connection path.
 
 The game connects by TCP to `127.0.0.1:47821` by default. Every frame is
 `type:uint8`, `payload_length:uint32 big endian`, then exactly that many payload
@@ -95,7 +99,7 @@ the session may publish allowed named integers or alter their own context files;
 the engine whitelist is the authority for game effects. This is a mod extension
 interface, not a game anti-cheat boundary.
 
-## Training extension version 1
+## Training extension version 2
 
 | Direction | Type | Name | Payload |
 | --- | --- | --- | --- |
@@ -104,24 +108,40 @@ interface, not a game anti-cheat boundary.
 | Client -> bridge | 9 | TRAIN_ACK | skill:uint8, level:uint8, receipt:16 bytes, accepted:uint8 |
 | Bridge -> client | 21 | TRAIN_REWARD | skill:uint8, level:uint8, receipt:16 bytes |
 
-TRAIN_OPEN follows AUTH exactly once. It requires training.version=1, four
+TRAIN_OPEN follows AUTH exactly once. It requires training.version=2, four
 training.profile.0..3 signed int32 words encoding the character's 16 identity
-bytes in big-endian order, and training.completed.unarmed/science in 0..2.
+bytes in big-endian order, and training.claimed.unarmed/science bitmasks in 0..3.
+Bit 0 means level 1 earned; bit 1 means level 2 earned. Mask 2 is valid: ordinary
+Fallout progression may enter level 2 without an earlier training reward.
 skill.<stable_engine_name> values supply all 18 current effective skills.
-Completed levels additionally supply their saved receipt bytes through four
+The engine also supplies training.completed.unarmed/science as display counts
+(the number of set bits, 0..2), not as the eligibility or receipt authority.
+Claimed levels additionally supply their saved receipt bytes through four
 training.receipt.<unarmed|science>.<1|2>.0..3 words. The complete current snapshot
-has at most 46 entries. Training mode does not include legacy global bindings.
+has at most 48 entries. Training mode does not include legacy global bindings.
+
+The bridge maps current skill values to the inclusive bands in tracks.yaml.
+Unarmed 15..19 selects level 1 and 20..24 selects level 2; Science 10..14 selects
+level 1 and 15..19 selects level 2. An uncovered value is unavailable, not a
+fallback. Selection and validation both use the current snapshot's matching
+band. A changed band preserves the active attempt but prevents its validation
+from granting a reward; the player can abandon it and select again.
 
 Only skill IDs 3 (Unarmed) and 12 (Science), levels 1 and 2, nonzero 16-byte
 receipts and acknowledgment values 0/1 are accepted. The bridge records successful
-host validation before sending its receipt. Fallout checks ordered progression
-and receipt identity, derives a five-point bonus per level, and acknowledges
-exact duplicate receipts without changing state. ACK is followed by fresh
+host validation before sending its receipt. Fallout checks supported track/level
+and receipt identity, derives a five-point bonus per set claim bit, and
+acknowledges exact duplicate receipts without changing state. Eligibility belongs
+to the trusted bridge; Fallout accepts independent level claims and does not
+require every earlier level. ACK is followed by fresh
 CONTEXT; a game-memory acknowledgment is not a promise that a save was written.
 
-The game stores identity, completed levels and receipts together in its checked
-SAVE.DAT trailer. The bridge retains earned receipts, can import exact receipts
-from a restored game snapshot, and replays missing earned levels after reconnect.
+The game stores identity, claim masks and receipts together in its checked
+version-2 SAVE.DAT trailer. Version-1 saves migrate counts 0, 1 and 2 to masks 0,
+1 and 3. The bridge's JSON state has the same version-1-to-2 migration. Wire
+training version 1 is rejected, so upgrade game and bridge together. The bridge
+retains earned receipts, can import exact receipts from a restored game snapshot,
+and replays missing claim bits after reconnect.
 It never invents success from shell exit, PTY text or learner helper events.
 
 INPUT routes to a restricted hub menu or the current exercise PTY. RESIZE and

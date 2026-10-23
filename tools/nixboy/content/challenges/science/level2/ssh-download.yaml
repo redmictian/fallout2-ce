@@ -4,7 +4,6 @@ skill: 12
 level: 2
 title: Retrieve a remote report
 kind: ssh-download
-lesson: "scp nixboy@server:REMOTE LOCAL retrieves a remote file. A path beginning / is absolute on the named machine. Practice: ssh nixboy@server ls /home/nixboy. Keys are prepared."
 instructions: "Retrieve server:/home/nixboy/{name}.txt into ~/lab/result.txt. Preserve the remote source and its complete contents. SSH keys and known_hosts are already configured."
 parameters:
   name: [telemetry, weather, bearings]

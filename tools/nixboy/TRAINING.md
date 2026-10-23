@@ -1,13 +1,20 @@
-# Nix-Boy learning challenges
+# nix-boy challenge progression
 
-Nix-Boy opens a bridge-owned training hub inside the existing Pip-Boy terminal.
-This first content slice has two independent tracks, two levels per track and
-five challenge options per level (20 authored options):
+nix-boy is one mod: its Linux terminal and challenge-based Fallout skill
+progression share the release version in [`nixboy.version`](../../nixboy.version).
+The bridge-owned hub has two independent tracks, two authored levels per track
+and five challenge options per level (20 authored options):
 
-| Fallout skill | Level 1 | Level 2 |
+| Fallout skill | Level 1: current skill | Level 2: current skill |
 | --- | --- | --- |
-| Unarmed | Files and navigation | Permissions |
-| Science | Text processing | SSH and networking |
+| Unarmed | 15–19%: files and navigation | 20–24%: permissions |
+| Science | 10–14%: text processing | 15–19%: SSH and networking |
+
+The character's current effective value for that specific Fallout skill selects
+the only eligible level. A value outside the authored bands has no challenge
+available; it never falls back to an introductory pool. Ordinary skill spending
+and other in-game modifiers therefore affect the eligible band on the next
+snapshot. One track's progress does not select another track's difficulty.
 
 Each level awards a provisional **+5 skill percentage points**, capped by the
 engine's existing 300 limit. Tags do not multiply this bonus. Passing any one
@@ -54,10 +61,14 @@ legacy global bindings. Training mode ignores those legacy result bindings.
 
 ## Play
 
-Open the Pip-Boy, then click NIX-BOY or press N. The hub shows current character
-skills and the two available tracks. Enter `1` for Unarmed or `2` for Science.
-Choose `L` for the lesson, `P` for unrewarded practice, or `A` for an assessment.
-An experienced player can choose assessment directly. Choices use Enter.
+Use the configured shortcut in normal gameplay or the Pip-Boy (default Ctrl+N),
+or click the Pip-Boy's nix-boy button. Plain N retains the game's attack-mode
+action with the default configuration. The hub shows current
+character skills and the two tracks. Enter `1` for Unarmed or `2` for Science,
+then `P` for unrewarded practice or `A` for an assessment. Choices use Enter.
+
+Set `[nixboy] hotkey=...` in `nixboy.ini` to change the shortcut, then restart
+the game. See [supported shortcut values](README.md#game-binding-and-linux-helpers).
 
 | Control | Action |
 | --- | --- |
@@ -65,7 +76,7 @@ An experienced player can choose assessment directly. Choices use Enter.
 | F6 | Return to the hub, keeping the exercise |
 | F7 | Reset the same seeded exercise |
 | F8 | Abandon the exercise, keeping earned progress |
-| F10 / Close | Return to Pip-Boy and detach |
+| F10 / Close | Return to the previous game screen and detach |
 | R in the hub | Resume the active exercise |
 
 Escape and Ctrl+C belong to Linux. Leaving a shell returns to the hub; a shell's
@@ -81,22 +92,30 @@ training progress.
 
 ## Progress and recovery
 
-The game stores a random character training identity, completed levels and
+The game stores a random character training identity, claimed level bits and
 receipt IDs in a versioned, checksummed trailer at the end of SAVE.DAT. Old saves
 without a trailer load with empty training state. Present but incomplete or
 corrupt trailers are errors, not silently accepted empty progress. The bonus is
-derived from completed levels, so duplicate messages cannot stack rewards.
+derived from the number of claimed levels, so duplicate messages cannot stack
+rewards. Version-1 training saves migrate their contiguous completion counts
+to version-2 claim bits without losing rewards; version-2 can represent level 2
+earned independently of level 1.
 
 The bridge durably records a successful assessment before sending its receipt.
 It retries delivery after interruption. Earned learning can be restored into an
 earlier save containing the same training identity, without repeatedly adding
 to raw skills. A save made before that identity existed starts another profile.
-Save after first opening Nix-Boy when you want to retain that identity. Ordinary
-Fallout skill spending does not skip learning levels.
+Save after first opening nix-boy when you want to retain that identity. A level
+already claimed cannot grant another reward, even if a later modifier lowers
+the skill back into its band. Ordinary skill spending may move directly into
+level 2 without completing level 1; only the eligible band's unclaimed level can
+be assessed for a reward. Previously earned learning remains additive.
 
 Closing the terminal keeps the active environment while the bridge is running.
-Reset uses the same seed; it does not remove earned levels. A bridge shutdown or
-detached expiry removes exercise resources but retains the attempt definition,
+Reset uses the same seed; it does not remove earned levels. If the skill changed
+bands, checking preserves the exercise but asks you to abandon and select from
+the current band. A bridge shutdown or detached expiry removes exercise resources
+but retains the attempt definition,
 queue and receipts. Resume then recreates the seeded starting exercise; unsaved
 Linux edits do not survive that recreation.
 
@@ -104,7 +123,7 @@ The bridge owns all orchestration. One-service exercises have no network;
 network exercises use workstation/server services on an internal Docker network,
 with no host-published ports or Docker socket inside containers. Cleanup is
 limited to the exact owned attempt resources. Never use global Docker prune for
-Nix-Boy recovery. Preserve the state directory if a cleanup or validation error
+nix-boy recovery. Preserve the state directory if a cleanup or validation error
 needs investigation.
 
 The initial Compose integration targets Docker's default local Unix socket (or

@@ -4,11 +4,23 @@ tracks:
     title: Unarmed
     skill: 3
     levels:
-      1: Files and navigation
-      2: Ownership and permissions
+      1:
+        title: Files and navigation
+        min_skill: 15
+        max_skill: 19
+      2:
+        title: Ownership and permissions
+        min_skill: 20
+        max_skill: 24
   - id: science
     title: Science
     skill: 12
     levels:
-      1: Text processing
-      2: SSH and networking
+      1:
+        title: Text processing
+        min_skill: 10
+        max_skill: 14
+      2:
+        title: SSH and networking
+        min_skill: 15
+        max_skill: 19

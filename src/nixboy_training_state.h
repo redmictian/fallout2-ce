@@ -20,10 +20,11 @@ namespace nixboy {
         bool ensureProfile();
         int32_t profileWord(size_t index) const;
         int completed(int skill) const;
+        int claimedMask(int skill) const;
         int bonus(int skill) const;
         TrainingReceipt receipt(int skill, int level) const;
-        // Exact repeats are accepted without changing progress. Other stale,
-        // skipped, unsupported or reused receipts are rejected.
+        // Levels may be claimed independently: the bridge selects the current
+        // skill band. Exact repeats never stack; conflicting or reused receipts fail.
         bool accept(int skill, int level, const TrainingReceipt& receipt);
         std::vector<uint8_t> encode() const;
         // Zero bytes mean an old save without a trailer. Any present trailer
@@ -32,7 +33,7 @@ namespace nixboy {
 
     private:
         TrainingReceipt profile_ {};
-        std::array<uint8_t, 2> completed_ {};
+        std::array<uint8_t, 2> claimed_ {};
         std::array<std::array<TrainingReceipt, 2>, 2> receipts_ {};
     };
 

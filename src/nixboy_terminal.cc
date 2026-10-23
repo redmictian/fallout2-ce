@@ -147,7 +147,7 @@ namespace {
 
     struct TerminalState {
         nixboy::Client client;
-        std::string status = "Connecting to local Nix-Boy service...";
+        std::string status = "Connecting to local nix-boy service...";
         bool ready = false;
         bool exited = false;
         bool cursorVisible = true;
@@ -493,7 +493,7 @@ bool nixboyTerminalOpen(uint16_t port, const std::string& token,
     if (_win_register_text_button(modal.window, width - fontGetStringWidth(closeTitle) - 2 * kMargin - 16,
             kMargin, -1, -1, -1, kCloseEvent, closeTitle, 0)
         == -1) return false;
-    windowDrawText(modal.window, "NIX-BOY / Linux terminal", width / 2,
+    windowDrawText(modal.window, "nix-boy / Linux terminal", width / 2,
         kMargin, kMargin, _colorTable[992]);
 
     TerminalState state;
@@ -525,7 +525,7 @@ bool nixboyTerminalOpen(uint16_t port, const std::string& token,
     bool opening = state.client.connect(port, token, error)
         && state.client.open(static_cast<uint16_t>(rows), static_cast<uint16_t>(cols), context, error, training.enabled);
     if (!opening) {
-        state.status = "Cannot start Nix-Boy: " + error;
+        state.status = "Cannot start nix-boy: " + error;
         state.dirty = true;
     } else {
         state.status = training.enabled ? "Opening training hub... (F10 closes)" : "Starting Linux container... (F10 cancels)";
@@ -595,7 +595,7 @@ bool nixboyTerminalOpen(uint16_t port, const std::string& token,
             case nixboy::EventType::Error:
                 state.ready = false;
                 opening = false;
-                if (!state.exited) state.status = "Nix-Boy error: " + event.text;
+                if (!state.exited) state.status = "nix-boy error: " + event.text;
                 break;
             }
             state.dirty = true;
@@ -603,7 +603,7 @@ bool nixboyTerminalOpen(uint16_t port, const std::string& token,
         if (opening && getTicksSince(start) > kStartupTimeoutMs) {
             state.client.close();
             opening = false;
-            state.status = "Linux startup timed out. Check the Nix-Boy service and Docker; F10 closes.";
+            state.status = "Linux startup timed out. Check the nix-boy service and Docker; F10 closes.";
             state.dirty = true;
         }
         for (const SDL_Event& event : inputEvents) {
