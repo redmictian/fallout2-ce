@@ -27,7 +27,7 @@ namespace nixboy {
         std::string name;
         int32_t value = 0;
         uint8_t skill = 0;
-        uint8_t level = 0;
+        uint16_t level = 0;
         TrainingReceipt receipt {};
     };
 
@@ -49,13 +49,14 @@ namespace nixboy {
         Client& operator=(Client&&) = delete;
 
         bool connect(uint16_t port, const std::string& token, std::string& error);
-        bool open(uint16_t rows, uint16_t cols, const Context& context, std::string& error, bool training = false);
+        bool open(uint16_t rows, uint16_t cols, const Context& context, std::string& error, bool training = false,
+            const std::vector<TrainingClaim>& claims = {});
         // False means not ready, invalid arguments, or bounded send queue full.
         bool sendInput(const std::string& bytes);
         bool resize(uint16_t rows, uint16_t cols);
         bool sendContext(const Context& context);
         bool sendTrainingAction(TrainingAction action);
-        bool acknowledgeTraining(uint8_t skill, uint8_t level, const TrainingReceipt& receipt, bool accepted);
+        bool acknowledgeTraining(uint8_t skill, uint16_t level, const TrainingReceipt& receipt, bool accepted);
         void poll(std::vector<Event>& events);
         void close();
         bool isConnected() const;

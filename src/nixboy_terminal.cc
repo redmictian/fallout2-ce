@@ -523,7 +523,8 @@ bool nixboyTerminalOpen(uint16_t port, const std::string& token,
 
     std::string error;
     bool opening = state.client.connect(port, token, error)
-        && state.client.open(static_cast<uint16_t>(rows), static_cast<uint16_t>(cols), context, error, training.enabled);
+        && state.client.open(static_cast<uint16_t>(rows), static_cast<uint16_t>(cols), context, error, training.enabled,
+            training.progress ? training.progress() : std::vector<nixboy::TrainingClaim> {});
     if (!opening) {
         state.status = "Cannot start nix-boy: " + error;
         state.dirty = true;
@@ -580,7 +581,7 @@ bool nixboyTerminalOpen(uint16_t port, const std::string& token,
                 if (training.snapshot) queued = state.client.sendContext(training.snapshot()) && queued;
                 state.status = !queued ? "Reward response could not be sent. Reopen to reconcile training progress."
                     : accepted         ? "Training reward recorded. Save your game to keep this progress."
-                                       : "Training reward rejected: unsupported, stale or out-of-order completion.";
+                                       : "Training reward rejected: invalid, conflicting or progress limit reached.";
                 break;
             }
             case nixboy::EventType::Exit:

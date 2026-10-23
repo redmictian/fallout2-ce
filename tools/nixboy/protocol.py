@@ -12,6 +12,13 @@ TRAIN_REWARD = 21
 TRAIN_CHECK, TRAIN_HUB, TRAIN_RESET, TRAIN_ABANDON = range(1, 5)
 NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_.-]{0,63}\Z", re.ASCII)
 TOKEN = re.compile(rb"[0-9a-fA-F]{64}\Z")
+SKILL_NAMES = (
+    "small_guns", "big_guns", "energy_weapons", "unarmed", "melee_weapons", "throwing",
+    "first_aid", "doctor", "sneak", "lockpick", "steal", "traps", "science", "repair",
+    "speech", "barter", "gambling", "outdoorsman",
+)
+MAX_CLAIMS = 2048
+MAX_LEVEL = 65535
 
 
 class ProtocolError(ValueError):
@@ -104,7 +111,7 @@ def decode_context(payload):
 
 def training_context(values):
     """Validate the training handshake before catalog/state/Docker access."""
-    if values.get("training.version") != 2:
+    if values.get("training.version") != 3:
         raise ProtocolError("unsupported training version")
     chunks = []
     for index in range(4):
@@ -115,26 +122,85 @@ def training_context(values):
     profile = b"".join(chunks)
     if profile == bytes(16):
         raise ProtocolError("invalid training profile")
-    claimed = {}
-    for skill, name in ((3, "unarmed"), (12, "science")):
-        mask = values.get(f"training.claimed.{name}")
-        if type(mask) is not int or not 0 <= mask <= 3:
-            raise ProtocolError("invalid training progress")
+    skills = {}
+    for skill, name in enumerate(SKILL_NAMES):
         value = values.get(f"skill.{name}")
         if type(value) is not int or not -(2**31) <= value < 2**31:
             raise ProtocolError("missing current training skill value")
-        claimed[skill] = mask
-    return profile.hex(), claimed
+        skills[skill] = value
+    return profile.hex(), skills
+
+
+def validate_claims(claims):
+    """Validate a sparse skill:level -> receipt-hex ledger, independent of content."""
+    if not isinstance(claims, dict) or len(claims) > MAX_CLAIMS:
+        raise ProtocolError("invalid or oversized training claim ledger")
+    seen = set()
+    for key, receipt in claims.items():
+        if not isinstance(key, str) or len(key) > 8 or not re.fullmatch(r"(?:0|[1-9][0-9]*):[1-9][0-9]*", key):
+            raise ProtocolError("invalid training claim key")
+        skill, level = map(int, key.split(":"))
+        if not 0 <= skill < len(SKILL_NAMES) or not 1 <= level <= MAX_LEVEL \
+                or not isinstance(receipt, str) or not re.fullmatch(r"[0-9a-f]{32}", receipt) \
+                or receipt == "0" * 32 or receipt in seen:
+            raise ProtocolError("invalid or duplicate training receipt")
+        seen.add(receipt)
+    return claims
+
+
+def encode_training_open(rows, cols, values, claims):
+    size = struct.pack("!HH", rows, cols)
+    dimensions(size)
+    training_context(values)
+    validate_claims(claims)
+    context = encode_context(values)
+    records = b"".join(encode_training_reward(*map(int, key.split(":")), bytes.fromhex(receipt))
+                       for key, receipt in sorted(claims.items()))
+    payload = size + struct.pack("!I", len(context)) + context + struct.pack("!H", len(claims)) + records
+    if len(payload) > MAX_PAYLOAD:
+        raise ProtocolError("training open exceeds frame limit")
+    return payload
+
+
+def decode_training_open(payload):
+    if len(payload) < 12:
+        raise ProtocolError("truncated training open")
+    rows, cols = dimensions(payload[:4])
+    size = struct.unpack_from("!I", payload, 4)[0]
+    if size < 2 or 8 + size + 2 > len(payload):
+        raise ProtocolError("invalid training context size")
+    values = decode_context(payload[8:8 + size])
+    training_context(values)
+    count = struct.unpack_from("!H", payload, 8 + size)[0]
+    if count > MAX_CLAIMS or len(payload) != 10 + size + count * 19:
+        raise ProtocolError("invalid training claim record count")
+    claims = {}
+    offset = 10 + size
+    for _ in range(count):
+        skill, level = struct.unpack_from("!BH", payload, offset)
+        receipt = payload[offset + 3:offset + 19].hex()
+        key = f"{skill}:{level}"
+        if key in claims:
+            raise ProtocolError("duplicate training claim key")
+        claims[key] = receipt
+        offset += 19
+    validate_claims(claims)
+    return rows, cols, values, claims
 
 
 def encode_training_reward(skill, level, receipt):
-    if skill not in (3, 12) or level not in (1, 2) or len(receipt) != 16 or not any(receipt):
+    if type(skill) is not int or not 0 <= skill < len(SKILL_NAMES) \
+            or type(level) is not int or not 1 <= level <= MAX_LEVEL \
+            or len(receipt) != 16 or not any(receipt):
         raise ProtocolError("invalid training reward")
-    return bytes((skill, level)) + receipt
+    return struct.pack("!BH", skill, level) + receipt
 
 
 def decode_training_ack(payload):
-    if len(payload) != 19 or payload[0] not in (3, 12) or payload[1] not in (1, 2) \
-            or not any(payload[2:18]) or payload[18] not in (0, 1):
+    if len(payload) != 20:
         raise ProtocolError("invalid training acknowledgment")
-    return payload[0], payload[1], payload[2:18].hex(), bool(payload[18])
+    skill, level = struct.unpack_from("!BH", payload)
+    encode_training_reward(skill, level, payload[3:19])
+    if payload[19] not in (0, 1):
+        raise ProtocolError("invalid training acknowledgment")
+    return skill, level, payload[3:19].hex(), bool(payload[19])

@@ -63,6 +63,12 @@ int main()
                 && skillGetValue(gDude, SKILL_SCIENCE) == sparseBefore + 5,
             "entering level two directly grants one five-point bonus");
         training.reset();
+        require(training.ensureProfile(), "generic skill identity");
+        int repairBefore = skillGetValue(gDude, SKILL_REPAIR);
+        require(training.accept(SKILL_REPAIR, 3, receipt)
+                && skillGetValue(gDude, SKILL_REPAIR) == repairBefore + 5,
+            "declarative Repair level three uses the real skill evaluator");
+        training.reset();
         int noTags[NUM_TAGGED_SKILLS] { -1, -1, -1, -1 };
         skillsSetTagged(noTags, NUM_TAGGED_SKILLS);
         playerProto.critter.data.skills[SKILL_SCIENCE] = 277;

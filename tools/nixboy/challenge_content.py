@@ -1,14 +1,44 @@
-"""Trusted, versioned training content. YAML is data, never executable code."""
+"""Trusted external challenge catalog. YAML defines data, never executable code."""
 
-from dataclasses import dataclass
+import argparse
+from dataclasses import asdict, dataclass
+import hashlib
+import json
 from pathlib import Path
 import random
 import re
+from string import Formatter
 
 import yaml
 
+from protocol import MAX_LEVEL, SKILL_NAMES
+
 CONTENT_ROOT = Path(__file__).resolve().parent / "content"
 IDENTIFIER = re.compile(r"^[a-z][a-z0-9_.-]{0,63}$")
+KINDS = {"make-directory", "copy-file", "move-file", "rename-directory", "remove-empty",
+         "filter-lines", "sort-unique", "extract-field", "count-matches", "replace-text",
+         "ssh-upload", "ssh-download", "ssh-remote-move", "ssh-key-login", "ssh-alias",
+         "private-file", "public-read", "executable", "shared-directory", "group-readable"}
+
+
+class ContentLoader(yaml.SafeLoader):
+    """Reject ambiguous duplicate keys while retaining ordinary YAML aliases."""
+
+
+def _mapping(loader, node, deep=False):
+    result = {}
+    for key_node, value_node in node.value:
+        key = loader.construct_object(key_node, deep=deep)
+        try:
+            if key in result:
+                raise ValueError(f"duplicate YAML key: {key}")
+            result[key] = loader.construct_object(value_node, deep=deep)
+        except TypeError as exc:
+            raise ValueError("invalid YAML mapping key") from exc
+    return result
+
+
+ContentLoader.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, _mapping)
 
 
 @dataclass(frozen=True)
@@ -23,58 +53,121 @@ class Challenge:
     version: int = 1
 
 
+def _text(value, maximum=4096):
+    return isinstance(value, str) and 0 < len(value) <= maximum and "\0" not in value
+
+
 class Catalog:
     def __init__(self, root=None):
-        self.root = Path(root or CONTENT_ROOT).resolve()
-        raw = yaml.safe_load((self.root / "tracks.yaml").read_text(encoding="utf-8"))
+        self.root = Path(root if root is not None else CONTENT_ROOT).resolve()
+        raw = self._read(self.root / "tracks.yaml")
+        if not isinstance(raw, dict) or set(raw) != {"schema", "tracks"} or raw["schema"] != 2 \
+                or not isinstance(raw["tracks"], list) or not 1 <= len(raw["tracks"]) <= len(SKILL_NAMES):
+            raise ValueError("catalog needs schema 2 and between one and 18 tracks")
         self.tracks = {}
+        identifiers = set()
         for track in raw["tracks"]:
+            if not isinstance(track, dict) or set(track) != {"id", "title", "knowledge_title", "skill", "levels"}:
+                raise ValueError("invalid training track fields")
             skill = track["skill"]
-            if type(skill) is not int or skill not in (3, 12) or skill in self.tracks:
+            if type(skill) is not int or not 0 <= skill < len(SKILL_NAMES) or skill in self.tracks:
                 raise ValueError("unsupported or duplicate training skill")
-            levels = track.get("levels")
-            if not isinstance(levels, dict) or set(levels) != {1, 2}:
-                raise ValueError("training track needs two explicit skill bands")
-            previous_max = -1
-            for level, band in sorted(levels.items()):
+            if not isinstance(track["id"], str) or not IDENTIFIER.fullmatch(track["id"]) \
+                    or track["id"] in identifiers or not _text(track["title"], 200) \
+                    or not _text(track["knowledge_title"], 200):
+                raise ValueError("invalid or duplicate track identity/title")
+            levels = track["levels"]
+            if not isinstance(levels, dict) or not 1 <= len(levels) <= 2048:
+                raise ValueError("training track needs authored skill bands")
+            ranges = []
+            for level, band in levels.items():
+                if type(level) is not int or not 1 <= level <= MAX_LEVEL:
+                    raise ValueError("level ID must be in 1..65535")
                 if not isinstance(band, dict) or set(band) != {"title", "min_skill", "max_skill"} \
-                        or not isinstance(band["title"], str) or not band["title"] \
+                        or not _text(band["title"], 200) \
                         or any(type(band[key]) is not int for key in ("min_skill", "max_skill")) \
-                        or not 0 <= band["min_skill"] <= band["max_skill"] <= 300 \
-                        or band["min_skill"] <= previous_max:
-                    raise ValueError("invalid or overlapping training skill bands")
-                previous_max = band["max_skill"]
-            self.tracks[skill] = {"id": track["id"], "title": track["title"], "levels": levels}
+                        or not 0 <= band["min_skill"] <= band["max_skill"] <= 300:
+                    raise ValueError("invalid training skill band")
+                ranges.append((band["min_skill"], band["max_skill"]))
+            previous_max = -1
+            for minimum, maximum in sorted(ranges):
+                if minimum <= previous_max:
+                    raise ValueError("overlapping training skill bands")
+                previous_max = maximum
+            identifiers.add(track["id"])
+            self.tracks[skill] = {key: value for key, value in track.items() if key != "skill"}
+        if sum(len(track["levels"]) for track in self.tracks.values()) > 2048:
+            raise ValueError("catalog exceeds 2048 authored levels")
         self.challenges = {}
-        for path in sorted((self.root / "challenges").glob("*/*/*.yaml")):
-            data = yaml.safe_load(path.read_text(encoding="utf-8"))
+        self._pools = {}
+        paths = sorted((self.root / "challenges").rglob("*.yaml"))
+        if not 1 <= len(paths) <= 8192:
+            raise ValueError("catalog needs between one and 8192 challenge definitions")
+        for path in paths:
+            data = self._read(path)
             required = {"id", "version", "skill", "level", "title", "instructions", "kind", "parameters"}
             if not isinstance(data, dict) or set(data) != required:
                 raise ValueError(f"invalid challenge fields: {path}")
-            if not IDENTIFIER.fullmatch(data["id"]) or data["id"] in self.challenges:
+            if not isinstance(data["id"], str) or not IDENTIFIER.fullmatch(data["id"]) or data["id"] in self.challenges:
                 raise ValueError("invalid or duplicate challenge id")
-            if any(type(data[key]) is not int for key in ("skill", "level", "version")) or data["skill"] not in self.tracks or data["level"] not in (1, 2) or data["version"] != 1:
+            if any(type(data[key]) is not int for key in ("skill", "level", "version")) \
+                    or data["skill"] not in self.tracks \
+                    or data["level"] not in self.tracks[data["skill"]]["levels"] \
+                    or not 1 <= data["version"] <= 2**31 - 1:
                 raise ValueError("invalid challenge track, level or version")
             for key in ("title", "instructions", "kind"):
-                if not isinstance(data[key], str) or not data[key] or len(data[key]) > 4096:
+                if not _text(data[key], 200 if key == "title" else 4096):
                     raise ValueError(f"invalid challenge {key}")
-            if not IDENTIFIER.fullmatch(data["kind"]) or not isinstance(data["parameters"], dict):
-                raise ValueError("invalid challenge parameters")
+            if data["kind"] not in KINDS or not isinstance(data["parameters"], dict) \
+                    or not 1 <= len(data["parameters"]) <= 32 or "name" not in data["parameters"]:
+                raise ValueError("unsupported challenge kind or parameters")
             for key, choices in data["parameters"].items():
-                if not IDENTIFIER.fullmatch(key) or not isinstance(choices, list) or not 1 <= len(choices) <= 32:
+                if not isinstance(key, str) or not IDENTIFIER.fullmatch(key) \
+                        or not isinstance(choices, list) or not 1 <= len(choices) <= 32:
                     raise ValueError("parameters must be bounded choice lists")
-                if any(type(value) not in (str, int) or isinstance(value, str) and (len(value) > 1000 or "\0" in value) for value in choices):
+                if any(type(value) not in (str, int) or isinstance(value, str) and (len(value) > 1000 or "\0" in value)
+                       or type(value) is int and not -(2**31) <= value < 2**31 for value in choices):
                     raise ValueError("invalid parameter value")
+            if any(not _text(value, 1000) for value in data["parameters"]["name"]):
+                raise ValueError("name choices must be nonempty strings")
+            if "subject" in data["parameters"] and any(not _text(value, 1000) for value in data["parameters"]["subject"]):
+                raise ValueError("subject choices must be nonempty strings")
+            if data["kind"] == "extract-field" and ("channel" not in data["parameters"]
+                    or any(type(value) is not int or not -(2**31) <= value <= 2**31 - 3
+                           for value in data["parameters"]["channel"])):
+                raise ValueError("extract-field requires bounded integer channel choices")
+            try:
+                for _, field, format_spec, conversion in Formatter().parse(data["instructions"]):
+                    if field is not None and (field not in data["parameters"] or format_spec or conversion):
+                        raise ValueError("instructions must use declared, plain parameter placeholders")
+                example = data["instructions"].format(**{key: max(choices, key=lambda value: len(str(value)))
+                                                        for key, choices in data["parameters"].items()})
+                if len(example) > 8192:
+                    raise ValueError("formatted instructions exceed limit")
+            except (KeyError, IndexError, ValueError) as exc:
+                raise ValueError("invalid challenge instruction placeholders") from exc
             spec = Challenge(**data)
             self.challenges[spec.id] = spec
-        if not self.challenges:
-            raise ValueError("empty challenge catalog")
+            self._pools.setdefault((spec.skill, spec.level), []).append(spec.id)
+        for skill, track in self.tracks.items():
+            for level in track["levels"]:
+                if not self.pool(skill, level):
+                    raise ValueError(f"authored skill {skill} level {level} has no challenges")
+        for topology in {"network" if item.kind.startswith("ssh-") else "single" for item in self.challenges.values()}:
+            path = self.root / "compose" / (topology + ".yaml")
+            if not path.is_file():
+                raise ValueError(f"missing content topology: {path}")
+
+    @staticmethod
+    def _read(path):
+        if path.stat().st_size > 65536:
+            raise ValueError(f"content definition exceeds 64 KiB: {path}")
+        return yaml.load(path.read_text(encoding="utf-8"), Loader=ContentLoader)
 
     def pool(self, skill, level):
-        return [item.id for item in self.challenges.values() if item.skill == skill and item.level == level]
+        return list(self._pools.get((skill, level), ()))
 
     def level_for_value(self, skill, value):
-        """Only an authored band matching this skill's current game value is eligible."""
         if type(value) is not int:
             return None
         for level, band in self.tracks.get(skill, {}).get("levels", {}).items():
@@ -94,3 +187,30 @@ class Catalog:
             raise ValueError("seed must be a nonnegative signed 64-bit integer")
         rng = random.Random(seed)
         return {key: rng.choice(values) for key, values in sorted(spec.parameters.items())}
+
+    def digest(self, identifier):
+        spec = self.get(identifier)
+        track = self.tracks[spec.skill]
+        data = {"challenge": asdict(spec), "track": {key: value for key, value in track.items() if key != "levels"},
+                "band": track["levels"][spec.level]}
+        topology = "network" if spec.kind.startswith("ssh-") else "single"
+        digest = hashlib.sha256(json.dumps(data, sort_keys=True, separators=(",", ":")).encode("utf-8"))
+        digest.update((self.root / "compose" / (topology + ".yaml")).read_bytes())
+        return digest.hexdigest()
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Validate a nix-boy content directory without Docker or the game")
+    parser.add_argument("--content-dir", type=Path, default=CONTENT_ROOT)
+    args = parser.parse_args()
+    try:
+        catalog = Catalog(args.content_dir)
+    except (OSError, ValueError, yaml.YAMLError) as exc:
+        parser.exit(1, f"Invalid content: {exc}\n")
+    print(json.dumps({"status": "valid", "root": str(catalog.root), "tracks": len(catalog.tracks),
+                      "levels": sum(len(track["levels"]) for track in catalog.tracks.values()),
+                      "challenges": len(catalog.challenges)}))
+
+
+if __name__ == "__main__":
+    main()

@@ -28,6 +28,8 @@ using fallout::nixboy::Client;
 using fallout::nixboy::Context;
 using fallout::nixboy::Event;
 using fallout::nixboy::EventType;
+using fallout::nixboy::TrainingClaim;
+using fallout::nixboy::TrainingReceipt;
 using Bytes = std::vector<uint8_t>;
 
 namespace {
@@ -193,12 +195,13 @@ struct Service {
     }
 };
 
-void start(Service& service, Client& client, const Context& context = {}, bool training = false)
+void start(Service& service, Client& client, const Context& context = {}, bool training = false,
+    const std::vector<TrainingClaim>& claims = {})
 {
     std::string error;
     require(client.connect(service.port, kToken, error), error.c_str());
     service.acceptClient();
-    require(client.open(24, 80, context, error, training), error.c_str());
+    require(client.open(24, 80, context, error, training, claims), error.c_str());
     std::vector<Event> events;
     client.poll(events);
     require(events.empty(), "unexpected event before server sends");
@@ -207,7 +210,16 @@ void start(Service& service, Client& client, const Context& context = {}, bool t
     put16(expected, 24);
     put16(expected, 80);
     Bytes encoded = contextBytes(context);
+    if (training) put32(expected, static_cast<uint32_t>(encoded.size()));
     expected.insert(expected.end(), encoded.begin(), encoded.end());
+    if (training) {
+        put16(expected, static_cast<uint16_t>(claims.size()));
+        for (const auto& claim : claims) {
+            expected.push_back(claim.skill);
+            put16(expected, claim.level);
+            expected.insert(expected.end(), claim.receipt.begin(), claim.receipt.end());
+        }
+    }
     require(service.readFrame(training ? 7 : 2) == expected, "OPEN dimensions/context signed encoding");
 }
 
@@ -275,7 +287,18 @@ void testValidation()
     require(!client.open(24, 80, { { std::string(65, 'a'), 1 } }, error), "context name limit");
     require(!client.open(24, 80, {}, error, true), "training requires version context");
     require(!client.open(24, 80, { { "training.version", 1 } }, error, true), "legacy training context version rejected");
-    require(!client.open(24, 80, { { "training.version", 3 } }, error, true), "unsupported training context version");
+    require(!client.open(24, 80, { { "training.version", 2 } }, error, true), "previous training context version rejected");
+    require(!client.open(24, 80, { { "training.version", 4 } }, error, true), "unsupported training context version");
+    Context trainingContext { { "training.version", 3 } };
+    TrainingReceipt receipt {};
+    receipt.back() = 1;
+    require(!client.open(24, 80, trainingContext, error, true, { { 18, 3, receipt } }), "invalid claim skill");
+    require(!client.open(24, 80, trainingContext, error, true, { { 13, 0, receipt } }), "invalid claim level");
+    require(!client.open(24, 80, trainingContext, error, true, { { 13, 3, {} } }), "invalid empty claim receipt");
+    require(!client.open(24, 80, trainingContext, error, true, { { 13, 3, receipt }, { 13, 3, receipt } }), "duplicate claim key");
+    require(!client.open(24, 80, trainingContext, error, true, { { 13, 3, receipt }, { 13, 4, receipt } }), "reused claim receipt");
+    require(!client.open(24, 80, {}, error, false, { { 13, 3, receipt } }), "legacy session cannot carry claims");
+    require(!client.open(24, 80, trainingContext, error, true, std::vector<TrainingClaim>(2049, { 13, 3, receipt })), "ledger count bound");
     Context large;
     for (int index = 0; index < 129; index++) {
         large.emplace_back("value" + std::to_string(index), index);
@@ -336,8 +359,8 @@ void testRoundTrip()
 
 void testMalformedFrames()
 {
-    expectError(frame(21, Bytes(18, 1)));
-    expectError(frame(21, Bytes(18, 1)), true); // Legacy sessions cannot award training.
+    expectError(frame(21, Bytes(19, 1)));
+    expectError(frame(21, Bytes(19, 1)), true); // Legacy sessions cannot award training.
     expectError(frame(17, bytes("before-ready")));
     expectError(frame(18, { 1, 'x', 0, 0, 0, 1 }));
     expectError(frame(19, { 0, 0, 0, 0 }));
@@ -370,10 +393,12 @@ void testTrainingProtocol()
     using fallout::nixboy::TrainingReceipt;
     Service service;
     Client client;
-    Context context { { "training.version", 2 }, { "training.profile.0", INT32_MIN }, { "training.claimed.unarmed", 2 } };
-    start(service, client, context, true);
+    Context context { { "training.version", 3 }, { "training.profile.0", INT32_MIN } };
     TrainingReceipt receipt {};
     receipt.back() = 37;
+    TrainingReceipt prior {};
+    prior.back() = 1;
+    start(service, client, context, true, { { 13, 300, prior }, { 17, UINT16_MAX, receipt } });
     require(!client.sendTrainingAction(TrainingAction::Check), "actions wait for READY");
     require(!client.acknowledgeTraining(3, 1, receipt, true), "ack waits for READY");
     makeReady(service, client);
@@ -384,15 +409,18 @@ void testTrainingProtocol()
     client.poll(events);
     for (int code = 1; code <= 4; code++)
         require(service.readFrame(8) == Bytes { static_cast<uint8_t>(code) }, "action wire encoding");
-    Bytes reward { 3, 1 };
+    Bytes reward { 13, 0xff, 0xff };
     reward.insert(reward.end(), receipt.begin(), receipt.end());
     service.send(frame(21, reward));
     pollUntil(client, events, 1);
     require(events.size() == 1 && events[0].type == EventType::TrainingReward
-            && events[0].skill == 3 && events[0].level == 1 && events[0].receipt == receipt,
+            && events[0].skill == 13 && events[0].level == UINT16_MAX && events[0].receipt == receipt,
         "typed reward receipt decoded");
-    require(client.acknowledgeTraining(3, 1, receipt, true), "queue accepted acknowledgment");
-    require(client.acknowledgeTraining(3, 1, receipt, false), "queue rejected acknowledgment");
+    require(client.acknowledgeTraining(13, UINT16_MAX, receipt, true), "queue accepted acknowledgment");
+    require(client.acknowledgeTraining(13, UINT16_MAX, receipt, false), "queue rejected acknowledgment");
+    require(!client.acknowledgeTraining(18, 1, receipt, true) && !client.acknowledgeTraining(13, 0, receipt, true)
+            && !client.acknowledgeTraining(13, 3, {}, true),
+        "invalid acknowledgments rejected locally");
     events.clear();
     client.poll(events);
     Bytes ack = reward;
@@ -400,7 +428,10 @@ void testTrainingProtocol()
     require(service.readFrame(9) == ack, "accepted acknowledgment preserves receipt");
     ack.back() = 0;
     require(service.readFrame(9) == ack, "rejected acknowledgment explicit");
-    service.send(frame(21, Bytes(17, 1)));
+    require(client.sendContext(context), "plain refreshed context carries no ledger");
+    client.poll(events);
+    require(service.readFrame(6) == contextBytes(context), "CONTEXT wire remains integer context");
+    service.send(frame(21, Bytes(18, 1)));
     pollUntil(client, events, 1);
     require(events[0].type == EventType::Error && !client.isConnected(), "malformed reward length disconnects");
 
@@ -426,6 +457,20 @@ void testTrainingProtocol()
     start(legacyService, legacy);
     makeReady(legacyService, legacy);
     require(!legacy.sendTrainingAction(TrainingAction::Check) && !legacy.acknowledgeTraining(3, 1, receipt, true), "legacy client cannot send training controls");
+    for (int mode = 0; mode < 3; mode++) {
+        Service invalidService;
+        Client invalidClient;
+        start(invalidService, invalidClient, context, true);
+        makeReady(invalidService, invalidClient);
+        auto invalid = reward;
+        if (mode == 0) invalid[0] = 18;
+        if (mode == 1) invalid[1] = invalid[2] = 0;
+        if (mode == 2) std::fill(invalid.begin() + 3, invalid.end(), 0);
+        invalidService.send(frame(21, invalid));
+        events.clear();
+        pollUntil(invalidClient, events, 1);
+        require(events[0].type == EventType::Error && !invalidClient.isConnected(), "invalid reward claim rejected before game callback");
+    }
 }
 
 void testFragmentedPayloadAndLimits()

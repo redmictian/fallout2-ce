@@ -156,29 +156,12 @@ namespace {
                 "speech", "barter", "gambling", "outdoorsman"
             };
             static_assert(sizeof(skillNames) / sizeof(skillNames[0]) == SKILL_COUNT, "Update training skill identifiers");
-            static_assert(SKILL_UNARMED == 3 && SKILL_SCIENCE == 12, "Training track wire IDs must remain stable");
             for (int skill = 0; skill < SKILL_COUNT; skill++) {
                 context.emplace_back(std::string("skill.") + skillNames[skill], skillGetValue(gDude, skill));
             }
-            context.emplace_back("training.version", 2);
+            context.emplace_back("training.version", 3);
             for (size_t index = 0; index < 4; index++) {
                 context.emplace_back("training.profile." + std::to_string(index), nixboy::trainingState().profileWord(index));
-            }
-            context.emplace_back("training.completed.unarmed", nixboy::trainingState().completed(SKILL_UNARMED));
-            context.emplace_back("training.completed.science", nixboy::trainingState().completed(SKILL_SCIENCE));
-            context.emplace_back("training.claimed.unarmed", nixboy::trainingState().claimedMask(SKILL_UNARMED));
-            context.emplace_back("training.claimed.science", nixboy::trainingState().claimedMask(SKILL_SCIENCE));
-            for (int skill : { SKILL_UNARMED, SKILL_SCIENCE }) {
-                for (int level = 1; level <= 2; level++) {
-                    if (!(nixboy::trainingState().claimedMask(skill) & (1 << (level - 1)))) continue;
-                    auto receipt = nixboy::trainingState().receipt(skill, level);
-                    for (int index = 0; index < 4; index++) {
-                        const uint8_t* bytes = receipt.data() + index * 4;
-                        uint32_t bits = (uint32_t(bytes[0]) << 24) | (uint32_t(bytes[1]) << 16) | (uint32_t(bytes[2]) << 8) | bytes[3];
-                        int32_t word = bits <= uint32_t(INT32_MAX) ? static_cast<int32_t>(bits) : -1 - static_cast<int32_t>(~bits);
-                        context.emplace_back(std::string("training.receipt.") + skillNames[skill] + "." + std::to_string(level) + "." + std::to_string(index), word);
-                    }
-                }
             }
         } else {
             for (const auto& binding : options.bindings)
@@ -284,12 +267,13 @@ void nixboyOpen()
     }
     NixboyTrainingCallbacks training;
     training.enabled = options.training;
-    training.reward = [](uint8_t skill, uint8_t level, const nixboy::TrainingReceipt& receipt) {
+    training.reward = [](uint8_t skill, uint16_t level, const nixboy::TrainingReceipt& receipt) {
         bool accepted = nixboy::trainingState().accept(skill, level, receipt);
         debugPrint("Nix-Boy training: skill %d level %d %s.\n", skill, level, accepted ? "accepted" : "rejected");
         return accepted;
     };
     training.snapshot = [&options]() { return collectContext(options); };
+    training.progress = []() { return nixboy::trainingState().claims(); };
 
     bool opened = nixboyTerminalOpen(options.port, token, collectContext(options), [&options](const std::string& name, int32_t value) {
         if (options.training) return;

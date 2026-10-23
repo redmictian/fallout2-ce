@@ -22,7 +22,7 @@ import time
 
 from protocol import (
     AUTH, CLOSE, CONTEXT, ERROR, EXIT, INPUT, OPEN, OUTPUT, READY, RESIZE, RESULT,
-    TRAIN_OPEN, TRAIN_ACTION, TRAIN_ACK, training_context, decode_training_ack,
+    TRAIN_OPEN, TRAIN_ACTION, TRAIN_ACK, decode_training_open, decode_training_ack,
     MAX_PAYLOAD, TOKEN, ProtocolError, decode_context, dimensions, encode_result,
     frame, read_frame, validate_event,
 )
@@ -601,10 +601,11 @@ class BridgeHandler(socketserver.BaseRequestHandler):
             if kind not in (OPEN, TRAIN_OPEN) or len(payload) < 6:
                 raise ProtocolError("expected OPEN after AUTH")
             training = kind == TRAIN_OPEN
-            rows, cols = dimensions(payload[:4])
-            context = decode_context(payload[4:])
             if training:
-                training_context(context)
+                rows, cols, context, progress = decode_training_open(payload)
+            else:
+                rows, cols = dimensions(payload[:4])
+                context = decode_context(payload[4:])
             acquired = self.server.active.acquire(blocking=False)
             if not acquired:
                 self.send(ERROR, b"Nix-Boy already has an active session")
@@ -623,7 +624,10 @@ class BridgeHandler(socketserver.BaseRequestHandler):
                 )
             with self.server.handlers_lock:
                 self.server.sessions.add(self.session)
-            self.session.start(rows, cols, context)
+            if training:
+                self.session.start(rows, cols, context, progress)
+            else:
+                self.session.start(rows, cols, context)
             self.request.settimeout(1)
             while not self.session.closed.is_set() and not self.server.stopping.is_set():
                 if training:
@@ -687,7 +691,7 @@ class BridgeServer(socketserver.ThreadingTCPServer):
     request_queue_size = 4
 
     def __init__(self, port, token, image, network="none", client_factory=local_docker_client,
-                 state_dir=None, training_manager=None):
+                 state_dir=None, training_manager=None, content_dir=None):
         self.token, self.image, self.network = token, image, network
         self.client_factory = client_factory
         self.active = threading.BoundedSemaphore(1)
@@ -700,6 +704,7 @@ class BridgeServer(socketserver.ThreadingTCPServer):
         self.stopping = threading.Event()
         self.training_manager = training_manager
         self.training_state_dir = state_dir
+        self.training_content_dir = content_dir
         self.training_lock = threading.Lock()
         self.expiry_at = 0
         super().__init__(("127.0.0.1", port), BridgeHandler)
@@ -708,8 +713,10 @@ class BridgeServer(socketserver.ThreadingTCPServer):
         with self.training_lock:
             if self.training_manager is None:
                 from training import AttemptManager, default_state_dir
+                from challenge_content import Catalog
                 self.training_manager = AttemptManager(
-                    self.training_state_dir or default_state_dir(), self.client_factory)
+                    self.training_state_dir or default_state_dir(), self.client_factory,
+                    catalog=Catalog(self.training_content_dir))
             return self.training_manager
 
     def service_actions(self):
@@ -773,6 +780,8 @@ def main():
     parser.add_argument("--network", choices=("none", "bridge"), default="none")
     parser.add_argument("--state-dir", type=Path,
                         help="private durable training state (defaults to the user's local state directory)")
+    parser.add_argument("--content-dir", type=Path,
+                        help="external content directory (loaded once; restart the bridge after editing)")
     parser.add_argument("--docker-endpoint", help="local unix:/// or npipe:////./pipe/ endpoint")
     args = parser.parse_args()
     if not 1 <= args.port <= 65535:
@@ -783,7 +792,7 @@ def main():
     token = load_token(args.token_file)
     factory = lambda: local_docker_client(args.docker_endpoint)
     with BridgeServer(args.port, token, args.image, args.network, factory,
-                      state_dir=args.state_dir) as server:
+                      state_dir=args.state_dir, content_dir=args.content_dir) as server:
         LOG.info("Nix-Boy listening on 127.0.0.1:%d (network=%s)", args.port, args.network)
         try:
             server.serve_forever(poll_interval=0.25)
