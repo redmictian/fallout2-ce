@@ -9,6 +9,8 @@
 #include <limits>
 #include <set>
 
+#include "skill_defs.h"
+
 #ifdef _WIN32
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -311,7 +313,7 @@ namespace nixboy {
                 || (type == kReady && (state != State::AwaitingReady || length != 0))
                 || (type == kOutput && !ready)
                 || (type == kResult && (!ready || training || length < 6 || length > 69))
-                || (type == kTrainingReward && (!ready || !training || length != 18))
+                || (type == kTrainingReward && (!ready || !training || length != 19))
                 || (type == kExit && (!ready || length != 4))
                 || (type == kError && length > 4096)
                 || (type != kReady && type != kOutput && type != kResult && type != kExit && type != kError && type != kTrainingReward)) {
@@ -347,8 +349,13 @@ namespace nixboy {
             case kTrainingReward: {
                 Event event { EventType::TrainingReward, {}, {}, 0 };
                 event.skill = payload[0];
-                event.level = payload[1];
-                std::copy(payload + 2, payload + 18, event.receipt.begin());
+                event.level = (uint16_t(payload[1]) << 8) | payload[2];
+                std::copy(payload + 3, payload + 19, event.receipt.begin());
+                if (event.skill >= SKILL_COUNT || event.level == 0
+                    || std::all_of(event.receipt.begin(), event.receipt.end(), [](uint8_t byte) { return byte == 0; })) {
+                    fail(events, "Invalid nix-boy training claim.");
+                    return true;
+                }
                 events.push_back(std::move(event));
                 break;
             }
@@ -472,23 +479,49 @@ namespace nixboy {
         return impl_->queue(kAuth, std::vector<uint8_t>(token.begin(), token.end()));
     }
 
-    bool Client::open(uint16_t rows, uint16_t cols, const Context& context, std::string& error, bool training)
+    bool Client::open(uint16_t rows, uint16_t cols, const Context& context, std::string& error, bool training,
+        const std::vector<TrainingClaim>& claims)
     {
         error.clear();
         if (impl_->state != Impl::State::Connected) {
             error = "Nix-Boy session is disconnected or already open.";
             return false;
         }
-        if (training && std::find(context.begin(), context.end(), std::make_pair(std::string("training.version"), int32_t(2))) == context.end()) {
-            error = "nix-boy training requires context version 2.";
+        if (training && std::find(context.begin(), context.end(), std::make_pair(std::string("training.version"), int32_t(3))) == context.end()) {
+            error = "nix-boy training requires context version 3.";
             return false;
         }
+        if ((!training && !claims.empty()) || claims.size() > TrainingState::kMaxClaims) {
+            error = "Invalid nix-boy training ledger size or session mode.";
+            return false;
+        }
+        std::set<std::pair<uint8_t, uint16_t>> keys;
+        std::set<TrainingReceipt> receipts;
+        for (const auto& claim : claims) {
+            if (claim.skill >= SKILL_COUNT || claim.level == 0
+                || std::all_of(claim.receipt.begin(), claim.receipt.end(), [](uint8_t byte) { return byte == 0; })
+                || !keys.emplace(claim.skill, claim.level).second || !receipts.insert(claim.receipt).second) {
+                error = "Invalid or duplicate nix-boy training claim.";
+                return false;
+            }
+        }
         std::vector<uint8_t> payload;
+        std::vector<uint8_t> encodedContext;
         put16(payload, rows);
         put16(payload, cols);
-        if (!validDimensions(rows, cols) || !encodeContext(context, payload)) {
+        if (!validDimensions(rows, cols) || !encodeContext(context, encodedContext)) {
             error = "Invalid Nix-Boy terminal dimensions or context (maximum 128 unique names).";
             return false;
+        }
+        if (training) put32(payload, static_cast<uint32_t>(encodedContext.size()));
+        payload.insert(payload.end(), encodedContext.begin(), encodedContext.end());
+        if (training) {
+            put16(payload, static_cast<uint16_t>(claims.size()));
+            for (const auto& claim : claims) {
+                payload.push_back(claim.skill);
+                put16(payload, claim.level);
+                payload.insert(payload.end(), claim.receipt.begin(), claim.receipt.end());
+            }
         }
         if (!impl_->queue(training ? kTrainingOpen : kOpen, payload)) {
             error = "Nix-Boy send queue is full.";
@@ -537,10 +570,12 @@ namespace nixboy {
             && impl_->queue(kTrainingAction, { code });
     }
 
-    bool Client::acknowledgeTraining(uint8_t skill, uint8_t level, const TrainingReceipt& receipt, bool accepted)
+    bool Client::acknowledgeTraining(uint8_t skill, uint16_t level, const TrainingReceipt& receipt, bool accepted)
     {
-        if (impl_->state != Impl::State::Ready || !impl_->training) return false;
-        std::vector<uint8_t> payload { skill, level };
+        if (impl_->state != Impl::State::Ready || !impl_->training || skill >= SKILL_COUNT || level == 0
+            || std::all_of(receipt.begin(), receipt.end(), [](uint8_t byte) { return byte == 0; })) return false;
+        std::vector<uint8_t> payload { skill };
+        put16(payload, level);
         payload.insert(payload.end(), receipt.begin(), receipt.end());
         payload.push_back(accepted ? 1 : 0);
         return impl_->queue(kTrainingAck, payload);

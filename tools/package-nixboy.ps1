@@ -47,9 +47,20 @@ foreach ($contentFile in Get-ChildItem -LiteralPath $contentRoot -Recurse -File)
     $files += $contentFile.FullName.Substring($sourceDir.Length + 1).Replace('\', '/')
 }
 foreach ($relativePath in $files) {
-    $targetPath = Join-Path $destinationPath $relativePath
+    # Runtime files sit beside the game, without the source tools/ prefix.
+    $packageRelativePath = if ($relativePath.StartsWith('tools/nixboy/')) {
+        'nixboy/' + $relativePath.Substring('tools/nixboy/'.Length)
+    } else { $relativePath }
+    $targetPath = Join-Path $destinationPath $packageRelativePath
     New-Item -ItemType Directory -Force -Path (Split-Path -Parent $targetPath) | Out-Null
     Copy-Item -LiteralPath (Join-Path $sourceDir $relativePath) -Destination $targetPath
+    if ($packageRelativePath.StartsWith('nixboy/') -and $packageRelativePath.EndsWith('.md')) {
+        # The operator guides retain working source links, one directory deeper.
+        $markdown = Get-Content -LiteralPath $targetPath -Raw
+        $markdown = $markdown.Replace('(../../nixboy.version)', '(../nixboy.version)')
+        $markdown = $markdown.Replace('(../../nixboy.ini.example)', '(../nixboy.ini.example)')
+        Set-Content -LiteralPath $targetPath -Value $markdown -Encoding utf8 -NoNewline
+    }
 }
 $notice = @"
 nix-boy $modVersion - modified Fallout 2 Community Edition
@@ -60,14 +71,18 @@ This copy has been modified to add the nix-boy terminal, its challenge-based
 skill progression and a Windows build portability fix. These are one mod.
 See LICENSE.md for the engine's terms and third_party/*/LICENSE for dependencies.
 
-Read tools/nixboy/README.md before setup. Docker and a local Python bridge are
+Read nixboy/README.md before setup. Docker and a local Python bridge are
 required for Linux. Enable nixboy.ini in a separate owned-data test installation.
 No game assets, saves, runtime configuration or authentication tokens are included.
 
-Unarmed and Science each have two current-skill bands with five challenge
-options per level. Release identity is recorded in nixboy.version and the
+Editable catalog: nixboy/content/tracks.yaml and nixboy/content/challenges/.
+The initial catalog maps Unarmed to Filesystem and Science to Networking, each
+with two current-skill bands and five challenge options per level. Skills and
+levels can be extended in YAML using existing trusted task kinds. Restart the
+bridge after editing; preserve earned level IDs and the separate state directory.
+Release identity is recorded in nixboy.version and the
 source commit above; see the mod workspace's acceptance record for actual checks.
-Read tools/nixboy/TRAINING.md for setup, controls and current limits.
+Read nixboy/TRAINING.md for setup, controls and current limits.
 
 For fast disposable tests, --debug-new-game=narg starts a fresh predetermined
 character without menus or MVE movies. --debug-no-movies keeps normal menus.

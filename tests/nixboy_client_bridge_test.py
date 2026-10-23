@@ -8,6 +8,7 @@ all run as shipped. No game assets, daemon, SDK package or image is required.
 from pathlib import Path
 import json
 import socket
+import struct
 import subprocess
 import sys
 import threading
@@ -16,6 +17,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tools" / "nixboy"))
 sys.path.insert(0, str(ROOT / "tools" / "nixboy" / "tests"))
 import bridge
+import protocol as wire
 from test_bridge import FakeClient, eventually
 
 
@@ -78,8 +80,52 @@ def run(executable, scenario):
         assert not thread.is_alive()
 
 
+def run_training(executable):
+    """Use the shipped Python codec as a peer for the real C++ v3 client."""
+    process = None
+    with socket.socket() as listener:
+        listener.bind(("127.0.0.1", 0))
+        listener.listen(1)
+        listener.settimeout(5)
+        try:
+            process = subprocess.Popen([executable, str(listener.getsockname()[1]), "training"],
+                                       stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            connection, _ = listener.accept()
+            with connection:
+                connection.settimeout(5)
+                assert wire.read_frame(connection) == (wire.AUTH, b"a" * 64)
+                kind, payload = wire.read_frame(connection)
+                assert kind == wire.TRAIN_OPEN
+                rows, cols, context, claims = wire.decode_training_open(payload)
+                assert (rows, cols) == (24, 80)
+                identity, skills = wire.training_context(context)
+                assert identity == "00000001000000000000000000000000"
+                assert skills == dict.fromkeys(range(18), 15)
+                assert claims == {"3:2": "00" * 15 + "01", "13:300": "00" * 15 + "02"}
+                connection.sendall(wire.frame(wire.READY))
+                assert wire.read_frame(connection) == (wire.TRAIN_ACTION, bytes([wire.TRAIN_CHECK]))
+                reward = wire.encode_training_reward(13, 65535, bytes(15) + b"\x25")
+                connection.sendall(wire.frame(wire.TRAIN_REWARD, reward))
+                kind, payload = wire.read_frame(connection)
+                assert kind == wire.TRAIN_ACK
+                assert wire.decode_training_ack(payload) == (13, 65535, "00" * 15 + "25", True)
+                kind, payload = wire.read_frame(connection)
+                assert kind == wire.CONTEXT
+                _, skills = wire.training_context(wire.decode_context(payload))
+                assert skills[13] == 20
+                connection.sendall(wire.frame(wire.EXIT, struct.pack("!i", 42)))
+            stdout, stderr = process.communicate(timeout=10)
+            assert process.returncode == 0, f"training: {stderr} {stdout}"
+            print(stdout.strip())
+        finally:
+            if process and process.poll() is None:
+                process.kill()
+                process.communicate(timeout=2)
+
+
 if __name__ == "__main__":
     if len(sys.argv) != 2:
         raise SystemExit("usage: nixboy_client_bridge_test.py <client-test-executable>")
     for scenario in ("roundtrip", "close", "bad-auth"):
         run(sys.argv[1], scenario)
+    run_training(sys.argv[1])

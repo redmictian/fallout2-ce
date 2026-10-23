@@ -1,7 +1,8 @@
-schema: 1
+schema: 2
 tracks:
   - id: unarmed
     title: Unarmed
+    knowledge_title: Filesystem
     skill: 3
     levels:
       1:
@@ -14,6 +15,7 @@ tracks:
         max_skill: 24
   - id: science
     title: Science
+    knowledge_title: Networking
     skill: 12
     levels:
       1:

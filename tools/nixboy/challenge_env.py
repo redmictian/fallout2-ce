@@ -12,16 +12,13 @@ from pathlib import Path
 import re
 import subprocess
 
-from challenge_content import CONTENT_ROOT
+from challenge_content import CONTENT_ROOT, KINDS
 
 TRAINING_LABEL = "org.fallout2-ce.nixboy.training"
 OWNER_LABEL = "org.fallout2-ce.nixboy.owner"
 ATTEMPT_LABEL = "org.fallout2-ce.nixboy.attempt"
 PERMISSIONS = {"private-file": 0o600, "public-read": 0o644, "executable": 0o700,
                "shared-directory": 0o770, "group-readable": 0o640}
-KINDS = {"make-directory", "copy-file", "move-file", "rename-directory", "remove-empty",
-         "filter-lines", "sort-unique", "extract-field", "count-matches", "replace-text",
-         "ssh-upload", "ssh-download", "ssh-remote-move", "ssh-key-login", "ssh-alias"} | set(PERMISSIONS)
 
 
 def owner_namespace(state_dir):
@@ -47,7 +44,8 @@ def cleanup_owned(client, state_dir):
 
 
 class ComposeEnvironment:
-    def __init__(self, client, spec, attempt_id, seed, generation, state_dir, params=None, runner=None):
+    def __init__(self, client, spec, attempt_id, seed, generation, state_dir, params=None, runner=None,
+                 content_root=None, training_label=""):
         if spec.kind not in KINDS:
             raise ValueError("unsupported challenge kind")
         if not isinstance(attempt_id, str) or not re.fullmatch(r"[A-Za-z0-9_.-]{1,128}", attempt_id):
@@ -66,8 +64,10 @@ class ComposeEnvironment:
         if set(params) != set(spec.parameters) or any(value not in spec.parameters[key] for key, value in params.items()):
             raise ValueError("parameters do not match the authored choices")
         self.params = dict(params)
+        self.training_label = training_label
         self.network = spec.kind.startswith("ssh-")
-        self.compose_file = CONTENT_ROOT / "compose" / ("network.yaml" if self.network else "single.yaml")
+        self.content_root = Path(content_root if content_root is not None else CONTENT_ROOT).resolve()
+        self.compose_file = self.content_root / "compose" / ("network.yaml" if self.network else "single.yaml")
         self.runner = runner or subprocess.run
         self.container_id = None
         self.services = {}
@@ -181,7 +181,8 @@ print(json.dumps(result))
         lab = "/home/nixboy/lab"
         self._mkdir("workstation", lab)
         task = self.spec.instructions.format(**self.params)
-        self._write("workstation", "/home/nixboy/CHALLENGE.txt", self.spec.title + "\n\n" + task + "\n")
+        self._write("workstation", "/home/nixboy/CHALLENGE.txt",
+                    (self.training_label + "\n" if self.training_label else "") + self.spec.title + "\n\n" + task + "\n")
         self._write("workstation", "/home/nixboy/practice.txt", "Practice here. The lab task is separate.\n")
         if kind == "make-directory":
             self._write("workstation", lab + "/briefing.txt", self.payload)
