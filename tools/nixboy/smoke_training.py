@@ -24,33 +24,32 @@ from challenge_env import OWNER_LABEL, TRAINING_LABEL, owner_namespace
 from protocol import (
     AUTH, CLOSE, CONTEXT, ERROR, INPUT, OUTPUT, READY, TRAIN_OPEN, TRAIN_ACTION,
     TRAIN_ACK, TRAIN_REWARD, TRAIN_CHECK, TRAIN_HUB, TRAIN_RESET,
-    encode_context, frame, read_frame,
+    SKILL_NAMES, decode_training_ack, encode_context, encode_training_open, frame, read_frame,
 )
 from training import AttemptManager
 
 
 class Probe:
-    def __init__(self, server, token, manager):
+    def __init__(self, server, token, manager, skill_values=None):
         self.server, self.token, self.manager = server, token, manager
         self.profile = secrets.token_bytes(16)
         self.identity = self.profile.hex()
-        self.claimed = {3: 0, 12: 0}
+        self.skill_values = dict.fromkeys(range(18), 25)
+        self.skill_values.update({3: 15, 12: 10})
+        self.skill_values.update(skill_values or {})
         self.receipts = {}
         self.socket = None
         self.output = bytearray()
         self.rewards = []
 
+    def progress(self):
+        return {f"{skill}:{level}": receipt.hex() for (skill, level), receipt in self.receipts.items()}
+
     def context(self):
-        values = {"training.version": 2, "skill.unarmed": 15 + self.claimed[3].bit_count() * 5,
-                  "skill.science": 10 + self.claimed[12].bit_count() * 5,
-                  "training.claimed.unarmed": self.claimed[3],
-                  "training.claimed.science": self.claimed[12]}
+        values = {"training.version": 3}
+        values.update({"skill." + name: self.skill_values[skill] for skill, name in enumerate(SKILL_NAMES)})
         for index, value in enumerate(struct.unpack("!4i", self.profile)):
             values[f"training.profile.{index}"] = value
-        for (skill, level), receipt in self.receipts.items():
-            name = "unarmed" if skill == 3 else "science"
-            for index, value in enumerate(struct.unpack("!4i", receipt)):
-                values[f"training.receipt.{name}.{level}.{index}"] = value
         return values
 
     def connect(self):
@@ -60,7 +59,7 @@ class Probe:
         self.output.clear()
         self.rewards.clear()
         self.socket.sendall(frame(AUTH, self.token) + frame(
-            TRAIN_OPEN, struct.pack("!HH", 35, 139) + encode_context(self.context())))
+            TRAIN_OPEN, encode_training_open(35, 139, self.context(), self.progress())))
         self.until(lambda kind, data: kind == READY)
         self.until_output(b"Choose a number")
 
@@ -81,9 +80,8 @@ class Probe:
             if len(self.output) > 2 * 1024 * 1024:
                 raise AssertionError("training smoke output budget exceeded")
         elif kind == TRAIN_REWARD:
-            if len(payload) != 18:
-                raise AssertionError(f"invalid reward length: {len(payload)}")
-            key, receipt = (payload[0], payload[1]), payload[2:]
+            skill, level, receipt_hex, _ = decode_training_ack(payload + b"\1")
+            key, receipt = (skill, level), bytes.fromhex(receipt_hex)
             if key in self.receipts:
                 if self.receipts[key] != receipt:
                     raise AssertionError(f"changed receipt for completed level {key}")
@@ -116,7 +114,8 @@ class Probe:
         self.socket.sendall(frame(TRAIN_ACTION, bytes([action])))
 
     def start(self, skill, practice=False):
-        self.input(("1" if skill == 3 else "2").encode() + b"\r" + (b"p\r" if practice else b"a\r"))
+        number = list(self.manager.catalog.tracks).index(skill) + 1
+        self.input(str(number).encode() + b"\r" + (b"p\r" if practice else b"a\r"))
         self.until_output(b"challenge:~$ ")
         return self.manager.snapshot(self.identity)["attempt"]
 
@@ -140,19 +139,18 @@ class Probe:
             if not self.rewards:
                 self.until(lambda kind, data: kind == TRAIN_REWARD)
             payload = self.rewards.pop(0)
-            if self.receipts.get((payload[0], payload[1])) == payload[2:]:
+            if self.receipts.get(struct.unpack("!BH", payload[:3])) == payload[3:]:
                 self.socket.sendall(frame(TRAIN_ACK, payload + b"\1")
                                     + frame(CONTEXT, encode_context(self.context())))
                 continue
             return payload
 
     def accept(self, payload):
-        skill, level, receipt = payload[0], payload[1], payload[2:]
-        if len(payload) != 18 or skill not in self.claimed or level not in (1, 2) \
-                or self.claimed[skill] & (1 << (level - 1)):
-            raise AssertionError("invalid or repeated reward")
-        self.claimed[skill] |= 1 << (level - 1)
-        self.receipts[skill, level] = receipt
+        skill, level, receipt_hex, _ = decode_training_ack(payload + b"\1")
+        if (skill, level) in self.receipts:
+            raise AssertionError("repeated reward")
+        self.receipts[skill, level] = bytes.fromhex(receipt_hex)
+        self.skill_values[skill] += 5
         self.socket.sendall(frame(TRAIN_ACK, payload + b"\1") + frame(CONTEXT, encode_context(self.context())))
 
     def close(self, explicit=True):
@@ -195,7 +193,15 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--run", action="store_true", help="authorize disposable real Docker training exercises")
     parser.add_argument("--one", action="store_true", help="limit the live progression check to one rewarded exercise")
+    parser.add_argument("--content-dir", type=Path, help="external content catalog to exercise")
+    parser.add_argument("--skill", type=int, default=12, help="Fallout skill ID for --one (default Science=12)")
+    parser.add_argument("--skill-value", type=int, help="current skill value for --one (default 10)")
+    parser.add_argument("--expected-level", type=int, default=1, help="expected authored level for --one")
     args = parser.parse_args()
+    if not 0 <= args.skill < 18 or args.skill_value is not None and not 0 <= args.skill_value <= 300:
+        parser.error("invalid skill or skill value")
+    if not 1 <= args.expected_level <= 65535:
+        parser.error("invalid expected level")
     if not args.run:
         parser.error("pass --run to create and remove disposable training environments")
     loader = importlib.util.spec_from_file_location("training_reference", Path(__file__).parent / "tests/training_reference.py")
@@ -204,12 +210,14 @@ def main():
     factory = local_docker_client
     checks = []
     with tempfile.TemporaryDirectory(prefix="nixboy-training-smoke-") as state:
-        manager = AttemptManager(state, factory)
+        from challenge_content import Catalog
+        manager = AttemptManager(state, factory, catalog=Catalog(args.content_dir))
         token = secrets.token_hex(32).encode("ascii")
         server = BridgeServer(0, token, "fallout2-nixboy:dev", client_factory=factory, training_manager=manager)
         thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": .02}, daemon=True)
         thread.start()
-        probe = Probe(server, token, manager)
+        probe = Probe(server, token, manager,
+                      {args.skill: 10 if args.skill_value is None else args.skill_value} if args.one else None)
         def bash_count():
             inspector = factory()
             try:
@@ -228,7 +236,7 @@ def main():
                 probe.until_output(b"Incomplete.")
                 after = manager.snapshot(probe.identity)["queues"]["3:1"]
                 assert after == before[1:] + before[:1]
-                assert not manager.pending_rewards(probe.identity, probe.claimed)
+                assert not manager.pending_rewards(probe.identity, probe.progress())
                 checks.append("incomplete-rotates")
 
                 # The practice path exercises the same state validator without rewards.
@@ -236,15 +244,16 @@ def main():
                 reference.solve(ShellSolution(probe, attempt, manager.catalog))
                 probe.action(TRAIN_CHECK)
                 probe.until_output(b"Practice completed; no reward")
-                assert not manager.pending_rewards(probe.identity, probe.claimed)
+                assert not manager.pending_rewards(probe.identity, probe.progress())
                 checks.append("practice-no-reward")
 
-            first_skill = 12 if args.one else 3
-            for skill in ((12,) if args.one else (3, 12)):
-                for level in (1, 2):
+            first_skill = args.skill if args.one else 3
+            first_level = args.expected_level if args.one else 1
+            for skill in ((args.skill,) if args.one else (3, 12)):
+                for level in ((first_level,) if args.one else (1, 2)):
                     attempt = probe.start(skill)
                     assert attempt["level"] == level
-                    if skill == first_skill and level == 1:
+                    if skill == first_skill and level == first_level:
                         status, _, _ = probe.command(["touch", "/home/nixboy/reconnect-marker"])
                         assert status == 0
                         for _ in range(3):
@@ -273,17 +282,18 @@ def main():
                     probe.action(TRAIN_CHECK)
                     probe.until_output(b"Skill reward earned")
                     reward = probe.reward()
-                    assert reward[:2] == bytes((skill, level)), {
-                        "expected": [skill, level], "actual": list(reward[:2]),
-                        "completed": probe.claimed, "receipt": reward[2:].hex(),
+                    assert struct.unpack("!BH", reward[:3]) == (skill, level), {
+                        "expected": [skill, level], "actual": list(struct.unpack("!BH", reward[:3])),
+                        "completed": probe.progress(), "receipt": reward[3:].hex(),
                     }
-                    if skill == first_skill and level == 1:
+                    if skill == first_skill and level == first_level:
                         probe.close(explicit=False)  # Lost acknowledgment.
                         probe.connect()
                         assert probe.reward() == reward
                         checks.append("lost-ack-replays-exact-receipt")
                     probe.accept(reward)
-                    probe.until_output(f"completed {probe.claimed[skill].bit_count()}/2".encode())
+                    completed = sum(skill_id == skill for skill_id, _ in probe.receipts)
+                    probe.until_output(f"completed {completed}/".encode())
                     check = {"skill": skill, "level": level, "challenge": attempt["challenge"], "status": "passed"}
                     checks.append(check)
                     print(json.dumps(check), flush=True)
@@ -291,11 +301,11 @@ def main():
                         break
                 if args.one:
                     break
-            assert probe.claimed == ({3: 0, 12: 1} if args.one else {3: 3, 12: 3})
+            assert len(probe.progress()) == (1 if args.one else 4)
             assert len(set(probe.receipts.values())) == (1 if args.one else 4)
             probe.close()
             probe.connect()
-            assert not manager.pending_rewards(probe.identity, probe.claimed)
+            assert not manager.pending_rewards(probe.identity, probe.progress())
             assert manager.snapshot(probe.identity)["attempt"] is None
             checks.append("completed-tracks-reconnect-without-pending-rewards")
         finally:

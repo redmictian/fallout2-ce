@@ -11,16 +11,25 @@ namespace nixboy {
 
     using TrainingReceipt = std::array<uint8_t, 16>;
 
+    struct TrainingClaim {
+        uint8_t skill;
+        uint16_t level;
+        TrainingReceipt receipt;
+    };
+
     // Save-owned learning progress. These are engine skill IDs, not menu indexes.
     // A completed level contributes five percentage points after tag modifiers.
     class TrainingState {
     public:
-        static constexpr size_t kTrailerSize = 102;
+        static constexpr size_t kMaxClaims = 2048;
+        static constexpr size_t kLegacyTrailerSize = 102;
+        static constexpr size_t kMinTrailerSize = 38;
+        static constexpr size_t kMaxTrailerSize = kMinTrailerSize + 19 * kMaxClaims;
         void reset();
         bool ensureProfile();
         int32_t profileWord(size_t index) const;
         int completed(int skill) const;
-        int claimedMask(int skill) const;
+        const std::vector<TrainingClaim>& claims() const { return claims_; }
         int bonus(int skill) const;
         TrainingReceipt receipt(int skill, int level) const;
         // Levels may be claimed independently: the bridge selects the current
@@ -33,8 +42,7 @@ namespace nixboy {
 
     private:
         TrainingReceipt profile_ {};
-        std::array<uint8_t, 2> claimed_ {};
-        std::array<std::array<TrainingReceipt, 2>, 2> receipts_ {};
+        std::vector<TrainingClaim> claims_;
     };
 
     TrainingState& trainingState();

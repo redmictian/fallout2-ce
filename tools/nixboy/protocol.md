@@ -1,8 +1,8 @@
 # nix-boy local protocol
 
 The original OPEN mode below retains its ephemeral shell contract. Training
-extension version 2 uses TRAIN_OPEN instead, with the same version-1 frame header
-and bounded integer-context encoding; it requires `training.version=2`. The hub
+extension version 3 uses TRAIN_OPEN instead, with the same version-1 frame header
+and bounded integer-context encoding; it requires `training.version=3`. The hub
 becomes READY without provisioning Docker. See [TRAINING.md](TRAINING.md) in the
 runtime package for player controls and lifecycle.
 
@@ -99,49 +99,55 @@ the session may publish allowed named integers or alter their own context files;
 the engine whitelist is the authority for game effects. This is a mod extension
 interface, not a game anti-cheat boundary.
 
-## Training extension version 2
+## Training extension version 3
 
 | Direction | Type | Name | Payload |
 | --- | --- | --- | --- |
-| Client -> bridge | 7 | TRAIN_OPEN | Same rows, cols and context encoding as OPEN |
+| Client -> bridge | 7 | TRAIN_OPEN | rows:uint16, cols:uint16, context_length:uint32, context map, claim_count:uint16, claim records |
 | Client -> bridge | 8 | TRAIN_ACTION | One byte: 1 Check, 2 Hub, 3 Reset, 4 Abandon |
-| Client -> bridge | 9 | TRAIN_ACK | skill:uint8, level:uint8, receipt:16 bytes, accepted:uint8 |
-| Bridge -> client | 21 | TRAIN_REWARD | skill:uint8, level:uint8, receipt:16 bytes |
+| Client -> bridge | 9 | TRAIN_ACK | skill:uint8, level:uint16, receipt:16 bytes, accepted:uint8 (20 bytes) |
+| Bridge -> client | 21 | TRAIN_REWARD | skill:uint8, level:uint16, receipt:16 bytes (19 bytes) |
 
-TRAIN_OPEN follows AUTH exactly once. It requires training.version=2, four
-training.profile.0..3 signed int32 words encoding the character's 16 identity
-bytes in big-endian order, and training.claimed.unarmed/science bitmasks in 0..3.
-Bit 0 means level 1 earned; bit 1 means level 2 earned. Mask 2 is valid: ordinary
-Fallout progression may enter level 2 without an earlier training reward.
-skill.<stable_engine_name> values supply all 18 current effective skills.
-The engine also supplies training.completed.unarmed/science as display counts
-(the number of set bits, 0..2), not as the eligibility or receipt authority.
-Claimed levels additionally supply their saved receipt bytes through four
-training.receipt.<unarmed|science>.<1|2>.0..3 words. The complete current snapshot
-has at most 48 entries. Training mode does not include legacy global bindings.
+TRAIN_OPEN follows AUTH exactly once. Its context map requires training.version=3,
+four training.profile.0..3 signed int32 words encoding the character's 16 identity
+bytes in big-endian order, and skill.<stable_engine_name> values for all 18 current
+effective skills. Together with the five ordinary map/player fields this is 28
+entries. Training omits legacy global bindings and the earlier per-track
+mask/count/receipt-word fields.
+
+Each ledger record is skill:uint8, level:uint16, receipt:16 bytes, using big-endian
+integers. Skill IDs are 0..17; level IDs are 1..65535. At most 2048 records are
+accepted. Every skill/level pair and nonzero receipt must be unique. The payload
+has exactly 10 + context_length + claim_count * 19 bytes and remains subject to
+the common frame limit. Level 2 or any other level may be earned independently.
 
 The bridge maps current skill values to the inclusive bands in tracks.yaml.
+In the shipped initial catalog,
 Unarmed 15..19 selects level 1 and 20..24 selects level 2; Science 10..14 selects
 level 1 and 15..19 selects level 2. An uncovered value is unavailable, not a
 fallback. Selection and validation both use the current snapshot's matching
 band. A changed band preserves the active attempt but prevents its validation
 from granting a reward; the player can abandon it and select again.
 
-Only skill IDs 3 (Unarmed) and 12 (Science), levels 1 and 2, nonzero 16-byte
-receipts and acknowledgment values 0/1 are accepted. The bridge records successful
-host validation before sending its receipt. Fallout checks supported track/level
-and receipt identity, derives a five-point bonus per set claim bit, and
+All 18 engine skills, level IDs 1..65535, nonzero 16-byte receipts and
+acknowledgment values 0/1 are accepted. Authored YAML decides which of those
+skill bands actually has challenges. The bridge records successful host validation
+before sending its receipt. Fallout checks supported skill/level and receipt
+identity, derives a five-point bonus per earned ledger entry, and
 acknowledges exact duplicate receipts without changing state. Eligibility belongs
 to the trusted bridge; Fallout accepts independent level claims and does not
 require every earlier level. ACK is followed by fresh
 CONTEXT; a game-memory acknowledgment is not a promise that a save was written.
 
-The game stores identity, claim masks and receipts together in its checked
-version-2 SAVE.DAT trailer. Version-1 saves migrate counts 0, 1 and 2 to masks 0,
-1 and 3. The bridge's JSON state has the same version-1-to-2 migration. Wire
-training version 1 is rejected, so upgrade game and bridge together. The bridge
-retains earned receipts, can import exact receipts from a restored game snapshot,
-and replays missing claim bits after reconnect.
+The game stores identity and receipt records together in its checked version-3
+SAVE.DAT trailer. Versions 1 and 2 migrate their existing Unarmed/Science
+receipts into the generic ledger. The bridge's version-3 JSON likewise retains
+the old receipts while removing counts/masks. Wire training versions 1 and 2
+are rejected, so upgrade game and bridge together. The bridge can import exact
+receipts from the opening ledger and replays missing earned entries after
+reconnect, including entries whose authored track was removed. Acknowledgments
+update the bridge's current game ledger; later CONTEXT frames refresh skills
+and profile values without resending the opening ledger.
 It never invents success from shell exit, PTY text or learner helper events.
 
 INPUT routes to a restricted hub menu or the current exercise PTY. RESIZE and

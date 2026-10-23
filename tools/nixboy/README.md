@@ -5,6 +5,9 @@ feature are released together, using the version in
 [`nixboy.version`](../../nixboy.version). The current game opens the **training
 hub** by default: Unarmed and Science, two levels each selected from the
 character's current skill percentage, with five authored options per level.
+The shipped catalog maps Unarmed to **Filesystem** and Science to
+**Networking**. Track labels, skill bands and additional levels are data in the
+editable catalog, rather than a two-track engine limit.
 Read [training setup and controls](TRAINING.md) first. The original ephemeral
 shell and configured integer bindings remain available with `training=0` in
 `nixboy.ini`. The foundation description below applies to that legacy mode;
@@ -57,13 +60,13 @@ yourself, then build the image explicitly.
 
 ## Alternative: native Windows bridge with Docker Desktop
 
-From the engine worktree in PowerShell, using a normal local CPython installation:
+From the installed game/package root in PowerShell, using a normal local CPython installation:
 
 ```powershell
-py -3 -m venv tools/nixboy/.venv
-tools/nixboy/.venv/Scripts/python.exe -m pip install -r tools/nixboy/requirements.txt
-docker build -f tools/nixboy/container/Dockerfile -t fallout2-nixboy:dev tools/nixboy
-tools/nixboy/.venv/Scripts/python.exe tools/nixboy/smoke_docker.py --run
+py -3 -m venv nixboy/.venv
+nixboy/.venv/Scripts/python.exe -m pip install -r nixboy/requirements.txt
+docker build -f nixboy/container/Dockerfile -t fallout2-nixboy:dev nixboy
+nixboy/.venv/Scripts/python.exe nixboy/smoke_docker.py --run
 ```
 
 Use a separate Fallout 2 CE test installation containing the mod executable and
@@ -75,7 +78,7 @@ file. Substitute your test directory in this example:
 
 ```powershell
 $testDir = 'C:\Games\Fallout2-NixBoy-Test'
-tools/nixboy/.venv/Scripts/python.exe tools/nixboy/bridge.py --token-file "$testDir/nixboy.token"
+nixboy/.venv/Scripts/python.exe nixboy/bridge.py --token-file "$testDir/nixboy.token" --content-dir "$testDir/nixboy/content"
 ```
 
 The bridge runs in this terminal until Ctrl+C. It binds only `127.0.0.1` and never
@@ -86,16 +89,16 @@ equivalent protection.
 
 ## Linux and WSL setup
 
-In WSL with a working local Linux Docker socket, from the engine worktree:
+In WSL with a working local Linux Docker socket, from the installed game/package root:
 
 ```sh
-python3 -m venv tools/nixboy/.venv
-tools/nixboy/.venv/bin/python -m pip install -r tools/nixboy/requirements.txt
-docker build -f tools/nixboy/container/Dockerfile -t fallout2-nixboy:dev tools/nixboy
-tools/nixboy/.venv/bin/python tools/nixboy/smoke_docker.py --run
+python3 -m venv nixboy/.venv
+nixboy/.venv/bin/python -m pip install -r nixboy/requirements.txt
+docker build -f nixboy/container/Dockerfile -t fallout2-nixboy:dev nixboy
+nixboy/.venv/bin/python nixboy/smoke_docker.py --run
 mkdir -p "$HOME/.local/state/nixboy"
 chmod 700 "$HOME/.local/state/nixboy"
-tools/nixboy/.venv/bin/python tools/nixboy/bridge.py --token-file "$HOME/.local/state/nixboy/game.token"
+nixboy/.venv/bin/python nixboy/bridge.py --token-file "$HOME/.local/state/nixboy/game.token" --content-dir "$PWD/nixboy/content"
 ```
 
 Do not share a virtual environment between Windows and Linux. Create it on the
@@ -117,12 +120,25 @@ listener, so let the listener become reachable before opening nix-boy. A transie
 connect failure is visible in the modal and can be retried by closing/reopening.
 Do not expose either service on a LAN. Keep token copies private and identical.
 
+The installed layout is `fallout2-ce.exe`, `nixboy.version` and a `nixboy/`
+directory beside them. Edit `nixboy/content/tracks.yaml` and the YAML files
+under `nixboy/content/challenges/` to change the active catalog, then restart
+the bridge. `--content-dir PATH` selects another catalog; the default is the
+`content/` directory beside `bridge.py`. Keep `--state-dir` unchanged when
+editing content or upgrading. [Content authoring](content/README.md) explains
+stable IDs, knowledge labels and adding bands with existing task kinds.
+
+In a source checkout, the same files are authored under `tools/nixboy/`.
+The package copies them into `nixboy/`; changes made in the installed copy do not
+silently modify the source catalog. Preserve local content edits before replacing
+that runtime folder with a newer package.
+
 To reproduce the Windows transport check without game assets, build the optional
 `nixboy-live-probe` target in the standalone `tests` project for Windows, or use
 the probe included in the test package. From native Windows Python:
 
 ```powershell
-py -3 tools/nixboy/smoke_windows_wsl.py --run --probe .\nixboy-live-probe.exe --wsl-python /path/to/linux/venv/bin/python
+py -3 nixboy/smoke_windows_wsl.py --run --probe .\nixboy-live-probe.exe --wsl-python /path/to/linux/venv/bin/python
 ```
 
 Substitute the Linux Python environment where you installed the requirements.
@@ -256,14 +272,14 @@ as feature cleanup.
 
 ## Validation
 
-Without Docker or third-party packages, from the engine worktree:
+With the requirements installed and without Docker, from the source engine worktree:
 
 ```sh
 python -m unittest discover -s tools/nixboy/tests -v
 ```
 
 For real Docker, build the image as above, install the pinned requirements into a
-virtual environment, then run `python tools/nixboy/smoke_docker.py --run`. It checks
+virtual environment, then run `python nixboy/smoke_docker.py --run`. It checks
 Linux PTY input/output, Ctrl+C, resize, initial/live context, named results, command
 exit codes, final shell status, event delivery before exit, a 12-second quiet
 session, repeated sessions, failed-image startup/recovery, isolation and

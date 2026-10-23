@@ -10,13 +10,8 @@ namespace fallout {
 namespace nixboy {
     namespace {
         constexpr uint8_t kMagic[] = { 'N', 'X', 'B', 'T', 'R', 'A', 'I', 'N' };
-        constexpr uint32_t kVersion = 2;
-        constexpr uint32_t kPayloadSize = 82;
-
-        int trackIndex(int skill)
-        {
-            return skill == SKILL_UNARMED ? 0 : (skill == SKILL_SCIENCE ? 1 : -1);
-        }
+        constexpr uint32_t kVersion = 3;
+        static_assert(SKILL_COUNT == 18, "Training wire skill IDs require an explicit migration if changed");
 
         bool empty(const TrainingReceipt& receipt)
         {
@@ -75,14 +70,8 @@ namespace nixboy {
 
     int TrainingState::completed(int skill) const
     {
-        int mask = claimedMask(skill);
-        return (mask & 1) + ((mask >> 1) & 1);
-    }
-
-    int TrainingState::claimedMask(int skill) const
-    {
-        int track = trackIndex(skill);
-        return track < 0 ? 0 : claimed_[track];
+        return static_cast<int>(std::count_if(claims_.begin(), claims_.end(),
+            [skill](const TrainingClaim& claim) { return claim.skill == skill; }));
     }
 
     int TrainingState::bonus(int skill) const
@@ -92,25 +81,21 @@ namespace nixboy {
 
     TrainingReceipt TrainingState::receipt(int skill, int level) const
     {
-        int track = trackIndex(skill);
-        return track >= 0 && level >= 1 && level <= 2 && (claimed_[track] & (1 << (level - 1)))
-            ? receipts_[track][level - 1]
-            : TrainingReceipt {};
+        for (const auto& claim : claims_) {
+            if (claim.skill == skill && claim.level == level) return claim.receipt;
+        }
+        return {};
     }
 
     bool TrainingState::accept(int skill, int level, const TrainingReceipt& receipt)
     {
-        int track = trackIndex(skill);
-        if (track < 0 || level < 1 || level > 2 || empty(profile_) || empty(receipt)) return false;
-        int bit = 1 << (level - 1);
-        if (claimed_[track] & bit) return receipts_[track][level - 1] == receipt;
-        for (const auto& trackReceipts : receipts_) {
-            for (const auto& previous : trackReceipts) {
-                if (previous == receipt) return false;
-            }
+        if (skill < 0 || skill >= SKILL_COUNT || level < 1 || level > UINT16_MAX || empty(profile_) || empty(receipt)) return false;
+        for (const auto& claim : claims_) {
+            if (claim.skill == skill && claim.level == level) return claim.receipt == receipt;
+            if (claim.receipt == receipt) return false;
         }
-        receipts_[track][level - 1] = receipt;
-        claimed_[track] |= static_cast<uint8_t>(bit);
+        if (claims_.size() >= kMaxClaims) return false;
+        claims_.push_back({ static_cast<uint8_t>(skill), static_cast<uint16_t>(level), receipt });
         return true;
     }
 
@@ -118,12 +103,15 @@ namespace nixboy {
     {
         std::vector<uint8_t> bytes(std::begin(kMagic), std::end(kMagic));
         append32(bytes, kVersion);
-        append32(bytes, kPayloadSize);
+        append32(bytes, static_cast<uint32_t>(18 + claims_.size() * 19));
         bytes.insert(bytes.end(), profile_.begin(), profile_.end());
-        bytes.insert(bytes.end(), claimed_.begin(), claimed_.end());
-        for (const auto& track : receipts_) {
-            for (const auto& receipt : track)
-                bytes.insert(bytes.end(), receipt.begin(), receipt.end());
+        bytes.push_back(static_cast<uint8_t>(claims_.size() >> 8));
+        bytes.push_back(static_cast<uint8_t>(claims_.size()));
+        for (const auto& claim : claims_) {
+            bytes.push_back(claim.skill);
+            bytes.push_back(static_cast<uint8_t>(claim.level >> 8));
+            bytes.push_back(static_cast<uint8_t>(claim.level));
+            bytes.insert(bytes.end(), claim.receipt.begin(), claim.receipt.end());
         }
         append32(bytes, checksum(bytes.data(), bytes.size()));
         return bytes;
@@ -133,39 +121,46 @@ namespace nixboy {
     {
         reset();
         if (size == 0) return true;
-        if (bytes == nullptr || size != kTrailerSize
+        if (bytes == nullptr || size < kMinTrailerSize || size > kMaxTrailerSize
             || !std::equal(std::begin(kMagic), std::end(kMagic), bytes)
-            || (read32(bytes + 8) != 1 && read32(bytes + 8) != kVersion) || read32(bytes + 12) != kPayloadSize
+            || read32(bytes + 12) != size - 20
             || read32(bytes + size - 4) != checksum(bytes, size - 4)) return false;
+        uint32_t version = read32(bytes + 8);
         TrainingState candidate;
         std::copy(bytes + 16, bytes + 32, candidate.profile_.begin());
         size_t offset = 34;
-        for (int track = 0; track < 2; track++) {
-            uint8_t stored = bytes[32 + track];
-            if (read32(bytes + 8) == 1) {
-                if (stored > 2) return false;
-                candidate.claimed_[track] = static_cast<uint8_t>((1 << stored) - 1);
-            } else {
-                if (stored > 3) return false;
-                candidate.claimed_[track] = stored;
+        if (version == 1 || version == 2) {
+            if (size != kLegacyTrailerSize) return false;
+            for (int track = 0; track < 2; track++) {
+                int mask = bytes[32 + track];
+                if (version == 1) {
+                    if (mask > 2) return false;
+                    mask = (1 << mask) - 1;
+                } else if (mask > 3)
+                    return false;
+                for (int level = 0; level < 2; level++) {
+                    TrainingReceipt receipt;
+                    std::copy(bytes + offset, bytes + offset + receipt.size(), receipt.begin());
+                    offset += receipt.size();
+                    bool claimed = (mask & (1 << level)) != 0;
+                    if (empty(receipt) == claimed) return false;
+                    if (claimed && !candidate.accept(track == 0 ? SKILL_UNARMED : SKILL_SCIENCE, level + 1, receipt)) return false;
+                }
             }
-            for (int level = 0; level < 2; level++) {
-                auto& receipt = candidate.receipts_[track][level];
-                std::copy(bytes + offset, bytes + offset + receipt.size(), receipt.begin());
-                offset += receipt.size();
-                bool claimed = (candidate.claimed_[track] & (1 << level)) != 0;
-                if (empty(receipt) == claimed) return false;
+        } else if (version == kVersion) {
+            size_t count = (size_t(bytes[32]) << 8) | bytes[33];
+            if (count > kMaxClaims || size != kMinTrailerSize + count * 19) return false;
+            for (size_t index = 0; index < count; index++) {
+                int skill = bytes[offset];
+                int level = (int(bytes[offset + 1]) << 8) | bytes[offset + 2];
+                TrainingReceipt receipt;
+                std::copy(bytes + offset + 3, bytes + offset + 19, receipt.begin());
+                // Even an exact repeated row is corrupt serialized progress.
+                if (!empty(candidate.receipt(skill, level)) || !candidate.accept(skill, level, receipt)) return false;
+                offset += 19;
             }
-        }
-        if (empty(candidate.profile_) && (candidate.claimed_[0] != 0 || candidate.claimed_[1] != 0)) return false;
-        std::vector<TrainingReceipt> seen;
-        for (const auto& track : candidate.receipts_) {
-            for (const auto& receipt : track) {
-                if (empty(receipt)) continue;
-                if (std::find(seen.begin(), seen.end(), receipt) != seen.end()) return false;
-                seen.push_back(receipt);
-            }
-        }
+        } else
+            return false;
         *this = candidate;
         return true;
     }

@@ -1,6 +1,7 @@
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -56,6 +57,99 @@ class CatalogTests(unittest.TestCase):
         for spec in catalog.challenges.values():
             self.assertFalse(hasattr(spec, "lesson"))
             self.assertTrue(spec.instructions)
+
+    def copy_content(self, directory):
+        root = Path(directory) / "external"
+        shutil.copytree(CONTENT_ROOT, root)
+        return root
+
+    def test_third_level_and_another_skill_are_defined_entirely_by_content(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = self.copy_content(directory)
+            tracks = yaml.safe_load((root / "tracks.yaml").read_text())
+            unarmed = tracks["tracks"][0]
+            unarmed["id"] = "filesystem-studies"
+            unarmed["levels"][3] = {"title": "File organization", "min_skill": 25, "max_skill": 29}
+            # Stable numeric IDs need not be ordered by skill percentage.
+            unarmed["levels"][1], unarmed["levels"][2] = unarmed["levels"][2], unarmed["levels"][1]
+            tracks["tracks"].append({"id": "processes", "title": "Repair", "knowledge_title": "Processes",
+                                      "skill": 13, "levels": {65535: {"title": "Process reports", "min_skill": 25, "max_skill": 29}}})
+            (root / "tracks.yaml").write_text(yaml.safe_dump(tracks))
+            original = yaml.safe_load((root / "challenges/unarmed/level1/copy-file.yaml").read_text())
+            for name, skill, level in (("files.third", 3, 3), ("processes.report", 13, 65535)):
+                data = dict(original, id=name, skill=skill, level=level, version=7)
+                # Folder names do not determine track or level IDs.
+                (root / "challenges" / (name + ".yaml")).write_text(yaml.safe_dump(data))
+            catalog = Catalog(root)
+            self.assertEqual(catalog.level_for_value(3, 15), 2)
+            self.assertEqual(catalog.level_for_value(3, 20), 1)
+            self.assertEqual(catalog.level_for_value(3, 25), 3)
+            self.assertEqual(catalog.level_for_value(13, 25), 65535)
+            self.assertEqual(catalog.pool(13, 65535), ["processes.report"])
+            self.assertEqual(catalog.tracks[3]["knowledge_title"], "Filesystem")
+            self.assertEqual(catalog.tracks[3]["id"], "filesystem-studies")
+            self.assertEqual(catalog.get("processes.report").version, 7)
+
+    def test_empty_authored_pool_and_overlapping_ranges_are_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = self.copy_content(directory)
+            data = yaml.safe_load((root / "tracks.yaml").read_text())
+            data["tracks"][0]["levels"][3] = {"title": "Missing pool", "min_skill": 25, "max_skill": 29}
+            (root / "tracks.yaml").write_text(yaml.safe_dump(data))
+            with self.assertRaisesRegex(ValueError, "no challenges"):
+                Catalog(root)
+            data["tracks"][0]["levels"][3]["min_skill"] = 24
+            (root / "tracks.yaml").write_text(yaml.safe_dump(data))
+            with self.assertRaisesRegex(ValueError, "overlapping"):
+                Catalog(root)
+
+    def test_external_topologies_are_required_without_source_fallback(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = self.copy_content(directory)
+            catalog = Catalog(root)
+            env = ComposeEnvironment(mock.Mock(), catalog.get("science.network.ssh-upload"), "external", 1, 0,
+                                     directory, content_root=catalog.root)
+            self.assertEqual(env.compose_file, root / "compose/network.yaml")
+            (root / "compose/network.yaml").unlink()
+            with self.assertRaisesRegex(ValueError, "missing content topology"):
+                Catalog(root)
+
+    def test_catalog_reloads_after_reconstruction_and_digests_changed_content(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = self.copy_content(directory)
+            before = Catalog(root)
+            path = root / "challenges/unarmed/level1/copy-file.yaml"
+            data = yaml.safe_load(path.read_text())
+            data.update(version=2, title="Revised manifest")
+            path.write_text(yaml.safe_dump(data))
+            after = Catalog(root)
+            self.assertEqual(before.get(data["id"]).version, 1)
+            self.assertEqual(after.get(data["id"]).version, 2)
+            self.assertNotEqual(before.digest(data["id"]), after.digest(data["id"]))
+
+    def test_parameters_and_instruction_placeholders_fail_before_docker(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = self.copy_content(directory)
+            path = root / "challenges/science/level1/extract-field.yaml"
+            original = yaml.safe_load(path.read_text())
+            for replacement in ({"parameters": {"name": ["report"]}}, {"instructions": "Write {unknown}."},
+                                {"instructions": "Write {name:1000000000}."}, {"version": 0}):
+                path.write_text(yaml.safe_dump(dict(original, **replacement)))
+                with self.subTest(replacement=replacement), self.assertRaises(ValueError):
+                    Catalog(root)
+
+    def test_yaml_aliases_are_supported_and_duplicate_keys_are_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = self.copy_content(directory)
+            path = root / "challenges/unarmed/level1/copy-file.yaml"
+            text = path.read_text()
+            text = text.replace("[supplies, medicine, tools]", "&names [supplies, medicine, tools]\n  alternative: *names")
+            path.write_text(text)
+            spec = Catalog(root).get("unarmed.files.copy-file")
+            self.assertEqual(spec.parameters["name"], spec.parameters["alternative"])
+            path.write_text(text + "\nlevel: 2\n")
+            with self.assertRaisesRegex(ValueError, "duplicate YAML key"):
+                Catalog(root)
 
 
 class EnvironmentBoundaryTests(unittest.TestCase):
@@ -124,6 +218,17 @@ class EnvironmentBoundaryTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             ComposeEnvironment(client, catalog.get("unarmed.files.copy-file"), "a", 1, 0, "state", params={"name": "../../host"})
         self.assertEqual(client.mock_calls, [])
+
+    def test_challenge_file_includes_curriculum_context_and_task(self):
+        catalog = Catalog()
+        spec = catalog.get("unarmed.files.copy-file")
+        env = ComposeEnvironment(mock.Mock(), spec, "context-task", 1, 0, "state",
+                                 training_label="Filesystem / Files and navigation - level 1 (Unarmed)")
+        with mock.patch.object(env, "_mkdir"), mock.patch.object(env, "_write") as write:
+            env._setup()
+        task = next(call.args[2] for call in write.call_args_list if call.args[1].endswith("CHALLENGE.txt"))
+        self.assertIn("Filesystem / Files and navigation", task)
+        self.assertIn(spec.instructions.format(**env.params), task)
 
     def test_exec_caps_stream_output_and_uses_immutable_timeout(self):
         env = self.make_env()

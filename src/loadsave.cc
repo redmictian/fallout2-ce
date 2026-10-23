@@ -6,6 +6,7 @@
 #include <time.h>
 
 #include <algorithm>
+#include <vector>
 
 #include "art.h"
 #include "automap.h"
@@ -1765,15 +1766,15 @@ static int lsgLoadGameInSlot(int slot)
     // any extension bytes are present, accept only the complete known trailer.
     long trainingOffset = fileTell(_flptr);
     int saveSize = fileGetSize(_flptr);
-    std::array<uint8_t, nixboy::TrainingState::kTrailerSize> trainingTrailer {};
     bool trainingLoaded = false;
     if (trainingOffset >= 0 && saveSize >= trainingOffset) {
         size_t remaining = static_cast<size_t>(saveSize - trainingOffset);
         if (remaining == 0) {
             trainingLoaded = nixboy::trainingState().decode(nullptr, 0);
-        } else if (remaining == trainingTrailer.size()
-            && fileRead(trainingTrailer.data(), 1, trainingTrailer.size(), _flptr) == trainingTrailer.size()) {
-            trainingLoaded = nixboy::trainingState().decode(trainingTrailer.data(), trainingTrailer.size());
+        } else if (remaining >= nixboy::TrainingState::kMinTrailerSize && remaining <= nixboy::TrainingState::kMaxTrailerSize) {
+            std::vector<uint8_t> trainingTrailer(remaining);
+            if (fileRead(trainingTrailer.data(), 1, trainingTrailer.size(), _flptr) == trainingTrailer.size())
+                trainingLoaded = nixboy::trainingState().decode(trainingTrailer.data(), trainingTrailer.size());
         }
     }
     if (!trainingLoaded) {

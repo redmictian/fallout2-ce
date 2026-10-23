@@ -2,13 +2,14 @@
 
 nix-boy is one mod: its Linux terminal and challenge-based Fallout skill
 progression share the release version in [`nixboy.version`](../../nixboy.version).
-The bridge-owned hub has two independent tracks, two authored levels per track
-and five challenge options per level (20 authored options):
+The initial bridge-owned hub has two authored tracks, two levels per track and
+five challenge options per level (20 authored options). All 18 Fallout skills
+can be mapped through the editable catalog:
 
-| Fallout skill | Level 1: current skill | Level 2: current skill |
+| Fallout skill → knowledge track | Level 1: current skill | Level 2: current skill |
 | --- | --- | --- |
-| Unarmed | 15–19%: files and navigation | 20–24%: permissions |
-| Science | 10–14%: text processing | 15–19%: SSH and networking |
+| Unarmed → Filesystem | 15–19%: files and navigation | 20–24%: permissions |
+| Science → Networking | 10–14%: text processing | 15–19%: SSH and networking |
 
 The character's current effective value for that specific Fallout skill selects
 the only eligible level. A value outside the authored bands has no challenge
@@ -24,14 +25,14 @@ the back of the queue. Docker/validator errors preserve the attempt instead.
 
 ## Prepare the existing WSL installation
 
-Run from the engine source/package folder, with Docker Engine and Compose already
+Run from the installed game/package root, with Docker Engine and Compose already
 available. The workstation deployment uses Ubuntu-26.04, not Docker Desktop.
 
 ```sh
-/home/mictian/build/nixboy-venv/bin/python -m pip install -r tools/nixboy/requirements.txt
-docker build -f tools/nixboy/container/Dockerfile -t fallout2-nixboy:dev tools/nixboy
-docker build -f tools/nixboy/container/Dockerfile.training -t fallout2-nixboy-training:dev tools/nixboy
-docker build -f tools/nixboy/container/Dockerfile.sshd -t fallout2-nixboy-sshd:dev tools/nixboy
+/home/mictian/build/nixboy-venv/bin/python -m pip install -r nixboy/requirements.txt
+docker build -f nixboy/container/Dockerfile -t fallout2-nixboy:dev nixboy
+docker build -f nixboy/container/Dockerfile.training -t fallout2-nixboy-training:dev nixboy
+docker build -f nixboy/container/Dockerfile.sshd -t fallout2-nixboy-sshd:dev nixboy
 ```
 
 Use a separate Linux virtual environment on other installations. The last two
@@ -44,7 +45,7 @@ Start the bridge with the existing private installation token. For this
 workstation, from PowerShell:
 
 ```powershell
-wsl -d Ubuntu-26.04 -- /home/mictian/build/nixboy-venv/bin/python /mnt/c/games/GameDevelopment/mods/nix-boy/source/tools/nixboy/bridge.py --token-file /home/mictian/.local/state/nixboy/ingame-test.token --state-dir /mnt/c/games/GameDevelopment/mods/nix-boy/runtime/training
+wsl -d Ubuntu-26.04 -- /home/mictian/build/nixboy-venv/bin/python /mnt/c/games/GameDevelopment/mods/nix-boy/tests/game/nixboy/bridge.py --token-file /home/mictian/.local/state/nixboy/ingame-test.token --content-dir /mnt/c/games/GameDevelopment/mods/nix-boy/tests/game/nixboy/content --state-dir /mnt/c/games/GameDevelopment/mods/nix-boy/runtime/training
 ```
 
 The bridge must stay running. It does not install automatic startup. Training
@@ -63,8 +64,8 @@ legacy global bindings. Training mode ignores those legacy result bindings.
 
 Use the configured shortcut in normal gameplay or the Pip-Boy (default Ctrl+N),
 or click the Pip-Boy's nix-boy button. Plain N retains the game's attack-mode
-action with the default configuration. The hub shows current
-character skills and the two tracks. Enter `1` for Unarmed or `2` for Science,
+action with the default configuration. The hub shows current character skills,
+their knowledge-track names and available levels. Select the displayed track number,
 then `P` for unrewarded practice or `A` for an assessment. Choices use Enter.
 
 Set `[nixboy] hotkey=...` in `nixboy.ini` to change the shortcut, then restart
@@ -92,14 +93,14 @@ training progress.
 
 ## Progress and recovery
 
-The game stores a random character training identity, claimed level bits and
-receipt IDs in a versioned, checksummed trailer at the end of SAVE.DAT. Old saves
+The game stores a random character training identity and a sparse ledger of
+skill/level receipt IDs in a versioned, checksummed trailer at the end of SAVE.DAT. Old saves
 without a trailer load with empty training state. Present but incomplete or
 corrupt trailers are errors, not silently accepted empty progress. The bonus is
 derived from the number of claimed levels, so duplicate messages cannot stack
-rewards. Version-1 training saves migrate their contiguous completion counts
-to version-2 claim bits without losing rewards; version-2 can represent level 2
-earned independently of level 1.
+rewards. Version-1 completion counts and version-2 claim bits migrate to the
+version-3 ledger without losing receipts or bonuses. Levels can be earned
+independently; a higher current skill band does not require earlier rewards.
 
 The bridge durably records a successful assessment before sending its receipt.
 It retries delivery after interruption. Earned learning can be restored into an
@@ -132,12 +133,21 @@ custom Docker endpoint option. This workstation uses the supported WSL socket.
 
 ## Authoring and validation
 
-`content/tracks.yaml` describes the two tracks. Each of the 20 YAML files under
-`content/challenges/<track>/levelN/` is an authored pool entry with bounded
+The installed `nixboy/content/tracks.yaml` maps Fallout skills to knowledge
+titles and inclusive percentage bands. Each YAML file under
+`nixboy/content/challenges/` is an authored pool entry with bounded
 parameter choices. `challenge_content.py` interprets these definitions;
 `challenge_env.py` supplies trusted setup, semantic validation and the shared
 Compose orchestration. `content/compose/` contains single-service and networking
 topologies. YAML never supplies game code or executes a host command itself.
+See [content authoring](content/README.md) for adding a level or skill using an
+existing task kind. Restart the bridge after catalog edits; preserve the state
+directory and stable skill/level IDs. New task kinds still require trusted code.
+
+The engine accepts all 18 skill IDs and level IDs 1–65535, with at most 2048
+earned receipts per character. The shipped two-track slice is authored content,
+not a hardcoded progression limit. Source catalog edits belong in
+`tools/nixboy/content/`; installed edits affect the separate runtime copy.
 
 Selection, seeds, queues, attempt generations, receipt delivery and lifecycle
 belong to `training.py`; character bonuses and their save record belong to
