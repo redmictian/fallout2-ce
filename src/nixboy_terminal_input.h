@@ -7,6 +7,46 @@
 namespace fallout {
 namespace nixboy {
 
+    enum class TerminalEditingKey {
+        None,
+        Left,
+        Right,
+        Backspace,
+        Delete,
+    };
+
+    // Use Readline's built-in Emacs bindings for word editing instead of
+    // relying on a distribution-specific inputrc binding for modified arrows.
+    // Plain keys still go through libvterm (including application-cursor mode).
+    // The caller must exclude AltGr/MODE text composition before calling this.
+    inline std::string_view terminalEditingSequence(TerminalEditingKey key, bool control, bool alt, bool gui)
+    {
+        // Windows may reserve GUI chords before SDL sees them. Accept the
+        // requested GUI+Alt arrows when delivered, without assigning GUI alone.
+        if (gui && (!alt || (key != TerminalEditingKey::Left && key != TerminalEditingKey::Right))) return {};
+        switch (key) {
+        case TerminalEditingKey::Left:
+            if (control || alt) return "\x1b"
+                                       "b";
+            break;
+        case TerminalEditingKey::Right:
+            if (control || alt) return "\x1b"
+                                       "f";
+            break;
+        case TerminalEditingKey::Backspace:
+            if (control && !alt) return "\x17";
+            if (alt && !control) return "\x1b\x7f";
+            break;
+        case TerminalEditingKey::Delete:
+            if (control != alt) return "\x1b"
+                                       "d";
+            break;
+        default:
+            break;
+        }
+        return {};
+    }
+
     // A forwarded key may also produce SDL text (notably keypad and Alt chords).
     // Suppress one matching, single-character duplicate. Printable Ctrl/Alt chords
     // may translate to different ASCII under Shift/the keyboard layout, so their

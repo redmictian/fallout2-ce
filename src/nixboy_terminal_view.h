@@ -8,8 +8,8 @@
 namespace fallout {
 namespace nixboy {
 
-    // The Linux grid occupies a padded source surface. The CRT bends that complete
-    // surface into the glass aperture; its decoration never consumes terminal cells.
+    // The Linux grid occupies a padded source surface. The CRT bends its text,
+    // while the glass remains fitted to the complete native frame opening.
     struct TerminalViewLayout {
         int x = 0;
         int y = 0;
@@ -35,14 +35,20 @@ namespace nixboy {
     constexpr int kTerminalCrtPersistenceMaxMs = 2000;
 
     struct TerminalCrtSettings {
-        int warp = 100;
-        int glow = 20;
+        int warp = 35;
+        int glow = 15;
         // Time for old light to fall to one tenth intensity. Zero clears it at once.
         int persistenceMs = 120;
+        int scanlines = 8;
+        int noise = 3;
+        int jitter = 2;
+        int bloom = 10;
+        int rgbShift = 0;
     };
 
     // Original RGB CRT renderer. Projection and working buffers are allocated once;
-    // timed frames add persistence, two scales of bloom and restrained tube noise.
+    // timed frames add independent local glow, broad bloom, raster, noise, jitter,
+    // transient burn-in and chromatic separation. Zero disables each effect.
     // Output pixels are SDL RGB888 / 0x00RRGGBB, without palette quantization.
     class TerminalCrt {
     public:
@@ -63,6 +69,7 @@ namespace nixboy {
         void blur(const std::vector<uint16_t>& source, std::vector<uint16_t>& destination,
             int radius, bool horizontal);
         int bloomAt(const std::vector<uint16_t>& bloom, int x, int y) const;
+        int lightAt(const std::vector<uint8_t>& light, int x256, int y) const;
 
         int width_ = 0;
         int height_ = 0;
@@ -78,6 +85,7 @@ namespace nixboy {
         std::vector<uint8_t> current_;
         std::vector<uint8_t> history_;
         std::vector<uint8_t> emission_;
+        std::vector<uint8_t> localGlow_;
         std::vector<uint16_t> downsampled_;
         std::vector<uint16_t> bloomNear_;
         std::vector<uint16_t> bloomWide_;

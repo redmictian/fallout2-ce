@@ -1,4 +1,3 @@
-#include "nixboy_terminal_font.h"
 #include "nixboy_terminal_view.h"
 
 #include <algorithm>
@@ -27,6 +26,29 @@ int green(uint32_t pixel)
     return static_cast<int>((pixel >> 8) & 255);
 }
 
+TerminalCrtSettings noEffects()
+{
+    TerminalCrtSettings settings;
+    settings.warp = 0;
+    settings.glow = 0;
+    settings.persistenceMs = 0;
+    settings.scanlines = 0;
+    settings.noise = 0;
+    settings.jitter = 0;
+    settings.bloom = 0;
+    settings.rgbShift = 0;
+    return settings;
+}
+
+TerminalCrtSettings settingsFor(int warp, int glow, int persistenceMs)
+{
+    auto settings = noEffects();
+    settings.warp = warp;
+    settings.glow = glow;
+    settings.persistenceMs = persistenceMs;
+    return settings;
+}
+
 std::array<unsigned char, 256> identityPalette()
 {
     std::array<unsigned char, 256> palette;
@@ -53,14 +75,22 @@ void testLayouts()
             require(layout.rows >= 10 && layout.rows <= 200 && layout.cols >= 20 && layout.cols <= 300, "Linux grid stays within protocol limits");
             require(layout.glassWidth <= 2048 && layout.glassHeight <= 1536, "CRT work stays bounded");
             require(layout.glassX >= 18 && layout.glassY >= 36, "native chrome and close button fit");
-            require(layout.textX >= 20 && layout.textY >= 20
-                    && layout.textX + layout.cols * 8 <= layout.glassWidth - 20
-                    && layout.textY + layout.rows * 16 <= layout.glassHeight - 20,
+            require(layout.textX >= 8 && layout.textY >= 8
+                    && layout.textX + layout.cols * 8 <= layout.glassWidth - 8
+                    && layout.textY + layout.rows * 16 <= layout.glassHeight - 8,
                 "whole first/last cells fit within rounded aperture padding");
             require(layout.statusY == layout.glassY + layout.glassHeight
                     && layout.statusY <= layout.height - 18,
                 "frame guard follows glass and leaves a native bezel without a status footer");
         }
+    }
+    for (const auto& cell : { std::array<int, 2> { 5, 9 }, { 8, 11 }, { 12, 18 }, { 16, 24 } }) {
+        TerminalViewLayout dynamic;
+        require(terminalViewLayout(1280, 720, cell[0], cell[1], false, dynamic, 11), "native runtime font metrics accepted");
+        require(dynamic.textX >= 8 && dynamic.textY >= 8
+                && dynamic.textX + dynamic.cols * cell[0] <= dynamic.glassWidth - 8
+                && dynamic.textY + dynamic.rows * cell[1] <= dynamic.glassHeight - 8,
+            "variable native font cells fit the entire source grid");
     }
     TerminalViewLayout layout;
     require(!terminalViewLayout(319, 480, 8, 16, false, layout, 11), "undersized width rejected");
@@ -71,39 +101,6 @@ void testLayouts()
     require(!terminalViewLayout(640, 480, 64, 64, false, layout, 11), "unusable grid rejected");
     require(!terminalViewLayout(20000, 480, 8, 16, true, layout, 11), "unbounded screen rejected");
     require(layout.width == 0 && layout.rows == 0, "failed layout clears previous values");
-}
-
-void testFontBounds()
-{
-    constexpr int pitch = 19;
-    constexpr int height = 22;
-    std::vector<unsigned char> target(pitch * height, 17);
-    fallout::nixboy::drawTerminalGlyph(target.data(), pitch, 5, 3, 'M', 231);
-    int ink = 0;
-    for (int y = 0; y < height; y++) {
-        for (int x = 0; x < pitch; x++) {
-            const unsigned char pixel = target[y * pitch + x];
-            if (x >= 5 && x < 13 && y >= 3 && y < 19) {
-                require(pixel == 17 || pixel == 231, "font only writes foreground ink");
-                if (pixel == 231) ink++;
-            } else {
-                require(pixel == 17, "glyph stays inside its8x16 cell");
-            }
-        }
-    }
-    require(ink >= 15 && ink < 100, "dedicated terminal glyph has legible sparse strokes");
-    std::vector<unsigned char> space(target.size(), 17);
-    fallout::nixboy::drawTerminalGlyph(space.data(), pitch, 5, 3, ' ', 231);
-    require(std::all_of(space.begin(), space.end(), [](unsigned char pixel) { return pixel == 17; }), "space preserves reverse-video background");
-    auto fallback = space;
-    fallout::nixboy::drawTerminalGlyph(space.data(), pitch, 5, 3, '?', 231);
-    fallout::nixboy::drawTerminalGlyph(fallback.data(), pitch, 5, 3, 0x1f600, 231);
-    require(space == fallback, "unavailable Unicode glyph uses a visible question mark");
-    const auto unchanged = fallback;
-    fallout::nixboy::drawTerminalGlyph(fallback.data(), 6, 0, 0, 'X', 231);
-    fallout::nixboy::drawTerminalGlyph(fallback.data(), pitch, -1, 0, 'X', 231);
-    fallout::nixboy::drawTerminalGlyph(nullptr, pitch, 0, 0, 'X', 231);
-    require(fallback == unchanged, "invalid glyph arguments cannot write");
 }
 
 void testRgbBounds()
@@ -147,15 +144,15 @@ void testLensAndEdgeCells()
 {
     constexpr int width = 320;
     constexpr int height = 240;
-    constexpr int cols = 34;
-    constexpr int rows = 12;
-    constexpr int textX = 24;
-    constexpr int textY = 24;
+    constexpr int cols = 38;
+    constexpr int rows = 14;
+    constexpr int textX = 8;
+    constexpr int textY = 8;
     const auto palette = identityPalette();
     std::vector<unsigned char> source(width * height, 0);
     std::vector<uint32_t> target(width * height, 0);
     TerminalCrt crt;
-    require(crt.initialize(width, height, { 100, 100, 600 }), "edge fixture initialized");
+    require(crt.initialize(width, height, settingsFor(100, 0, 0)), "edge fixture initialized");
     uint32_t ticks = 0;
     for (int row = 0; row < rows; row++) {
         for (int col = 0; col < cols; col++) {
@@ -174,8 +171,9 @@ void testLensAndEdgeCells()
     crt.render(target.data(), width, ticks += 1000);
     require(target.front() == 0 && target[width - 1] == 0 && target[(height - 1) * width] == 0 && target.back() == 0,
         "rounded glass corners expose deep black outside aperture");
-    require(target[width / 2] == 0 && target[height / 2 * width] == 0, "full radial lens bows cardinal aperture edges");
-    require(green(target[12 * width + width / 2]) > 100 && green(target[height / 2 * width + 12]) > 100, "glass lights up inside bowed perimeter");
+    require(green(target[width / 2]) > 100 && green(target[height / 2 * width]) > 100,
+        "curvature does not bow the glass away from the frame or add a black annulus");
+    require(green(target[6 * width + 6]) > 100, "glass fills the native housing except tiny rounded corners");
     require(green(target[height / 2 * width + width / 2]) > 180, "sharp center phosphor remains bright");
     int maskAsymmetry = 0;
     for (int y = 0; y < height; y++) {
@@ -194,7 +192,10 @@ void testBloomAndTime()
     std::vector<unsigned char> source(width * height, 0);
     std::vector<uint32_t> target(width * height, 0);
     TerminalCrt crt;
-    require(crt.initialize(width, height, { 100, 100, 600 }), "bloom fixture initialized");
+    auto settings = settingsFor(0, 0, 600);
+    settings.bloom = 100;
+    settings.noise = 3;
+    require(crt.initialize(width, height, settings), "bloom fixture initialized");
     crt.update(source.data(), palette);
     crt.render(target.data(), width, 100);
     const auto empty = target;
@@ -228,15 +229,23 @@ void testBloomAndTime()
 void testSettingsBounds()
 {
     TerminalCrt crt;
-    require(crt.initialize(32, 32, { 0, 0, 0 }), "all effects can be disabled independently");
-    require(crt.initialize(32, 32, { 100, 100, 2000 }), "maximum effect values accepted");
-    for (const auto& settings : { TerminalCrtSettings { -1, 20, 120 }, { 101, 20, 120 },
-             { 100, -1, 120 }, { 100, 101, 120 }, { 100, 20, -1 }, { 100, 20, 2001 } }) {
-        require(!crt.initialize(32, 32, settings), "invalid effect values rejected");
-        std::vector<uint32_t> target(32 * 32, 0xdeadbeef);
-        crt.render(target.data(), 32, 0);
-        require(std::all_of(target.begin(), target.end(), [](uint32_t pixel) { return pixel == 0xdeadbeef; }),
-            "invalid settings cannot reuse an earlier initialized renderer");
+    require(crt.initialize(32, 32, noEffects()), "all effects can be disabled independently");
+    for (auto member : { &TerminalCrtSettings::warp, &TerminalCrtSettings::glow,
+             &TerminalCrtSettings::scanlines, &TerminalCrtSettings::noise,
+             &TerminalCrtSettings::jitter, &TerminalCrtSettings::bloom,
+             &TerminalCrtSettings::rgbShift, &TerminalCrtSettings::persistenceMs }) {
+        const int maximum = member == &TerminalCrtSettings::persistenceMs ? 2000 : 100;
+        auto settings = noEffects();
+        settings.*member = maximum;
+        require(crt.initialize(32, 32, settings), "maximum effect value accepted");
+        for (int value : { -1, maximum + 1 }) {
+            settings.*member = value;
+            require(!crt.initialize(32, 32, settings), "invalid effect values rejected");
+            std::vector<uint32_t> target(32 * 32, 0xdeadbeef);
+            crt.render(target.data(), 32, 0);
+            require(std::all_of(target.begin(), target.end(), [](uint32_t pixel) { return pixel == 0xdeadbeef; }),
+                "invalid settings cannot reuse an earlier initialized renderer");
+        }
     }
 }
 
@@ -250,7 +259,7 @@ void testWarpControl()
     double previousDistance = 0;
     for (int warp : { 0, 25, 50, 75, 100 }) {
         TerminalCrt crt;
-        require(crt.initialize(width, height, { warp, 0, 0 }), "warp control initialized");
+        require(crt.initialize(width, height, settingsFor(warp, 0, 0)), "warp control initialized");
         std::fill(source.begin(), source.end(), 0);
         crt.update(source.data(), palette);
         crt.render(target.data(), width, 100);
@@ -309,7 +318,7 @@ void testGlowControl()
     long long previousHalo = -1;
     for (int glow : { 0, 20, 50, 100 }) {
         TerminalCrt crt;
-        require(crt.initialize(width, height, { 0, glow, 0 }), "glow control initialized");
+        require(crt.initialize(width, height, settingsFor(0, glow, 0)), "glow control initialized");
         std::fill(source.begin(), source.end(), 0);
         crt.update(source.data(), palette);
         crt.render(target.data(), width, 100);
@@ -341,7 +350,7 @@ void testPersistenceControl()
     std::vector<uint32_t> target(width * height, 0);
     for (int warp : { 0, 100 }) {
         for (int glow : { 0, 20, 100 }) {
-            const TerminalCrtSettings settings { warp, glow, 0 };
+            const TerminalCrtSettings settings = settingsFor(warp, glow, 0);
             TerminalCrt crt;
             require(crt.initialize(width, height, settings), "zero-persistence combination initialized");
             std::fill(source.begin(), source.end(), 255);
@@ -361,7 +370,7 @@ void testPersistenceControl()
     int previousTrail = -1;
     for (int persistence : { 0, 120, 600, 2000 }) {
         TerminalCrt crt;
-        require(crt.initialize(width, height, { 0, 0, persistence }), "persistence control initialized");
+        require(crt.initialize(width, height, settingsFor(0, 0, persistence)), "persistence control initialized");
         std::fill(source.begin(), source.end(), 255);
         crt.update(source.data(), palette);
         crt.render(target.data(), width, 100);
@@ -381,7 +390,7 @@ void testPersistenceControl()
         require(green(target[40 * width + 40]) < 20, "every supported persistence setting eventually clears old light");
     }
     for (int persistence : { 120, 2000 }) {
-        const TerminalCrtSettings settings { 0, 0, persistence };
+        const TerminalCrtSettings settings = settingsFor(0, 0, persistence);
         TerminalCrt crt;
         TerminalCrt dark;
         require(crt.initialize(width, height, settings) && dark.initialize(width, height, settings), "decay-time fixtures initialized");
@@ -403,6 +412,88 @@ void testPersistenceControl()
     }
 }
 
+void testIndependentEffects()
+{
+    constexpr int width = 128;
+    constexpr int height = 96;
+    const auto palette = identityPalette();
+    std::vector<unsigned char> source(width * height, 0);
+    for (int y = 24; y < 72; y++)
+        std::fill_n(source.begin() + y * width + 60, 3, 255);
+    const auto frame = [&](const TerminalCrtSettings& settings, uint32_t ticks) {
+        TerminalCrt crt;
+        require(crt.initialize(width, height, settings), "isolated effect initialized");
+        crt.update(source.data(), palette);
+        std::vector<uint32_t> target(source.size());
+        crt.render(target.data(), width, ticks);
+        return target;
+    };
+    const auto disabled = noEffects();
+    const auto original = frame(disabled, 100);
+    require(original == frame(disabled, 4300), "all effects at zero produce a steady image without hidden noise or flicker");
+    for (auto member : { &TerminalCrtSettings::warp, &TerminalCrtSettings::glow,
+             &TerminalCrtSettings::scanlines, &TerminalCrtSettings::noise,
+             &TerminalCrtSettings::jitter, &TerminalCrtSettings::bloom,
+             &TerminalCrtSettings::rgbShift }) {
+        auto settings = disabled;
+        settings.*member = 100;
+        require(frame(settings, 100) != original, "each enabled effect changes the image independently");
+    }
+
+    auto scanlines = disabled;
+    scanlines.scanlines = 100;
+    const auto raster = frame(scanlines, 100);
+    require(raster[48 * width + 61] == original[48 * width + 61]
+            && green(raster[49 * width + 61]) < green(original[49 * width + 61]) / 2,
+        "scanlines darken alternate phosphor rows without shifting ink");
+
+    auto glow = disabled;
+    glow.glow = 100;
+    const auto local = frame(glow, 100);
+    require(green(local[48 * width + 59]) > green(original[48 * width + 59]) + 15,
+        "local glow lights the immediate stroke neighbour");
+    require(local[48 * width + 56] == original[48 * width + 56], "local phosphor glow does not silently add broad bloom");
+    auto bloom = disabled;
+    bloom.bloom = 100;
+    const auto broad = frame(bloom, 100);
+    require(green(broad[48 * width + 48]) > green(original[48 * width + 48]),
+        "bloom independently lights pixels well beyond the phosphor halo");
+
+    auto rgb = disabled;
+    rgb.rgbShift = 100;
+    const auto separated = frame(rgb, 100);
+    require(((separated[48 * width + 58] >> 16) & 255) > 80
+            && green(separated[48 * width + 58]) == green(original[48 * width + 58]),
+        "RGB shift creates a red leading fringe without moving the green glyph");
+    require((separated[48 * width + 64] & 255) > (original[48 * width + 64] & 255) + 50,
+        "RGB shift creates the opposite blue fringe");
+
+    for (auto member : { &TerminalCrtSettings::noise, &TerminalCrtSettings::jitter }) {
+        auto settings = disabled;
+        settings.*member = 100;
+        const auto first = frame(settings, 100);
+        require(first == frame(settings, 100), "timed effects are deterministic at the same clock");
+        require(first != frame(settings, 199), "noise and jitter animate without new terminal output");
+        settings.*member = member == &TerminalCrtSettings::noise ? 3 : 2;
+        require(frame(settings, 100) != original, "restrained default noise and jitter remain real effects");
+    }
+    auto minimumNoise = disabled;
+    minimumNoise.noise = 1;
+    require(frame(minimumNoise, 100) != original, "minimum nonzero static noise is not rounded away");
+
+    TerminalCrt animated;
+    auto all = disabled;
+    all.warp = all.glow = all.scanlines = all.noise = all.jitter = all.bloom = all.rgbShift = 100;
+    all.persistenceMs = 2000;
+    require(animated.initialize(width, height, all), "all effects coexist at their maximums");
+    animated.update(source.data(), palette);
+    std::vector<uint32_t> target(source.size());
+    animated.render(target.data(), width, 0xfffffff0u);
+    animated.render(target.data(), width, 20u);
+    require(std::any_of(target.begin(), target.end(), [](uint32_t pixel) { return green(pixel) > 100; }),
+        "maximum effects and wrapped clock retain visible text");
+}
+
 void benchmark()
 {
     constexpr int width = 1084;
@@ -413,7 +504,11 @@ void benchmark()
     std::vector<uint32_t> target(width * height);
     for (int y = 32; y < height - 32; y += 16) {
         for (int x = 24; x < width - 24; x += 8)
-            fallout::nixboy::drawTerminalGlyph(source.data(), width, x, y, 'M', 230);
+            for (int gy = 0; gy < 10; gy++) {
+                source[(y + gy) * width + x] = 230;
+                source[(y + gy) * width + x + 5] = 230;
+                if (gy < 4) source[(y + gy) * width + x + 2] = 230;
+            }
     }
     crt.update(source.data(), identityPalette());
     crt.render(target.data(), width, 0);
@@ -434,7 +529,6 @@ int main(int argc, char** argv)
             return EXIT_SUCCESS;
         }
         testLayouts();
-        testFontBounds();
         testRgbBounds();
         testLensAndEdgeCells();
         testBloomAndTime();
@@ -442,7 +536,8 @@ int main(int argc, char** argv)
         testWarpControl();
         testGlowControl();
         testPersistenceControl();
-        std::cout << "nix-boy terminal layout, font and RGB CRT: all tests passed\n";
+        testIndependentEffects();
+        std::cout << "nix-boy terminal layout and CPU CRT effects: all tests passed\n";
         return EXIT_SUCCESS;
     } catch (const std::exception& error) {
         std::cerr << "nix-boy terminal view failure: " << error.what() << '\n';

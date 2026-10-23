@@ -31,16 +31,23 @@ The CRT is an original software effect; it does not embed cool-retro-term or Qt.
 The independent effect controls also reload on opening:
 
 ```ini
-crt_warp=100
-crt_glow=20
+crt_warp=35
+crt_glow=15
+crt_bloom=10
+crt_scanlines=8
+crt_noise=3
+crt_jitter=2
+crt_rgb_shift=0
 crt_persistence_ms=120
 ```
 
-Warp and glow accept integers 0–100; 100 matches the previous preview's strength.
-Persistence accepts 0–2000 milliseconds, the time for old light to fade to one
-tenth intensity. Zero disables the corresponding effect. The defaults reduce
-the previous glow to 20% and shorten its 600ms trail to 120ms. Invalid values
-report a configuration error. Settings are ignored visually in flat mode.
+Strengths accept integers 0–100. Warp controls screen curvature, glow adds a
+narrow phosphor halo, bloom adds the broad light spill, scanlines modulate raster
+rows, noise adds static, jitter moves scan bands slightly, and RGB shift offsets
+red/blue edges. Persistence is the transient burn-in/history effect: 0–2000 ms
+for old light to fade to one-tenth intensity. Zero disables each effect. Defaults
+are restrained; RGB shift defaults off for the green preset. Invalid values
+report a configuration error. Flat mode ignores these effects.
 
 The frame loads the installed game's interface FRMs through its normal art
 cache: FRM 171 (`AUTOMAP.FRM`) supplies one coherent glass housing.
@@ -52,12 +59,26 @@ localized art falls back to a native game font. No original/extracted game
 graphics are embedded or packaged.
 
 Connection/error notices and control hints appear inside the terminal. The
-frame carries only the title and Close control; no status/footer panel is reserved.
+frame carries only a native red button and centered CLOSE label; no title or
+status/footer panel is reserved. The glass fills the frame opening.
 
-The terminal's font bitmap derives from the openly licensed Departure Mono,
-also selected by the reference green profile. See
-[font attribution and license](../../third_party/departure-mono/README.nixboy.md).
-Native Fallout fonts still draw the game chrome.
+The terminal uses the installed game's Pip-Boy font, font 101, through the native
+font renderer and its monospaced mode. Native glyphs and antialiasing are retained;
+the owned English assets give 10×10 cells. No Fallout font pixels are embedded.
+
+## Basic shell editing
+
+Ctrl+Left/Right or Alt+Left/Right moves by Readline words. Win+Alt+Left/Right
+uses the same mapping if the operating system delivers that chord to the game.
+Ctrl+W or Ctrl+Backspace deletes the previous whitespace-delimited word;
+Alt+Backspace uses Readline's backward-word deletion, and Alt+Delete or
+Ctrl+Delete deletes forward. Ctrl+A/E moves to the beginning/end, Ctrl+U/K kills
+to the beginning/end, Ctrl+Y restores killed text, and Ctrl+L clears the screen.
+Home/End, ordinary arrows, Backspace/Delete and Tab completion remain available.
+Ctrl+C interrupts and Ctrl+D sends EOF. These are Bash/Readline defaults; a running
+editor or a customized shell may assign its own bindings. AltGr composition and
+plain application-cursor keys retain their existing input path. F5–F8 training
+actions and F10 Close remain local as documented above.
 
 nix-boy adds an in-game terminal backed by Debian Linux containers.
 The host bridge uses the official Docker Python SDK, a real Bash PTY and a separate

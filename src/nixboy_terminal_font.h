@@ -3,29 +3,34 @@
 
 #include <cstdint>
 
-#include "../third_party/departure-mono/nixboy_ascii_bitmap.h"
+#include "text_font.h"
 
 namespace fallout {
 namespace nixboy {
 
-    constexpr int kTerminalCellWidth = 8;
-    constexpr int kTerminalCellHeight = 16;
-
-    // The caller owns a complete, background-filled cell at (x,y). Only ink is
-    // written, preserving reverse-video backgrounds and the full cell's padding.
+    // Select the game's Pip-Boy font (101) before measuring or drawing the grid.
+    // FONT_MONO centers its original AAF glyphs in the engine's native fixed-pitch
+    // cells. The normal font renderer retains its palette antialiasing against
+    // each actual background, including reverse-video and cursor cells.
+    // The caller owns a complete, background-filled cell at (x,y).
     inline void drawTerminalGlyph(unsigned char* buffer, int pitch, int x, int y,
-        uint32_t codepoint, unsigned char foreground)
+        uint32_t codepoint, unsigned char foreground, int cellWidth, int cellHeight)
     {
-        if (buffer == nullptr || pitch < x + kTerminalCellWidth || x < 0 || y < 0) return;
-        const uint32_t glyph = codepoint >= 32 && codepoint <= 126 ? codepoint : '?';
-        for (int row = 0; row < kTerminalCellHeight; row++) {
-            const unsigned char bits = kTerminalAsciiBitmap[glyph - 32][row];
-            for (int col = 0; col < 8; col++) {
-                if ((bits & (1u << col)) != 0) {
-                    buffer[(y + row) * pitch + x + col] = foreground;
-                }
-            }
-        }
+        if (buffer == nullptr || cellWidth <= 0 || cellHeight <= 0
+            || x < 0 || y < 0 || cellWidth > pitch || x > pitch - cellWidth
+            || fontGetCurrent() != 101 || fontDrawText == nullptr
+            || fontGetMonospacedCharacterWidth == nullptr || fontGetLineHeight == nullptr
+            || fontGetCharacterWidth == nullptr || fontGetLetterSpacing == nullptr) return;
+        if (fontGetMonospacedCharacterWidth() != cellWidth
+            || fontGetLineHeight() > cellHeight) return;
+        const char glyph = codepoint == 0         ? ' '
+            : codepoint >= 32 && codepoint <= 126 ? static_cast<char>(codepoint)
+                                                  : '?';
+        // Replaced/localized font assets must not let a wide glyph escape the
+        // fixed cell: the native FONT_MONO path otherwise offsets it leftwards.
+        if (fontGetCharacterWidth(glyph) + fontGetLetterSpacing() > cellWidth) return;
+        const char text[] = { glyph, '\0' };
+        fontDrawText(buffer + y * pitch + x, text, cellWidth, pitch, foreground | FONT_MONO);
     }
 
 } // namespace nixboy
