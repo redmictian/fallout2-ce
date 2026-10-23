@@ -21,7 +21,7 @@ from protocol import (
 
 LOG = logging.getLogger("nixboy.training")
 TRACKS = dict(enumerate(SKILL_NAMES))
-STATE_VERSION = 3
+STATE_VERSION = 4
 IDLE_SECONDS = 24 * 60 * 60
 
 
@@ -72,7 +72,7 @@ class AttemptManager:
         self._save()
 
     def _migrate_state(self):
-        if not isinstance(self.data, dict) or self.data.get("version") not in (1, 2):
+        if not isinstance(self.data, dict) or self.data.get("version") not in (1, 2, 3):
             return
         version = self.data["version"]
         profiles = self.data.get("profiles")
@@ -81,22 +81,32 @@ class AttemptManager:
         for profile in profiles.values():
             if not isinstance(profile, dict):
                 raise ValueError("invalid legacy training profile")
-            progress = profile.get("earned" if version == 1 else "claimed", {})
-            if not isinstance(progress, dict):
-                raise ValueError("invalid legacy training progress")
             receipts = profile.get("receipts", {})
-            validate_claims(receipts)
-            expected = set()
-            for skill in (3, 12):
-                value = progress.get(str(skill), 0)
-                if type(value) is not int or not 0 <= value <= (2 if version == 1 else 3):
+            if not isinstance(receipts, dict):
+                raise ValueError("invalid legacy completion receipts")
+            # Historical rewards were always five. Never consult today's catalog.
+            upgraded = {key: {"receipt": receipt, "points": 5} for key, receipt in receipts.items()}
+            validate_claims(upgraded)
+            if version in (1, 2):
+                progress = profile.get("earned" if version == 1 else "claimed", {})
+                if not isinstance(progress, dict):
                     raise ValueError("invalid legacy training progress")
-                mask = (1 << value) - 1 if version == 1 else value
-                for level in (1, 2):
-                    if mask & (1 << (level - 1)):
-                        expected.add(f"{skill}:{level}")
-            if set(receipts) != expected:
-                raise ValueError("legacy completion receipts do not match its recorded progress")
+                expected = set()
+                for skill in (3, 12):
+                    value = progress.get(str(skill), 0)
+                    if type(value) is not int or not 0 <= value <= (2 if version == 1 else 3):
+                        raise ValueError("invalid legacy training progress")
+                    mask = (1 << value) - 1 if version == 1 else value
+                    for level in (1, 2):
+                        if mask & (1 << (level - 1)):
+                            expected.add(f"{skill}:{level}")
+                if set(receipts) != expected:
+                    raise ValueError("legacy completion receipts do not match its recorded progress")
+            profile["receipts"] = upgraded
+            acknowledged = profile.get("acknowledged")
+            if isinstance(acknowledged, dict):
+                profile["acknowledged"] = {key: {"receipt": receipt, "points": 5}
+                                            for key, receipt in acknowledged.items()}
             profile.pop("earned", None)
             profile.pop("claimed", None)
         self.data["version"] = STATE_VERSION
@@ -183,7 +193,7 @@ class AttemptManager:
                 if existing and existing != receipt:
                     raise ProtocolError("saved reward receipt conflicts with training state")
                 if not existing:
-                    receipts[key] = receipt
+                    receipts[key] = dict(receipt)
                     recovered.append(key)
             validate_claims(receipts)
             profile["receipts"] = receipts
@@ -237,6 +247,7 @@ class AttemptManager:
                        "challenge": challenge, "seed": seed, "generation": 0,
                        "challenge_version": getattr(spec, "version", 1),
                        "content_digest": self.catalog.digest(challenge),
+                       "reward_points": self.catalog.tracks[skill]["levels"][level].get("reward_points", 5),
                        "params": self.catalog.instantiate(challenge, seed),
                        "mode": mode, "status": "selected", "updated": time.time()}
             profile["attempt"] = attempt
@@ -311,16 +322,20 @@ class AttemptManager:
     def _training_label(self, attempt):
         track = self.catalog.tracks[attempt["skill"]]
         band = track["levels"][attempt["level"]]
-        return f"{track['knowledge_title']} / {band['title']} - level {attempt['level']} ({track['title']})"
+        reward = attempt["reward_points"]
+        return f"{track['knowledge_title']} / {band['title']} - level {attempt['level']} ({track['title']}); assessment reward +{reward}"
 
     def _check_content(self, attempt):
-        if not attempt.get("content_digest"):
+        if not attempt.get("content_digest") or "reward_points" not in attempt:
             raise ValueError("This older attempt has no content fingerprint; abandon and reselect. Earned progress is preserved")
         try:
             digest = self.catalog.digest(attempt["challenge"])
         except (OSError, ValueError) as exc:
             raise ValueError("Exercise content is unavailable; abandon and reselect. Earned progress is preserved") from exc
-        if digest != attempt["content_digest"]:
+        band = self.catalog.tracks[attempt["skill"]]["levels"][attempt["level"]]
+        if type(attempt["reward_points"]) is not int or not 1 <= attempt["reward_points"] <= 300 \
+                or attempt["reward_points"] != band.get("reward_points", 5) \
+                or digest != attempt["content_digest"]:
             raise ValueError("Exercise content changed; abandon and reselect. Earned progress is preserved")
 
     def _remove_environment(self, identity):
@@ -386,12 +401,13 @@ class AttemptManager:
                         self._save()
                         return {"status": "error", "feedback": "This band's reward was already claimed. Attempt preserved; abandon to continue."}
                     receipt = secrets.token_hex(16)
-                    profile["receipts"][key] = receipt
+                    profile["receipts"][key] = {"receipt": receipt, "points": attempt["reward_points"]}
                     # Preserve evidence even after the disposable environment is removed.
                     profile.setdefault("passes", {})[key] = {
                         "attempt": attempt["id"], "challenge": attempt["challenge"],
                         "challenge_version": attempt.get("challenge_version", 1),
                         "seed": attempt["seed"], "generation": attempt["generation"],
+                        "reward_points": attempt["reward_points"],
                     }
                 self._rotate(profile, attempt)
                 profile["attempt"] = None
@@ -403,6 +419,8 @@ class AttemptManager:
                 LOG.exception("Completed training cleanup failed; restart reconciliation will retry")
             result = dict(result)
             result["rewarded"] = receipt is not None
+            if receipt is not None:
+                result["reward_points"] = attempt["reward_points"]
             return result
 
     def reset(self, identity):
@@ -437,16 +455,18 @@ class AttemptManager:
                         raise ProtocolError("game receipt conflicts with earned completion")
                     continue
                 skill, level = map(int, key.split(":"))
-                result.append((skill, level, receipt))
+                result.append((skill, level, receipt["points"], receipt["receipt"]))
             return result
 
-    def acknowledge(self, identity, skill, level, receipt, accepted):
+    def acknowledge(self, identity, skill, level, points, receipt, accepted):
+        claim = {"receipt": receipt, "points": points}
+        validate_claims({f"{skill}:{level}": claim})
         with self.lock:
             expected = self._profile(identity)["receipts"].get(f"{skill}:{level}")
-            if expected != receipt:
+            if expected != claim:
                 raise ProtocolError("acknowledgment does not match an earned receipt")
             if accepted:
-                self._profile(identity).setdefault("acknowledged", {})[f"{skill}:{level}"] = receipt
+                self._profile(identity).setdefault("acknowledged", {})[f"{skill}:{level}"] = claim
                 self._save()
 
     def expire(self):
@@ -558,7 +578,7 @@ class TrainingSession:
             band = track["levels"].get(level)
             completed = sum(f"{skill}:{number}" in state["receipts"] for number in track["levels"])
             lines.append(f"[{index + 1}] {track['title']} {value}% | {track['knowledge_title']}"[:width])
-            availability = (f"level {level} ({band['min_skill']}-{band['max_skill']}%): {band['title']}" if band else
+            availability = (f"level {level} ({band['min_skill']}-{band['max_skill']}%): {band['title']} [+{band.get('reward_points', 5)}]" if band else
                             "no authored challenges at this value")
             lines.append(f"    {availability}; completed {completed}/{len(track['levels'])}"[:width])
         if pages > 1:
@@ -592,7 +612,7 @@ class TrainingSession:
                     f"{track['knowledge_title']} / {band['title']}\n{spec.title}\n\n"
                     "[P] Practice (no character reward)\n"
                     + ("This band's reward is claimed. Practice remains available.\n" if finished else
-                       "[A] Assessment (earn +5 skill on success)\n")
+                       f"[A] Assessment (earn +{band.get('reward_points', 5)} skill on success)\n")
                     + "[H] Return to hub\nChoose a letter, then Enter: ", clear=True)
 
     def input(self, data):
@@ -669,7 +689,7 @@ class TrainingSession:
             visible = "\n".join(lines[:max(1, self.rows - 8)])
             track = self.manager.catalog.tracks[attempt["skill"]]
             band = track["levels"][attempt["level"]]
-            self.output(f"{track['knowledge_title']} / {band['title']} - level {attempt['level']}\n{spec.title}\n{visible}\nFull task: cat ~/CHALLENGE.txt\n\nF5 Check | F6 Hub | F7 Reset | F8 Abandon\n")
+            self.output(f"{self.manager._training_label(attempt)}\n{spec.title}\n{visible}\nFull task: cat ~/CHALLENGE.txt\n\nF5 Check | F6 Hub | F7 Reset | F8 Abandon\n")
             token = object()
             shell = self.shell_factory(container_id, self.send,
                                        lambda: self._event("shell_exit", token))
@@ -753,7 +773,7 @@ class TrainingSession:
                 status = value["status"]
                 feedback = str(value.get("feedback", ""))
                 if status == "passed":
-                    text = "Passed. " + ("Skill reward earned. " if value.get("rewarded") else "Practice completed; no reward. ")
+                    text = "Passed. " + (f"Skill reward earned. +{value['reward_points']} skill points. " if value.get("rewarded") else "Practice completed; no reward. ")
                 elif status == "incomplete":
                     text = "Incomplete. The next selection offers another challenge. "
                 else:
@@ -770,13 +790,13 @@ class TrainingSession:
 
     def rewards(self):
         self.last_reward = time.monotonic()
-        for skill, level, receipt in self.manager.pending_rewards(self.identity, self.claimed):
-            self.send(TRAIN_REWARD, encode_training_reward(skill, level, bytes.fromhex(receipt)))
+        for skill, level, points, receipt in self.manager.pending_rewards(self.identity, self.claimed):
+            self.send(TRAIN_REWARD, encode_training_reward(skill, level, points, bytes.fromhex(receipt)))
 
-    def acknowledge(self, skill, level, receipt, accepted):
-        self.manager.acknowledge(self.identity, skill, level, receipt, accepted)
+    def acknowledge(self, skill, level, points, receipt, accepted):
+        self.manager.acknowledge(self.identity, skill, level, points, receipt, accepted)
         if accepted:
-            self.claimed[f"{skill}:{level}"] = receipt
+            self.claimed[f"{skill}:{level}"] = {"receipt": receipt, "points": points}
         else:
             self.output("\nGame could not accept a reward; it remains available for reconciliation.\n")
 

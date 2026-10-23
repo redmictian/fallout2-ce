@@ -19,7 +19,8 @@ parameters for reproducible instances. Filenames never define challenge identity
 
 `tracks.yaml` uses schema 2. Each track supplies a stable `id`, Fallout-facing
 `title`, visible real-world `knowledge_title`, numeric engine `skill`, and a
-`levels` map. Each level ID has a `title`, `min_skill` and `max_skill`:
+`levels` map. Each level ID has a `title`, `min_skill`, `max_skill` and optional
+`reward_points`:
 
 ```yaml
 schema: 2
@@ -33,6 +34,7 @@ tracks:
         title: File placement
         min_skill: 25
         max_skill: 29
+        reward_points: 5
 ```
 
 This is a minimal illustrative catalog; when extending the installed catalog,
@@ -72,6 +74,17 @@ within 0–300%; gaps are allowed. A catalog supports at most 2048 authored leve
 in total and 8192 challenge definitions. Pools need not contain exactly five
 entries. Five is the shipped curriculum choice. Knowledge and level titles
 control the displayed mapping; they do not change reward identity.
+
+`reward_points` is an integer from 1 to 300, defaulting to 5 when omitted.
+It belongs to the level, so every challenge in that pool earns the same amount.
+The shipped four levels specify 5 explicitly. Earned receipts store their original
+amount: later catalog edits cannot increase or reduce previous rewards, including
+when loading an older save or replaying delivery. Legacy earned levels migrate
+with five points each. Balance band widths and reward amounts together; the next
+available level still comes from the character's resulting current skill value.
+An active attempt also records its selected amount. If its catalog reward changes
+before completion, abandon it and select again. Upgrading an older attempt
+without a reward snapshot requires the same action; earned progress is retained.
 
 Keep skill/level IDs stable after earning rewards: an earned pair grants its
 bonus once even when the definition, pool or title changes. Do not renumber

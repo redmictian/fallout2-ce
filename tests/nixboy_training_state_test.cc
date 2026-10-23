@@ -80,7 +80,7 @@ void testGenericProgression()
     require(state.accept(fallout::SKILL_REPAIR, UINT16_MAX, receipt(30)), "sparse maximum level supported");
     require(state.bonus(fallout::SKILL_REPAIR) == 10 && state.bonus(-1) == 0, "bonus counts claims rather than level number");
     auto bytes = state.encode();
-    require(bytes.size() == TrainingState::kMinTrailerSize + 19 * 19 && bytes[11] == 3, "variable v3 trailer length");
+    require(bytes.size() == TrainingState::kMinTrailerSize + 21 * 19 && bytes[11] == 4, "variable v4 trailer length");
     TrainingState restored;
     require(restored.decode(bytes.data(), bytes.size()) && restored.encode() == bytes, "ledger round trip");
     require(restored.accept(fallout::SKILL_REPAIR, UINT16_MAX, receipt(30)) && restored.bonus(fallout::SKILL_REPAIR) == 10,
@@ -103,7 +103,9 @@ void testLegacyMigration()
         require(state.receipt(fallout::SKILL_UNARMED, 2) == receipt(2) && state.receipt(fallout::SKILL_SCIENCE, 1) == receipt(3),
             "migration preserves receipts");
         auto migrated = state.encode();
-        require(migrated[11] == 3 && migrated.size() == 95, "legacy next save uses variable ledger");
+        require(migrated[11] == 4 && migrated.size() == 101, "legacy next save records fixed five-point historical awards");
+        for (const auto& claim : state.claims())
+            require(claim.points == 5, "v1/v2 historical points migrate as five");
         require(state.accept(fallout::SKILL_UNARMED, 2, receipt(2)) && state.bonus(fallout::SKILL_UNARMED) == 10,
             "legacy retry remains idempotent");
     }
@@ -120,6 +122,47 @@ void testLegacyMigration()
         require(!state.decode(bytes.data(), bytes.size()), "invalid legacy count or mask rejected");
     }
     require(state.decode(nullptr, 0) && state.claims().empty() && state.profileWord(0) == 0, "pre-mod save resets previous progress");
+}
+
+void testRecordedPoints()
+{
+    TrainingState state;
+    require(state.ensureProfile(), "configurable award identity");
+    require(!state.accept(13, 3, receipt(1), 0) && !state.accept(13, 3, receipt(1), 301)
+            && !state.accept(13, 3, receipt(1), -1),
+        "award amount bounds");
+    require(state.accept(13, 3, receipt(1), 7) && state.accept(13, 4, receipt(2), 11)
+            && state.accept(12, 300, receipt(3), 300),
+        "mixed declarative award amounts");
+    require(state.completed(13) == 2 && state.bonus(13) == 18 && state.bonus(12) == 300,
+        "skill bonus sums recorded amounts");
+    auto bytes = state.encode();
+    require(state.accept(13, 3, receipt(1), 7) && state.encode() == bytes, "same receipt and amount retry idempotent");
+    require(!state.accept(13, 3, receipt(1), 8) && !state.accept(13, 3, receipt(1)), "changed amount cannot rewrite historical award");
+    require(state.decode(bytes.data(), bytes.size()) && state.bonus(13) == 18
+            && state.claims()[0].points == 7 && state.claims()[1].points == 11,
+        "custom amounts persist across reload");
+
+    // Version three had a 19-byte record and no per-claim amount.
+    std::vector<uint8_t> old(38 + 2 * 19);
+    std::copy(bytes.begin(), bytes.begin() + 34, old.begin());
+    old[11] = 3;
+    old[15] = 18 + 2 * 19;
+    old[33] = 2;
+    old[34] = 13;
+    old[36] = 3;
+    old[52] = 1;
+    old[53] = 12;
+    old[54] = 1;
+    old[55] = 44;
+    old[71] = 2;
+    seal(old);
+    require(state.decode(old.data(), old.size()) && state.bonus(13) == 5 && state.bonus(12) == 5,
+        "v3 receipts migrate as historical five-point awards");
+    require(state.claims()[0].points == 5 && state.claims()[1].points == 5
+            && state.receipt(13, 3) == receipt(1) && state.receipt(12, 300) == receipt(2),
+        "v3 migration retains claim identity");
+    require(!state.accept(13, 3, receipt(1), 7) && state.accept(13, 3, receipt(1), 5), "migration never retroactively rebalances old awards");
 }
 
 void testCapacityAndCorruption()
@@ -145,7 +188,7 @@ void testCapacityAndCorruption()
         damaged[index] ^= 0x80;
         require(!state.decode(damaged.data(), damaged.size()), "corrupt header payload or checksum rejected");
     }
-    for (int mode = 0; mode < 8; mode++) {
+    for (int mode = 0; mode < 10; mode++) {
         auto damaged = bytes;
         switch (mode) {
         case 0:
@@ -161,16 +204,23 @@ void testCapacityAndCorruption()
             std::fill(damaged.begin() + 16, damaged.begin() + 32, 0);
             break;
         case 4:
-            std::copy(damaged.begin() + 34, damaged.begin() + 53, damaged.begin() + 53);
+            std::copy(damaged.begin() + 34, damaged.begin() + 55, damaged.begin() + 55);
             break;
         case 5:
-            std::copy(damaged.begin() + 37, damaged.begin() + 53, damaged.begin() + 56);
+            std::copy(damaged.begin() + 39, damaged.begin() + 55, damaged.begin() + 60);
             break;
         case 6:
-            damaged[11] = 4;
+            damaged[11] = 5;
             break;
         case 7:
-            std::fill(damaged.begin() + 37, damaged.begin() + 53, 0);
+            std::fill(damaged.begin() + 39, damaged.begin() + 55, 0);
+            break;
+        case 8:
+            damaged[37] = damaged[38] = 0;
+            break;
+        case 9:
+            damaged[37] = 1;
+            damaged[38] = 45;
             break;
         }
         seal(damaged);
@@ -189,6 +239,7 @@ int main()
     try {
         testGenericProgression();
         testLegacyMigration();
+        testRecordedPoints();
         testCapacityAndCorruption();
         std::cout << "nix-boy training state: all tests passed\n";
         return EXIT_SUCCESS;

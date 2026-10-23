@@ -81,7 +81,7 @@ def run(executable, scenario):
 
 
 def run_training(executable):
-    """Use the shipped Python codec as a peer for the real C++ v3 client."""
+    """Use the shipped Python codec as a peer for the real C++ v4 client."""
     process = None
     with socket.socket() as listener:
         listener.bind(("127.0.0.1", 0))
@@ -101,18 +101,19 @@ def run_training(executable):
                 identity, skills = wire.training_context(context)
                 assert identity == "00000001000000000000000000000000"
                 assert skills == dict.fromkeys(range(18), 15)
-                assert claims == {"3:2": "00" * 15 + "01", "13:300": "00" * 15 + "02"}
+                assert claims == {"3:2": {"receipt": "00" * 15 + "01", "points": 5},
+                                  "13:300": {"receipt": "00" * 15 + "02", "points": 5}}
                 connection.sendall(wire.frame(wire.READY))
                 assert wire.read_frame(connection) == (wire.TRAIN_ACTION, bytes([wire.TRAIN_CHECK]))
-                reward = wire.encode_training_reward(13, 65535, bytes(15) + b"\x25")
+                reward = wire.encode_training_reward(13, 65535, 7, bytes(15) + b"\x25")
                 connection.sendall(wire.frame(wire.TRAIN_REWARD, reward))
                 kind, payload = wire.read_frame(connection)
                 assert kind == wire.TRAIN_ACK
-                assert wire.decode_training_ack(payload) == (13, 65535, "00" * 15 + "25", True)
+                assert wire.decode_training_ack(payload) == (13, 65535, 7, "00" * 15 + "25", True)
                 kind, payload = wire.read_frame(connection)
                 assert kind == wire.CONTEXT
                 _, skills = wire.training_context(wire.decode_context(payload))
-                assert skills[13] == 20
+                assert skills[13] == 22
                 connection.sendall(wire.frame(wire.EXIT, struct.pack("!i", 42)))
             stdout, stderr = process.communicate(timeout=10)
             assert process.returncode == 0, f"training: {stderr} {stdout}"

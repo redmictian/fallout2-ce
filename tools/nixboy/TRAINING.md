@@ -17,8 +17,10 @@ available; it never falls back to an introductory pool. Ordinary skill spending
 and other in-game modifiers therefore affect the eligible band on the next
 snapshot. One track's progress does not select another track's difficulty.
 
-Each level awards a provisional **+5 skill percentage points**, capped by the
-engine's existing 300 limit. Tags do not multiply this bonus. Passing any one
+Each level awards its configured **`reward_points`**, an integer from 1 to 300
+skill percentage points; omitted means 5. The shipped four levels explicitly
+use +5. The engine's existing 300 skill cap still applies. Tags do not multiply
+the bonus. Passing any one
 assessment completes that level; it is not necessary to solve all five options.
 Each level's pool is shuffled once. A failed assessment moves its challenge to
 the back of the queue. Docker/validator errors preserve the attempt instead.
@@ -94,13 +96,19 @@ training progress.
 ## Progress and recovery
 
 The game stores a random character training identity and a sparse ledger of
-skill/level receipt IDs in a versioned, checksummed trailer at the end of SAVE.DAT. Old saves
+skill/level receipt IDs and earned amounts in a versioned, checksummed trailer
+at the end of SAVE.DAT. Old saves
 without a trailer load with empty training state. Present but incomplete or
 corrupt trailers are errors, not silently accepted empty progress. The bonus is
-derived from the number of claimed levels, so duplicate messages cannot stack
-rewards. Version-1 completion counts and version-2 claim bits migrate to the
-version-3 ledger without losing receipts or bonuses. Levels can be earned
+derived from the stored earned amounts, so duplicate messages cannot stack
+rewards. Earlier training saves migrate to the version-4 ledger without losing
+receipts or bonuses; each older earned level retains its original five points.
+Changing `reward_points` in the catalog does not change rewards already earned.
+Levels can be earned
 independently; a higher current skill band does not require earlier rewards.
+Active attempts record their selected reward. An edited reward or an older
+attempt without that snapshot requires abandoning and selecting again; this
+does not remove earned progress.
 
 The bridge durably records a successful assessment before sending its receipt.
 It retries delivery after interruption. Earned learning can be restored into an
@@ -134,7 +142,7 @@ custom Docker endpoint option. This workstation uses the supported WSL socket.
 ## Authoring and validation
 
 The installed `nixboy/content/tracks.yaml` maps Fallout skills to knowledge
-titles and inclusive percentage bands. Each YAML file under
+titles, inclusive percentage bands and per-level `reward_points`. Each YAML file under
 `nixboy/content/challenges/` is an authored pool entry with bounded
 parameter choices. `challenge_content.py` interprets these definitions;
 `challenge_env.py` supplies trusted setup, semantic validation and the shared
