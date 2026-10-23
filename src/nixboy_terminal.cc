@@ -157,6 +157,10 @@ namespace {
     struct TerminalState {
         nixboy::Client client;
         std::string status = "Connecting to local nix-boy service...";
+        std::string printedStatus;
+        std::string notice;
+        uint32_t noticeStarted = 0;
+        bool hasOutput = false;
         bool ready = false;
         bool exited = false;
         bool cursorVisible = true;
@@ -427,16 +431,31 @@ namespace {
         return result;
     }
 
-    unsigned char metalColor(int red, int green, int blue)
+    void publishStatus(VTerm* term, TerminalState& state)
     {
-        return _colorTable[(red << 10) | (green << 5) | blue];
+        if (state.status == state.printedStatus) return;
+        state.printedStatus = state.status;
+        // Live PTY frames may split UTF-8 and escape sequences. Display rare
+        // asynchronous notices inside the glass without changing its parser,
+        // cursor or application screen. Restore the covered cells on expiry.
+        if (state.hasOutput && state.ready) {
+            state.notice = "[nix-boy] " + plainStatus(state.status);
+            state.noticeStarted = getTicks();
+            state.dirty = true;
+            return;
+        }
+        state.notice.clear();
+        // Startup and ended-session messages can be printed into the terminal.
+        // Cancel an unfinished sequence only after the live stream has ended.
+        const std::string message = "\x18\x1b[0m\r\n[nix-boy] " + plainStatus(state.status) + "\r\n";
+        vterm_input_write(term, message.data(), message.size());
+        state.dirty = true;
     }
 
     struct TerminalPresentation {
         nixboy::TerminalViewLayout layout;
         nixboy::TerminalCrt crt;
         std::vector<unsigned char> source;
-        std::vector<unsigned char> statusBackground;
         std::vector<uint32_t> rgb;
         std::array<unsigned char, 256> luminance;
         SDL_Texture* texture = nullptr;
@@ -459,7 +478,7 @@ namespace {
                 return false;
             }
             source.resize(static_cast<size_t>(layout.glassWidth) * layout.glassHeight);
-            retro = options.retro && crt.initialize(layout.glassWidth, layout.glassHeight);
+            retro = options.retro && crt.initialize(layout.glassWidth, layout.glassHeight, options.crt);
             if (retro) rgb.resize(source.size());
             for (int index = 0; index < 256; index++) {
                 const int red = _cmap[index * 3];
@@ -472,16 +491,6 @@ namespace {
                 luminance[index] = std::min(255, (peak * 3 + weighted) * 9 / 8);
             }
             return true;
-        }
-
-        void captureStatus(int window, int chromeHeight)
-        {
-            const int width = layout.width - 2 * kMargin;
-            statusBackground.resize(static_cast<size_t>(width) * (3 * chromeHeight - 2));
-            for (int y = 0; y < 3 * chromeHeight - 2; y++) {
-                std::copy_n(windowGetBuffer(window) + (layout.statusY + y) * layout.width + kMargin,
-                    width, statusBackground.data() + y * width);
-            }
         }
 
         void drawCursor(const SDL_Rect& glass)
@@ -572,43 +581,7 @@ namespace {
         }
     };
 
-    void drawStatus(int window, const TerminalPresentation& presentation, int cellHeight,
-        const TerminalState& state)
-    {
-        const auto& layout = presentation.layout;
-        unsigned char* buffer = windowGetBuffer(window);
-        const int textWidth = layout.width - 2 * kMargin;
-        const int textColor = metalColor(18, 26, 13);
-        for (int y = 0; y < 3 * cellHeight - 2; y++) {
-            std::copy_n(presentation.statusBackground.data() + y * textWidth, textWidth,
-                buffer + (layout.statusY + y) * layout.width + kMargin);
-        }
-        std::string status = plainStatus(state.status);
-        for (int line = 0; line < 2 && !status.empty(); line++) {
-            size_t length = 0;
-            size_t wordBreak = 0;
-            int width = 0;
-            while (length < status.size()) {
-                const int next = fontGetCharacterWidth(status[length]) + fontGetLetterSpacing();
-                if (width + next > textWidth) break;
-                width += next;
-                if (status[length] == ' ') wordBreak = length;
-                length++;
-            }
-            if (length < status.size() && wordBreak != 0) length = wordBreak;
-            const std::string label = status.substr(0, length);
-            fontDrawText(buffer + (layout.statusY + line * cellHeight) * layout.width + kMargin,
-                label.c_str(), textWidth, layout.width, textColor);
-            status.erase(0, length);
-            if (!status.empty() && status.front() == ' ') status.erase(0, 1);
-        }
-        fontDrawText(buffer + (layout.statusY + 2 * cellHeight) * layout.width + kMargin,
-            state.training ? "F5 Check  F6 Hub  F7 Reset  F8 Abandon  F10 Close"
-                           : "Esc / Ctrl+C: Linux     F10: Close",
-            textWidth, layout.width, metalColor(22, 23, 15));
-    }
-
-    void renderTerminal(int window, TerminalPresentation& presentation, int cellWidth, int cellHeight, int chromeHeight,
+    void renderTerminal(int window, TerminalPresentation& presentation, int cellWidth, int cellHeight,
         VTerm* term, VTermScreen* screen, const TerminalState& state)
     {
         const auto& layout = presentation.layout;
@@ -640,6 +613,19 @@ namespace {
                 }
             }
         }
+        if (!state.notice.empty()) {
+            const int noticeRows = std::min(3, static_cast<int>((state.notice.size() + layout.cols - 1) / layout.cols));
+            const int top = layout.textY + (layout.rows - noticeRows) * cellHeight;
+            for (int y = 0; y < noticeRows * cellHeight; y++) {
+                std::fill_n(source + (top + y) * pitch + layout.textX, layout.cols * cellWidth, _colorTable[0]);
+            }
+            const size_t count = std::min(state.notice.size(), static_cast<size_t>(noticeRows * layout.cols));
+            for (size_t index = 0; index < count; index++) {
+                nixboy::drawTerminalGlyph(source, pitch,
+                    layout.textX + (index % layout.cols) * cellWidth,
+                    top + (index / layout.cols) * cellHeight, state.notice[index], _colorTable[992]);
+            }
+        }
         unsigned char* buffer = windowGetBuffer(window);
         for (int y = 0; y < layout.glassHeight; y++) {
             std::copy_n(source + y * pitch, pitch,
@@ -649,7 +635,6 @@ namespace {
             presentation.crt.update(source, presentation.luminance);
             presentation.sourceChanged = true;
         }
-        drawStatus(window, presentation, chromeHeight, state);
         windowRefresh(window);
     }
 
@@ -697,7 +682,6 @@ bool nixboyTerminalOpen(uint16_t port, const std::string& token,
     fontDrawText(windowBuffer + (6 + std::max(0, (closeHeight - fontGetLineHeight()) / 2)) * layout.width
             + closeX + closeWidth + 6,
         closeTitle, fontGetStringWidth(closeTitle), layout.width, _colorTable[992]);
-    presentation.captureStatus(modal.window, chromeHeight);
 
     TerminalState state;
     state.training = training.enabled;
@@ -720,8 +704,12 @@ bool nixboyTerminalOpen(uint16_t port, const std::string& token,
     vterm_color_rgb(&background, 0, 0, 0);
     vterm_screen_set_default_colors(screen, &foreground, &background);
     vterm_screen_reset(screen, 1);
+    publishStatus(term, state);
+    const char* hints = state.training ? "F5 Check | F6 Hub | F7 Reset | F8 Abandon | F10 Close\r\n"
+                                       : "Esc / Ctrl+C: Linux | F10 Close\r\n";
+    vterm_input_write(term, hints, std::char_traits<char>::length(hints));
     TerminalInput input;
-    renderTerminal(modal.window, presentation, cellWidth, cellHeight, chromeHeight, term, screen, state);
+    renderTerminal(modal.window, presentation, cellWidth, cellHeight, term, screen, state);
     renderPresent(TerminalPresentation::overlay, &presentation);
 
     std::string error;
@@ -734,6 +722,7 @@ bool nixboyTerminalOpen(uint16_t port, const std::string& token,
     } else {
         state.status = training.enabled ? "Opening training hub... (F10 closes)" : "Starting Linux container... (F10 cancels)";
     }
+    publishStatus(term, state);
     const unsigned int start = getTicks();
     bool close = false;
     while (!close && _game_user_wants_to_quit == 0) {
@@ -766,8 +755,10 @@ bool nixboyTerminalOpen(uint16_t port, const std::string& token,
                 opening = false;
                 state.status = training.enabled ? "Training connected. F5 checks your work; F6 returns to the hub."
                                                 : "Linux connected. Results apply through configured game bindings.";
+                publishStatus(term, state);
                 break;
             case nixboy::EventType::Output:
+                state.hasOutput = true;
                 vterm_input_write(term, event.text.data(), event.text.size());
                 break;
             case nixboy::EventType::Result:
@@ -842,9 +833,14 @@ bool nixboyTerminalOpen(uint16_t port, const std::string& token,
         }
         // Overflow may have discarded the release for a retained keydown.
         if (overflow) state.textInput.reset();
+        publishStatus(term, state);
+        if (!state.notice.empty() && getTicks() - state.noticeStarted >= 5000) {
+            state.notice.clear();
+            state.dirty = true;
+        }
         vterm_screen_flush_damage(screen);
         if (state.dirty) {
-            renderTerminal(modal.window, presentation, cellWidth, cellHeight, chromeHeight, term, screen, state);
+            renderTerminal(modal.window, presentation, cellWidth, cellHeight, term, screen, state);
             state.dirty = false;
         }
         renderPresent(TerminalPresentation::overlay, &presentation);

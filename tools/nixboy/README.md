@@ -28,14 +28,31 @@ original ANSI colors. The flags are independent, accept `1`/`true` or `0`/`false
 and reload when the terminal opens. F10 and the unwarped Close button remain local.
 The CRT is an original software effect; it does not embed cool-retro-term or Qt.
 
+The independent effect controls also reload on opening:
+
+```ini
+crt_warp=100
+crt_glow=20
+crt_persistence_ms=120
+```
+
+Warp and glow accept integers 0–100; 100 matches the previous preview's strength.
+Persistence accepts 0–2000 milliseconds, the time for old light to fade to one
+tenth intensity. Zero disables the corresponding effect. The defaults reduce
+the previous glow to 20% and shorten its 600ms trail to 120ms. Invalid values
+report a configuration error. Settings are ignored visually in flat mode.
+
 The frame loads the installed game's interface FRMs through its normal art
-cache: FRM 217 (`LGDIALOG.FRM`) supplies the glass bezel and FRM 220
-(`OPBASE.FRM`) the panel.
-Corners and edge pixels retain their native size. Close uses the game's original
+cache: FRM 171 (`AUTOMAP.FRM`) supplies one coherent glass housing.
+Corner/bevel thickness remains native while long edge runs extend continuously,
+with no repeating panel tiles. Close uses the game's original
 red button resources. The Pip-Boy label borrows painted ochre strokes from
 FRM 127 (`PIP.FRM`); missing letter shapes are composed from those strokes. Modified or
 localized art falls back to a native game font. No original/extracted game
 graphics are embedded or packaged.
+
+Connection/error notices and control hints appear inside the terminal. The
+frame carries only the title and Close control; no status/footer panel is reserved.
 
 The terminal's font bitmap derives from the openly licensed Departure Mono,
 also selected by the reference green profile. See

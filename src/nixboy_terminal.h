@@ -6,6 +6,7 @@
 #include <string>
 
 #include "nixboy_client.h"
+#include "nixboy_terminal_view.h"
 
 namespace fallout {
 
@@ -19,6 +20,7 @@ struct NixboyTrainingCallbacks {
 struct NixboyTerminalOptions {
     bool fullscreen = false;
     bool retro = true;
+    nixboy::TerminalCrtSettings crt;
 };
 
 // Opens a modal terminal. Only the UI thread invokes onResult. Returns false

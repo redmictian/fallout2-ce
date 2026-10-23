@@ -111,6 +111,24 @@ namespace {
                 return false;
             }
         }
+        struct EffectSetting {
+            const char* name;
+            int* value;
+            int maximum;
+        };
+        const EffectSetting effects[] = {
+            { "crt_warp", &options.terminal.crt.warp, nixboy::kTerminalCrtStrengthMax },
+            { "crt_glow", &options.terminal.crt.glow, nixboy::kTerminalCrtStrengthMax },
+            { "crt_persistence_ms", &options.terminal.crt.persistenceMs, nixboy::kTerminalCrtPersistenceMaxMs },
+        };
+        for (const auto& effect : effects) {
+            if (!configGetString(&config, "nixboy", effect.name, &value)) continue;
+            if (!parseInteger(value, 0, effect.maximum, *effect.value)) {
+                error = std::string("nixboy.ini: ") + effect.name
+                    + " must be an integer from 0 to " + std::to_string(effect.maximum) + ".";
+                return false;
+            }
+        }
         if (configGetString(&config, "nixboy", "port", &value)) {
             int port;
             if (!parseInteger(value, 1, 65535, port)) {

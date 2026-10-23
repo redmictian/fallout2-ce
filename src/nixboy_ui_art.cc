@@ -1,33 +1,22 @@
 #include "nixboy_ui_art.h"
 
 #include <algorithm>
+#include <cstdint>
 
 #include "art.h"
 #include "color.h"
-#include "draw.h"
 #include "text_font.h"
 #include "window_manager.h"
 
 namespace fallout {
 namespace {
 
-    struct ArtRegion {
-        int x;
-        int y;
-        int width;
-        int height;
-    };
-
-    void tileArt(unsigned char* destination, int pitch, int x, int y,
-        int width, int height, const FrmImage& art, const ArtRegion& source)
+    int sampleNativeRun(int position, int length, int sourceStart, int sourceLength)
     {
-        for (int dy = 0; dy < height; dy += source.height) {
-            for (int dx = 0; dx < width; dx += source.width) {
-                blitBufferToBuffer(art.getData() + source.y * art.getWidth() + source.x,
-                    std::min(source.width, width - dx), std::min(source.height, height - dy),
-                    art.getWidth(), destination + (y + dy) * pitch + x + dx, pitch);
-            }
-        }
+        if (length <= 1) return sourceStart + sourceLength / 2;
+        // Keep both native endpoints. Adjacent runs therefore meet at adjacent
+        // source pixels, rather than restarting a small, visibly repeated tile.
+        return sourceStart + static_cast<int>(static_cast<int64_t>(position) * (sourceLength - 1) / (length - 1));
     }
 
     bool isPaint(unsigned char pixel)
@@ -109,57 +98,40 @@ bool nixboyDrawTerminalFrame(int window, int width, int height,
         || statusY >= height) {
         return false;
     }
-    FrmImage panel;
-    FrmImage dialog;
-    // The same artwork used by optionsWindowInit and showDialogBox.
-    if (!panel.lock(buildFid(OBJ_TYPE_INTERFACE, 220, 0, 0, 0))
-        || !dialog.lock(buildFid(OBJ_TYPE_INTERFACE, 217, 0, 0, 0))
-        || panel.getWidth() < 164 || panel.getHeight() < 217
-        || dialog.getWidth() < 302 || dialog.getHeight() < 127) {
+    FrmImage frame;
+    // AUTOMAP.FRM supplies one coherent tube housing: native lighting, wear,
+    // rounded bevel and top latch. Exclude its Scanner/Cancel plates and knob.
+    if (!frame.lock(buildFid(OBJ_TYPE_INTERFACE, 171, 0, 0, 0))
+        || frame.getWidth() < 519 || frame.getHeight() < 480) {
         return false;
     }
 
-    // OPBASE.FRM: native corner screws, border strips and uninterrupted metal.
-    constexpr int edge = 16;
-    tileArt(buffer, width, edge, edge, width - 2 * edge, height - 2 * edge,
-        panel, { edge, edge, 132, 185 });
-    for (int side = 0; side < 2; side++) {
-        const int sourceX = side == 0 ? 0 : 148;
-        const int destinationX = side == 0 ? 0 : width - edge;
-        tileArt(buffer, width, destinationX, edge, edge, height - 2 * edge,
-            panel, { sourceX, edge, edge, 185 });
-        const int sourceY = side == 0 ? 0 : 201;
-        const int destinationY = side == 0 ? 0 : height - edge;
-        tileArt(buffer, width, edge, destinationY, width - 2 * edge, edge,
-            panel, { edge, sourceY, 132, edge });
-        for (int vertical = 0; vertical < 2; vertical++) {
-            tileArt(buffer, width, destinationX, vertical == 0 ? 0 : height - edge,
-                edge, edge, panel, { sourceX, vertical == 0 ? 0 : 201, edge, edge });
+    const int right = glassX + glassWidth;
+    const int bottom = glassY + glassHeight;
+    const int latchWidth = std::min(64, glassWidth / 2);
+    const int leftRun = (glassWidth - latchWidth) / 2;
+    const int latchX = glassX + leftRun;
+    const auto nativeX = [&](int x) {
+        if (x < glassX) return sampleNativeRun(x, glassX, 20, 18);
+        if (x >= right) return sampleNativeRun(x - right, width - right, 446, 18);
+        if (x < latchX) return sampleNativeRun(x - glassX, leftRun, 38, 170);
+        if (x < latchX + latchWidth) return sampleNativeRun(x - latchX, latchWidth, 208, 64);
+        return sampleNativeRun(x - latchX - latchWidth,
+            glassWidth - leftRun - latchWidth, 272, 174);
+    };
+    for (int y = 0; y < height; y++) {
+        const int sourceY = y < glassY ? sampleNativeRun(y, glassY, 0, 36)
+            : y >= bottom              ? sampleNativeRun(y - bottom, height - bottom, 420, 18)
+                                       : sampleNativeRun(y - glassY, glassHeight, 36, 384);
+        const unsigned char* source = frame.getData() + sourceY * frame.getWidth();
+        // Only the surround is copied. The terminal owns the entire glass area.
+        // At normal 18/36/18 margins, corner pixels and bevel thickness are 1:1;
+        // only each long edge's longitudinal wear is extended to the new size.
+        for (int x = 0; x < width; x++) {
+            if (y >= glassY && y < bottom && x >= glassX && x < right) continue;
+            buffer[y * width + x] = source[nativeX(x)];
         }
     }
-
-    // LGDIALOG.FRM: preserve the actual rounded glass-bezel corners. Repeat
-    // clean edge strips that exclude the native top-center latch; no stretching.
-    const int left = glassX - 14;
-    const int top = glassY - 14;
-    const int outerWidth = glassWidth + 28;
-    const int outerHeight = glassHeight + 28;
-    constexpr int corner = 24;
-    tileArt(buffer, width, left + corner, top, outerWidth - 2 * corner, 14,
-        dialog, { 36, 6, 90, 14 });
-    tileArt(buffer, width, left + corner, top + outerHeight - 14,
-        outerWidth - 2 * corner, 14, dialog, { 36, 83, 90, 14 });
-    tileArt(buffer, width, left, top + corner, 14, outerHeight - 2 * corner,
-        dialog, { 9, 35, 14, 38 });
-    tileArt(buffer, width, left + outerWidth - 14, top + corner,
-        14, outerHeight - 2 * corner, dialog, { 285, 35, 14, 38 });
-    tileArt(buffer, width, left, top, corner, corner, dialog, { 9, 5, corner, corner });
-    tileArt(buffer, width, left + outerWidth - corner, top,
-        corner, corner, dialog, { 275, 5, corner, corner });
-    tileArt(buffer, width, left, top + outerHeight - corner,
-        corner, corner, dialog, { 9, 73, corner, corner });
-    tileArt(buffer, width, left + outerWidth - corner, top + outerHeight - corner,
-        corner, corner, dialog, { 275, 73, corner, corner });
     return true;
 }
 

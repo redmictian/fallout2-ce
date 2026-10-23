@@ -12,6 +12,11 @@ hotkey=Ctrl+N
 fullscreen=0
 ; 1: curved green CRT, soft bloom and phosphor persistence; 0: flat original colors.
 retro_terminal=1
+; CRT strengths: 0 disables the effect, 100 matches the previous preview's strength.
+crt_warp=100
+crt_glow=20
+; Phosphor fade time to one-tenth intensity, 0..2000 ms; 0 clears immediately.
+crt_persistence_ms=120
 ; nix-boy hub: two skill tracks, two current-skill bands each, five options per level.
 ; Set to 0 for the original ephemeral shell and explicit legacy bindings.
 training=1

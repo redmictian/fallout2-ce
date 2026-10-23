@@ -568,7 +568,7 @@ class TrainingSession:
         size = max(1, (self.rows - 13) // 2)
         pages = max(1, (len(tracks) + size - 1) // size)
         self.hub_page = min(self.hub_page, pages - 1)
-        lines = ["nix-boy", "Training hub - knowledge powers your character.", ""]
+        lines = ["nix-boy / Training hub", "Training connected - knowledge powers your character.", ""]
         width = max(20, self.cols - 1)
         for index in range(self.hub_page * size, min(len(tracks), (self.hub_page + 1) * size)):
             skill = tracks[index]

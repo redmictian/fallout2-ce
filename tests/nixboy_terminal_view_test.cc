@@ -11,6 +11,7 @@
 #include <vector>
 
 using fallout::nixboy::TerminalCrt;
+using fallout::nixboy::TerminalCrtSettings;
 using fallout::nixboy::TerminalViewLayout;
 using fallout::nixboy::terminalViewLayout;
 
@@ -56,9 +57,9 @@ void testLayouts()
                     && layout.textX + layout.cols * 8 <= layout.glassWidth - 20
                     && layout.textY + layout.rows * 16 <= layout.glassHeight - 20,
                 "whole first/last cells fit within rounded aperture padding");
-            require(layout.statusY >= layout.glassY + layout.glassHeight + 18
-                    && layout.statusY + 33 <= layout.height - 3,
-                "status clears native14px bezel and uses chrome metrics");
+            require(layout.statusY == layout.glassY + layout.glassHeight
+                    && layout.statusY <= layout.height - 18,
+                "frame guard follows glass and leaves a native bezel without a status footer");
         }
     }
     TerminalViewLayout layout;
@@ -154,7 +155,7 @@ void testLensAndEdgeCells()
     std::vector<unsigned char> source(width * height, 0);
     std::vector<uint32_t> target(width * height, 0);
     TerminalCrt crt;
-    require(crt.initialize(width, height), "edge fixture initialized");
+    require(crt.initialize(width, height, { 100, 100, 600 }), "edge fixture initialized");
     uint32_t ticks = 0;
     for (int row = 0; row < rows; row++) {
         for (int col = 0; col < cols; col++) {
@@ -193,7 +194,7 @@ void testBloomAndTime()
     std::vector<unsigned char> source(width * height, 0);
     std::vector<uint32_t> target(width * height, 0);
     TerminalCrt crt;
-    require(crt.initialize(width, height), "bloom fixture initialized");
+    require(crt.initialize(width, height, { 100, 100, 600 }), "bloom fixture initialized");
     crt.update(source.data(), palette);
     crt.render(target.data(), width, 100);
     const auto empty = target;
@@ -222,6 +223,184 @@ void testBloomAndTime()
     require(afterimage > 35 && afterimage < core - 50, "cleared text leaves a subdued phosphor afterimage");
     crt.render(target.data(), width, 1200);
     require(green(target[height / 2 * width + width / 2]) < 20, "afterimage decays without permanent ghosting");
+}
+
+void testSettingsBounds()
+{
+    TerminalCrt crt;
+    require(crt.initialize(32, 32, { 0, 0, 0 }), "all effects can be disabled independently");
+    require(crt.initialize(32, 32, { 100, 100, 2000 }), "maximum effect values accepted");
+    for (const auto& settings : { TerminalCrtSettings { -1, 20, 120 }, { 101, 20, 120 },
+             { 100, -1, 120 }, { 100, 101, 120 }, { 100, 20, -1 }, { 100, 20, 2001 } }) {
+        require(!crt.initialize(32, 32, settings), "invalid effect values rejected");
+        std::vector<uint32_t> target(32 * 32, 0xdeadbeef);
+        crt.render(target.data(), 32, 0);
+        require(std::all_of(target.begin(), target.end(), [](uint32_t pixel) { return pixel == 0xdeadbeef; }),
+            "invalid settings cannot reuse an earlier initialized renderer");
+    }
+}
+
+void testWarpControl()
+{
+    constexpr int width = 320;
+    constexpr int height = 240;
+    const auto palette = identityPalette();
+    std::vector<unsigned char> source(width * height, 0);
+    std::vector<uint32_t> target(width * height, 0);
+    double previousDistance = 0;
+    for (int warp : { 0, 25, 50, 75, 100 }) {
+        TerminalCrt crt;
+        require(crt.initialize(width, height, { warp, 0, 0 }), "warp control initialized");
+        std::fill(source.begin(), source.end(), 0);
+        crt.update(source.data(), palette);
+        crt.render(target.data(), width, 100);
+        const auto empty = target;
+        for (int y = 48; y < 64; y++)
+            std::fill_n(source.begin() + y * width + 48, 16, 255);
+        crt.update(source.data(), palette);
+        crt.render(target.data(), width, 100);
+        double weightedX = 0;
+        double weightedY = 0;
+        int total = 0;
+        for (int y = 0; y < height; y++) {
+            for (int x = 0; x < width; x++) {
+                const int light = green(target[y * width + x]) - green(empty[y * width + x]);
+                require(light >= 0, "lighting a cell cannot darken another pixel");
+                if (warp == 0) {
+                    require((light > 0) == (x >= 48 && x < 64 && y >= 48 && y < 64),
+                        "zero warp samples source coordinates exactly without spill or lost pixels");
+                }
+                total += light;
+                weightedX += light * x;
+                weightedY += light * y;
+            }
+        }
+        require(total > 0, "warped patch remains visible");
+        const double dx = weightedX / total - width / 2.0;
+        const double dy = weightedY / total - height / 2.0;
+        const double distance = dx * dx + dy * dy;
+        if (warp != 0) require(distance < previousDistance, "increasing warp moves peripheral text progressively inward");
+        previousDistance = distance;
+
+        for (const auto& corner : { std::array<int, 2> { 24, 24 }, { width - 32, 24 },
+                 { 24, height - 40 }, { width - 32, height - 40 } }) {
+            std::fill(source.begin(), source.end(), 0);
+            for (int y = corner[1]; y < corner[1] + 16; y++)
+                std::fill_n(source.begin() + y * width + corner[0], 8, 255);
+            crt.update(source.data(), palette);
+            crt.render(target.data(), width, 100);
+            require(std::count_if(target.begin(), target.end(), [](uint32_t pixel) { return green(pixel) > 130; }) >= 32,
+                "all four corner cells remain readable at every warp strength");
+        }
+        std::fill(source.begin(), source.end(), 255);
+        crt.update(source.data(), palette);
+        crt.render(target.data(), width, 100);
+        require(target.front() == 0 && target.back() == 0, "rounded glass remains when warp is disabled or reduced");
+    }
+}
+
+void testGlowControl()
+{
+    constexpr int width = 320;
+    constexpr int height = 240;
+    const auto palette = identityPalette();
+    std::vector<unsigned char> source(width * height, 0);
+    std::vector<uint32_t> target(width * height, 0);
+    long long previousHalo = -1;
+    for (int glow : { 0, 20, 50, 100 }) {
+        TerminalCrt crt;
+        require(crt.initialize(width, height, { 0, glow, 0 }), "glow control initialized");
+        std::fill(source.begin(), source.end(), 0);
+        crt.update(source.data(), palette);
+        crt.render(target.data(), width, 100);
+        const auto empty = target;
+        for (int y = 80; y < 160; y++)
+            std::fill_n(source.begin() + y * width + 156, 8, 255);
+        crt.update(source.data(), palette);
+        crt.render(target.data(), width, 100);
+        long long halo = 0;
+        for (int y = 0; y < height; y++) {
+            for (int x = 0; x < width; x++) {
+                if (x >= 156 && x < 164 && y >= 80 && y < 160) continue;
+                halo += green(target[y * width + x]) - green(empty[y * width + x]);
+            }
+        }
+        if (glow == 0) require(halo == 0, "zero glow creates no text halo outside source strokes");
+        require(halo > previousHalo, "increasing glow monotonically increases surrounding light");
+        require(green(target[120 * width + 160]) > 170, "lowering glow preserves the sharp text core");
+        previousHalo = halo;
+    }
+}
+
+void testPersistenceControl()
+{
+    constexpr int width = 80;
+    constexpr int height = 80;
+    const auto palette = identityPalette();
+    std::vector<unsigned char> source(width * height, 0);
+    std::vector<uint32_t> target(width * height, 0);
+    for (int warp : { 0, 100 }) {
+        for (int glow : { 0, 20, 100 }) {
+            const TerminalCrtSettings settings { warp, glow, 0 };
+            TerminalCrt crt;
+            require(crt.initialize(width, height, settings), "zero-persistence combination initialized");
+            std::fill(source.begin(), source.end(), 255);
+            crt.update(source.data(), palette);
+            crt.render(target.data(), width, 100);
+            std::fill(source.begin(), source.end(), 0);
+            crt.update(source.data(), palette);
+            crt.render(target.data(), width, 100);
+            TerminalCrt fresh;
+            require(fresh.initialize(width, height, settings), "fresh dark renderer initialized");
+            fresh.update(source.data(), palette);
+            std::vector<uint32_t> empty(target.size());
+            fresh.render(empty.data(), width, 100);
+            require(target == empty, "zero persistence removes old pixels and bloom immediately even at identical ticks");
+        }
+    }
+    int previousTrail = -1;
+    for (int persistence : { 0, 120, 600, 2000 }) {
+        TerminalCrt crt;
+        require(crt.initialize(width, height, { 0, 0, persistence }), "persistence control initialized");
+        std::fill(source.begin(), source.end(), 255);
+        crt.update(source.data(), palette);
+        crt.render(target.data(), width, 100);
+        std::fill(source.begin(), source.end(), 0);
+        crt.update(source.data(), palette);
+        crt.render(target.data(), width, 100);
+        if (persistence != 0) {
+            const auto sameTick = target;
+            crt.render(target.data(), width, 100);
+            require(target == sameTick, "unchanged clock does not age phosphor history");
+        }
+        crt.render(target.data(), width, 220);
+        const int trail = green(target[40 * width + 40]);
+        require(trail > previousTrail, "longer persistence retains progressively stronger old text");
+        previousTrail = trail;
+        crt.render(target.data(), width, 20220);
+        require(green(target[40 * width + 40]) < 20, "every supported persistence setting eventually clears old light");
+    }
+    for (int persistence : { 120, 2000 }) {
+        const TerminalCrtSettings settings { 0, 0, persistence };
+        TerminalCrt crt;
+        TerminalCrt dark;
+        require(crt.initialize(width, height, settings) && dark.initialize(width, height, settings), "decay-time fixtures initialized");
+        std::fill(source.begin(), source.end(), 255);
+        crt.update(source.data(), palette);
+        crt.render(target.data(), width, 100);
+        std::fill(source.begin(), source.end(), 0);
+        crt.update(source.data(), palette);
+        crt.render(target.data(), width, 100);
+        dark.update(source.data(), palette);
+        std::vector<uint32_t> empty(target.size());
+        dark.render(empty.data(), width, 100);
+        const int initialTrail = green(target[40 * width + 40]) - green(empty[40 * width + 40]);
+        crt.render(target.data(), width, 100 + persistence);
+        dark.render(empty.data(), width, 100 + persistence);
+        const int oldLight = green(target[40 * width + 40]) - green(empty[40 * width + 40]);
+        require(oldLight >= initialTrail / 20 && oldLight <= initialTrail / 6,
+            "configured decay time leaves approximately one tenth of the initial afterimage, including intervals above one second");
+    }
 }
 
 void benchmark()
@@ -259,6 +438,10 @@ int main(int argc, char** argv)
         testRgbBounds();
         testLensAndEdgeCells();
         testBloomAndTime();
+        testSettingsBounds();
+        testWarpControl();
+        testGlowControl();
+        testPersistenceControl();
         std::cout << "nix-boy terminal layout, font and RGB CRT: all tests passed\n";
         return EXIT_SUCCESS;
     } catch (const std::exception& error) {
