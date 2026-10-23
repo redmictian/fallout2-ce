@@ -41,6 +41,9 @@ void _mouse_simulate_input(int delta_x, int delta_y, int buttons);
 bool _mouse_in(int left, int top, int right, int bottom);
 bool _mouse_click_in(int left, int top, int right, int bottom);
 void mouseGetRect(Rect* rect);
+// Borrow the current indexed cursor image on the UI thread. nullptr means the
+// cursor is hidden/unavailable; the caller must not modify or retain the image.
+const unsigned char* mouseGetShape(int* width, int* height, int* pitch, unsigned char* transparent);
 void mouseGetPosition(int* out_x, int* out_y);
 void _mouse_set_position(int x, int y);
 int mouseGetEvent();

@@ -22,11 +22,25 @@ game visible. Set `fullscreen=1` in the `[nixboy]` section of `nixboy.ini` to fi
 the game's internal screen instead. This setting controls the in-game modal;
 the game's own operating-system display mode stays in its existing configuration.
 
-`retro_terminal=1` (the default) enables curved green CRT glass with phosphor glow,
-scanlines and shaded edges. Set `retro_terminal=0` for a flat terminal with its
+`retro_terminal=1` (the default) enables rounded curved green glass, broad bloom,
+phosphor persistence and subtle tube noise/flicker. Set `retro_terminal=0` for a flat terminal with its
 original ANSI colors. The flags are independent, accept `1`/`true` or `0`/`false`,
 and reload when the terminal opens. F10 and the unwarped Close button remain local.
 The CRT is an original software effect; it does not embed cool-retro-term or Qt.
+
+The frame loads the installed game's interface FRMs through its normal art
+cache: FRM 217 (`LGDIALOG.FRM`) supplies the glass bezel and FRM 220
+(`OPBASE.FRM`) the panel.
+Corners and edge pixels retain their native size. Close uses the game's original
+red button resources. The Pip-Boy label borrows painted ochre strokes from
+FRM 127 (`PIP.FRM`); missing letter shapes are composed from those strokes. Modified or
+localized art falls back to a native game font. No original/extracted game
+graphics are embedded or packaged.
+
+The terminal's font bitmap derives from the openly licensed Departure Mono,
+also selected by the reference green profile. See
+[font attribution and license](../../third_party/departure-mono/README.nixboy.md).
+Native Fallout fonts still draw the game chrome.
 
 nix-boy adds an in-game terminal backed by Debian Linux containers.
 The host bridge uses the official Docker Python SDK, a real Bash PTY and a separate

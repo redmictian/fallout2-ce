@@ -10,7 +10,7 @@ hotkey=Ctrl+N
 ; Terminal presentation, reloaded whenever nix-boy opens.
 ; 0: centered window with the surrounding game UI visible; 1: full game screen.
 fullscreen=0
-; 1: curved green CRT, phosphor glow and scanlines; 0: flat original colors.
+; 1: curved green CRT, soft bloom and phosphor persistence; 0: flat original colors.
 retro_terminal=1
 ; nix-boy hub: two skill tracks, two current-skill bands each, five options per level.
 ; Set to 0 for the original ephemeral shell and explicit legacy bindings.

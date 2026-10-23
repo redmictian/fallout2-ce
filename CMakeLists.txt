@@ -257,6 +257,7 @@ target_sources(${EXECUTABLE_NAME} PUBLIC
 
 target_sources(${EXECUTABLE_NAME} PUBLIC
     "src/nixboy.cc"
+    "src/nixboy_ui_art.cc"
     "src/nixboy.h"
     "src/nixboy_hotkey.cc"
     "src/nixboy_hotkey.h"

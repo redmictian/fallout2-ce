@@ -24,8 +24,7 @@ Copy-Item -LiteralPath $executablePath -Destination (Join-Path $destinationPath 
 # Explicit source allowlist: no game assets, saves, runtime config or tokens.
 $files = @(
     'LICENSE.md', 'nixboy.ini.example', 'nixboy.version',
-    'assets/nixboy/README.md', 'assets/nixboy/pipboy-plaque-source.png',
-    'assets/nixboy/pipboy-plaque.png',
+    'third_party/departure-mono/README.nixboy.md', 'third_party/departure-mono/OFL.txt',
     'tools/nixboy/README.md', 'tools/nixboy/TRAINING.md', 'tools/nixboy/protocol.md', 'tools/nixboy/.dockerignore',
     'tools/nixboy/requirements.txt', 'tools/nixboy/bridge.py',
     'tools/nixboy/protocol.py', 'tools/nixboy/training.py',
@@ -61,6 +60,7 @@ foreach ($relativePath in $files) {
         $markdown = Get-Content -LiteralPath $targetPath -Raw
         $markdown = $markdown.Replace('(../../nixboy.version)', '(../nixboy.version)')
         $markdown = $markdown.Replace('(../../nixboy.ini.example)', '(../nixboy.ini.example)')
+        $markdown = $markdown.Replace('(../../third_party/', '(../third_party/')
         Set-Content -LiteralPath $targetPath -Value $markdown -Encoding utf8 -NoNewline
     }
 }
