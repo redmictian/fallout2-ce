@@ -28,6 +28,7 @@ namespace nixboy {
         int32_t value = 0;
         uint8_t skill = 0;
         uint16_t level = 0;
+        uint16_t points = 0;
         TrainingReceipt receipt {};
     };
 
@@ -56,7 +57,7 @@ namespace nixboy {
         bool resize(uint16_t rows, uint16_t cols);
         bool sendContext(const Context& context);
         bool sendTrainingAction(TrainingAction action);
-        bool acknowledgeTraining(uint8_t skill, uint16_t level, const TrainingReceipt& receipt, bool accepted);
+        bool acknowledgeTraining(uint8_t skill, uint16_t level, uint16_t points, const TrainingReceipt& receipt, bool accepted);
         void poll(std::vector<Event>& events);
         void close();
         bool isConnected() const;

@@ -83,11 +83,16 @@ class Catalog:
             for level, band in levels.items():
                 if type(level) is not int or not 1 <= level <= MAX_LEVEL:
                     raise ValueError("level ID must be in 1..65535")
-                if not isinstance(band, dict) or set(band) != {"title", "min_skill", "max_skill"} \
+                if not isinstance(band, dict) or not {"title", "min_skill", "max_skill"} <= set(band) \
+                        or set(band) - {"title", "min_skill", "max_skill", "reward_points"} \
                         or not _text(band["title"], 200) \
                         or any(type(band[key]) is not int for key in ("min_skill", "max_skill")) \
                         or not 0 <= band["min_skill"] <= band["max_skill"] <= 300:
                     raise ValueError("invalid training skill band")
+                reward = band.get("reward_points", 5)
+                if type(reward) is not int or not 1 <= reward <= 300:
+                    raise ValueError("reward_points must be an integer in 1..300")
+                levels[level] = dict(band, reward_points=reward)
                 ranges.append((band["min_skill"], band["max_skill"]))
             previous_max = -1
             for minimum, maximum in sorted(ranges):

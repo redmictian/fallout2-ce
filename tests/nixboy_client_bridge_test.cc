@@ -25,7 +25,7 @@ int main(int argc, char** argv)
         Context context { { "player.hp", INT32_MAX }, { "global.minimum", INT32_MIN } };
         std::vector<fallout::nixboy::TrainingClaim> claims;
         if (scenario == "training") {
-            context = { { "training.version", 3 }, { "training.profile.0", 1 }, { "training.profile.1", 0 },
+            context = { { "training.version", 4 }, { "training.profile.0", 1 }, { "training.profile.1", 0 },
                 { "training.profile.2", 0 }, { "training.profile.3", 0 } };
             for (const char* name : { "small_guns", "big_guns", "energy_weapons", "unarmed", "melee_weapons", "throwing",
                      "first_aid", "doctor", "sneak", "lockpick", "steal", "traps", "science", "repair",
@@ -85,13 +85,13 @@ int main(int argc, char** argv)
                 case EventType::TrainingReward: {
                     fallout::nixboy::TrainingReceipt expected {};
                     expected.back() = 37;
-                    if (scenario != "training" || rewarded || event.skill != 13 || event.level != UINT16_MAX || event.receipt != expected)
-                        throw std::runtime_error("unexpected v3 training reward");
+                    if (scenario != "training" || rewarded || event.skill != 13 || event.level != UINT16_MAX || event.points != 7 || event.receipt != expected)
+                        throw std::runtime_error("unexpected v4 training reward");
                     rewarded = true;
                     for (auto& value : context) {
-                        if (value.first == "skill.repair") value.second = 20;
+                        if (value.first == "skill.repair") value.second = 22;
                     }
-                    if (!client.acknowledgeTraining(event.skill, event.level, event.receipt, true) || !client.sendContext(context))
+                    if (!client.acknowledgeTraining(event.skill, event.level, event.points, event.receipt, true) || !client.sendContext(context))
                         throw std::runtime_error("training acknowledgment or refreshed context rejected");
                     break;
                 }
@@ -99,7 +99,7 @@ int main(int argc, char** argv)
                     if (scenario == "training") {
                         if (!rewarded || event.value != 42 || client.isConnected())
                             throw std::runtime_error("training reward/exit mismatch");
-                        std::cout << "C++ client / Python v3 training ledger and uint16 reward round trip passed\n";
+                        std::cout << "C++ client / Python v4 recorded point awards round trip passed\n";
                         return EXIT_SUCCESS;
                     }
                     if (!minimum || !maximum || event.value != 42

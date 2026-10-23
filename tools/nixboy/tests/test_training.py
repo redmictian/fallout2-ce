@@ -19,12 +19,16 @@ from test_bridge import FakeClient, TOKEN, eventually
 
 
 def context(unarmed=15, science=10):
-    result = {"training.version": 3, "training.profile.0": -1,
+    result = {"training.version": 4, "training.profile.0": -1,
               "training.profile.1": 2, "training.profile.2": 3, "training.profile.3": 4}
     result.update({"skill." + name: 25 for name in wire.SKILL_NAMES})
     result.update({"skill.unarmed": unarmed, "skill.science": science})
     return result
 
+
+
+def claim(receipt, points=5):
+    return {"receipt": receipt.hex() if isinstance(receipt, bytes) else receipt, "points": points}
 
 
 class FakeCatalog(Catalog):
@@ -112,9 +116,9 @@ class TrainingProtocolTests(unittest.TestCase):
         self.assertEqual(len(skills), 18)
         self.assertEqual((skills[3], skills[12]), (15, 10))
         receipt = bytes(range(1, 17))
-        encoded = wire.encode_training_reward(3, 1, receipt)
-        self.assertEqual(len(encoded), 19)
-        self.assertEqual(wire.decode_training_ack(encoded + b"\1"), (3, 1, receipt.hex(), True))
+        encoded = wire.encode_training_reward(3, 1, 5, receipt)
+        self.assertEqual(len(encoded), 21)
+        self.assertEqual(wire.decode_training_ack(encoded + b"\1"), (3, 1, 5, receipt.hex(), True))
         for invalid in (b"", encoded, encoded + b"\2", b"\3\0\1" + bytes(16) + b"\1"):
             with self.assertRaises(wire.ProtocolError):
                 wire.decode_training_ack(invalid)
@@ -128,26 +132,26 @@ class TrainingProtocolTests(unittest.TestCase):
                 wire.training_context(values)
 
     def test_sparse_opening_claims_roundtrip_with_uint16_level_and_all_skills(self):
-        claims = {"3:2": "01" * 16, "13:65535": "02" * 16, "17:300": "03" * 16}
+        claims = {"3:2": claim("01" * 16), "13:65535": claim("02" * 16), "17:300": claim("03" * 16)}
         payload = wire.encode_training_open(36, 139, context(), claims)
         self.assertEqual(wire.decode_training_open(payload), (36, 139, context(), claims))
-        reward = wire.encode_training_reward(13, 65535, bytes(range(1, 17)))
+        reward = wire.encode_training_reward(13, 65535, 5, bytes(range(1, 17)))
         self.assertEqual(wire.decode_training_ack(reward + b"\1")[:2], (13, 65535))
         for skill, level in ((18, 1), (-1, 1), (3, 0), (3, 65536)):
             with self.assertRaises(wire.ProtocolError):
-                wire.encode_training_reward(skill, level, bytes(range(16)))
+                wire.encode_training_reward(skill, level, 5, bytes(range(16)))
 
     def test_claim_bounds_duplicates_truncation_and_invalid_counts_are_rejected(self):
-        claims = {f"0:{level}": level.to_bytes(16, "big").hex() for level in range(1, 2049)}
+        claims = {f"0:{level}": claim(level.to_bytes(16, "big")) for level in range(1, 2049)}
         payload = wire.encode_training_open(36, 139, context(), claims)
         self.assertEqual(len(wire.decode_training_open(payload)[3]), 2048)
-        claims["0:2049"] = "ff" * 16
+        claims["0:2049"] = claim("ff" * 16)
         with self.assertRaises(wire.ProtocolError):
             wire.encode_training_open(36, 139, context(), claims)
-        for claims in ({"3:1": "00" * 16}, {"3:1": "01" * 16, "13:9": "01" * 16}, {"03:1": "01" * 16}):
+        for claims in ({"3:1": claim("00" * 16)}, {"3:1": claim("01" * 16), "13:9": claim("01" * 16)}, {"03:1": claim("01" * 16)}):
             with self.assertRaises(wire.ProtocolError):
                 wire.encode_training_open(36, 139, context(), claims)
-        valid = wire.encode_training_open(36, 139, context(), {"3:1": "01" * 16})
+        valid = wire.encode_training_open(36, 139, context(), {"3:1": claim("01" * 16)})
         for invalid in (valid[:-1], valid + b"\0", valid[:4] + struct.pack("!I", 65535) + valid[8:]):
             with self.assertRaises(wire.ProtocolError):
                 wire.decode_training_open(invalid)
@@ -156,6 +160,23 @@ class TrainingProtocolTests(unittest.TestCase):
         duplicate = valid[:offset] + b"\0\2" + valid[offset + 2:] * 2
         with self.assertRaises(wire.ProtocolError):
             wire.decode_training_open(duplicate)
+
+    def test_mixed_reward_points_roundtrip_and_invalid_wire_amounts_are_rejected(self):
+        claims = {"3:1": claim("01" * 16, 1), "3:2": claim("02" * 16, 7), "13:300": claim("03" * 16, 300)}
+        payload = wire.encode_training_open(36, 139, context(), claims)
+        self.assertEqual(wire.decode_training_open(payload)[3], claims)
+        reward = wire.encode_training_reward(13, 3, 7, bytes(range(16)))
+        self.assertEqual(wire.decode_training_ack(reward + b"\1"), (13, 3, 7, bytes(range(16)).hex(), True))
+        for invalid in (0, -1, 301, True, 7.0, "7"):
+            with self.subTest(points=invalid), self.assertRaises(wire.ProtocolError):
+                wire.encode_training_reward(13, 3, invalid, bytes(range(16)))
+        invalid_reward = reward[:3] + b"\0\0" + reward[5:]
+        with self.assertRaises(wire.ProtocolError):
+            wire.decode_training_ack(invalid_reward + b"\1")
+        offset = 10 + struct.unpack_from("!I", payload, 4)[0]
+        invalid_open = payload[:offset + 3] + b"\0\0" + payload[offset + 5:]
+        with self.assertRaises(wire.ProtocolError):
+            wire.decode_training_open(invalid_open)
 
 
 class AttemptTests(unittest.TestCase):
@@ -205,13 +226,13 @@ class AttemptTests(unittest.TestCase):
         self.assertTrue(self.manager.check(self.profile)["rewarded"])
         pending = self.manager.pending_rewards(self.profile, self.completed)
         data = json.loads(self.manager.path.read_text())
-        self.assertEqual(data["profiles"][self.profile]["receipts"]["3:1"], pending[0][2])
+        self.assertEqual(data["profiles"][self.profile]["receipts"]["3:1"], claim(pending[0][3]))
         self.manager.acknowledge(self.profile, *pending[0], True)
         self.manager.abandon(self.profile)
         self.manager.close()
         self.manager = self.make_manager()
         self.assertEqual(self.manager.pending_rewards(self.profile, self.completed), pending)
-        self.assertEqual(self.manager.pending_rewards(self.profile, {"3:1": pending[0][2]}), [])
+        self.assertEqual(self.manager.pending_rewards(self.profile, {"3:1": claim(pending[0][3])}), [])
 
     def test_practice_success_never_rewards(self):
         self.manager.select(self.profile, 12, 1, "practice")
@@ -223,14 +244,14 @@ class AttemptTests(unittest.TestCase):
 
     def test_game_snapshot_recovers_exact_receipt_without_fabricated_pass(self):
         receipt = bytes(range(16))
-        self.manager.observe(self.profile, {"3:1": receipt.hex()}, context(unarmed=20))
+        self.manager.observe(self.profile, {"3:1": claim(receipt.hex())}, context(unarmed=20))
         state = self.manager.snapshot(self.profile)
-        self.assertEqual(state["receipts"]["3:1"], receipt.hex())
+        self.assertEqual(state["receipts"]["3:1"], claim(receipt))
         self.assertIn("3:1", state["recovered_from_game"])
         self.assertNotIn("passes", state)
-        self.assertEqual(self.manager.pending_rewards(self.profile, self.completed), [(3, 1, receipt.hex())])
+        self.assertEqual(self.manager.pending_rewards(self.profile, self.completed), [(3, 1, 5, receipt.hex())])
         with self.assertRaises(wire.ProtocolError):
-            self.manager.observe(self.profile, {"3:1": "63" * 16}, context(unarmed=20))
+            self.manager.observe(self.profile, {"3:1": claim("63" * 16)}, context(unarmed=20))
 
     def test_current_skill_exclusively_selects_its_band_independently_per_track(self):
         for skill, name, cases in ((3, "unarmed", ((14, None), (15, 1), (19, 1), (20, 2), (24, 2), (25, None))),
@@ -260,19 +281,19 @@ class AttemptTests(unittest.TestCase):
         self.assertNotIn("claimed", state)
         self.assertNotIn("3:1", state["receipts"])
         reward = self.manager.pending_rewards(self.profile, self.completed)
-        self.assertEqual([(skill, level) for skill, level, _ in reward], [(3, 2)])
-        self.assertEqual(self.manager.pending_rewards(self.profile, {"3:2": reward[0][2]}), [])
+        self.assertEqual([(skill, level) for skill, level, _, _ in reward], [(3, 2)])
+        self.assertEqual(self.manager.pending_rewards(self.profile, {"3:2": claim(reward[0][3])}), [])
         with self.assertRaises(ValueError):
             self.manager.select(self.profile, 3, 2)
         self.manager.select(self.profile, 3, 2, "practice")
 
     def test_sparse_game_receipt_recovery_imports_only_its_claimed_slot(self):
         receipt = bytes(range(1, 17))
-        self.manager.observe(self.profile, {"3:2": receipt.hex()}, context(unarmed=20))
+        self.manager.observe(self.profile, {"3:2": claim(receipt.hex())}, context(unarmed=20))
         state = self.manager.snapshot(self.profile)
         self.assertNotIn("claimed", state)
-        self.assertEqual(state["receipts"], {"3:2": receipt.hex()})
-        self.assertEqual(self.manager.pending_rewards(self.profile, self.completed), [(3, 2, receipt.hex())])
+        self.assertEqual(state["receipts"], {"3:2": claim(receipt.hex())})
+        self.assertEqual(self.manager.pending_rewards(self.profile, self.completed), [(3, 2, 5, receipt.hex())])
 
     def test_changed_skill_band_preserves_attempt_and_refuses_stale_reward(self):
         attempt = self.manager.select(self.profile, 3, 1)
@@ -316,8 +337,8 @@ class AttemptTests(unittest.TestCase):
         self.assertEqual(restored["queues"]["3:1"], queue_before)
         self.assertEqual(restored["attempt"]["id"], attempt["id"])
         self.assertEqual(restored["attempt"]["status"], "needs_reset")
-        self.assertEqual(restored["receipts"], profile["receipts"])
-        self.assertEqual(json.loads(self.manager.path.read_text())["version"], 3)
+        self.assertEqual(restored["receipts"], {key: claim(receipt) for key, receipt in profile["receipts"].items()})
+        self.assertEqual(json.loads(self.manager.path.read_text())["version"], 4)
         self.assertNotIn("earned", restored)
 
     def test_version_two_sparse_migration_preserves_progress_and_blocks_unfingerprinted_attempt(self):
@@ -331,7 +352,7 @@ class AttemptTests(unittest.TestCase):
         profile["attempt"].pop("content_digest")
         self.manager.path.write_text(json.dumps(data))
         self.manager = self.make_manager()
-        self.assertEqual(self.manager.pending_rewards(self.profile, {}), [(12, 2, "02" * 16)])
+        self.assertEqual(self.manager.pending_rewards(self.profile, {}), [(12, 2, 5, "02" * 16)])
         self.assertNotIn("12:1", self.manager.snapshot(self.profile)["receipts"])
         with self.assertRaisesRegex(ValueError, "older attempt.*abandon"):
             self.manager.prepare(self.profile)
@@ -357,13 +378,13 @@ class AttemptTests(unittest.TestCase):
         self.manager.prepare(self.profile)
         self.assertTrue(self.manager.check(self.profile)["rewarded"])
         pending = self.manager.pending_rewards(self.profile, {})
-        self.assertEqual([(skill, level) for skill, level, receipt in pending], [(13, 3)])
-        receipt = pending[0][2]
-        self.manager.acknowledge(self.profile, 13, 3, receipt, True)
+        self.assertEqual([(skill, level) for skill, level, points, receipt in pending], [(13, 3)])
+        receipt = pending[0][3]
+        self.manager.acknowledge(self.profile, 13, 3, 5, receipt, True)
         values = context()
         values["skill.repair"] = 30
-        self.manager.observe(self.profile, {"13:3": receipt}, values)
-        self.assertEqual(self.manager.pending_rewards(self.profile, {"13:3": receipt}), [])
+        self.manager.observe(self.profile, {"13:3": claim(receipt)}, values)
+        self.assertEqual(self.manager.pending_rewards(self.profile, {"13:3": claim(receipt)}), [])
         self.assertEqual(self.manager.pending_rewards(self.profile, {}), pending)
 
     def test_changed_content_blocks_active_attempt_without_losing_progress(self):
@@ -379,6 +400,73 @@ class AttemptTests(unittest.TestCase):
         self.assertEqual(self.manager.pending_rewards(self.profile, {}), [])
         with self.assertRaisesRegex(ValueError, "content changed; abandon"):
             self.manager.prepare(self.profile)
+
+    def test_configured_reward_is_frozen_and_replayed_after_edit_or_retirement(self):
+        band = self.manager.catalog.tracks[3]["levels"][1]
+        band["reward_points"] = 7
+        attempt = self.manager.select(self.profile, 3, 1)
+        self.assertEqual(attempt["reward_points"], 7)
+        self.manager.prepare(self.profile)
+        passed = self.manager.check(self.profile)
+        self.assertEqual(passed["reward_points"], 7)
+        pending = self.manager.pending_rewards(self.profile, {})
+        self.assertEqual(pending[0][:3], (3, 1, 7))
+        receipt = pending[0][3]
+        band["reward_points"] = 99
+        self.assertEqual(self.manager.pending_rewards(self.profile, {}), pending)
+        self.manager.catalog.tracks.pop(3)
+        self.assertEqual(self.manager.pending_rewards(self.profile, {}), pending)
+        self.manager.acknowledge(self.profile, 3, 1, 7, receipt, True)
+        self.assertEqual(self.manager.pending_rewards(self.profile, {"3:1": claim(receipt, 7)}), [])
+        self.assertEqual(self.manager.snapshot(self.profile)["receipts"]["3:1"], claim(receipt, 7))
+
+    def test_reward_edit_during_active_attempt_requires_reselection(self):
+        band = self.manager.catalog.tracks[3]["levels"][1]
+        band["reward_points"] = 7
+        attempt = self.manager.select(self.profile, 3, 1)
+        self.manager.prepare(self.profile)
+        band["reward_points"] = 8
+        checked = self.manager.check(self.profile)
+        self.assertEqual(checked["status"], "error")
+        self.assertIn("content changed; abandon", checked["feedback"])
+        self.assertEqual(self.manager.snapshot(self.profile)["attempt"]["reward_points"], 7)
+        self.assertFalse(self.environments[-1].closed)
+        self.assertEqual(self.manager.pending_rewards(self.profile, {}), [])
+        self.manager.abandon(self.profile)
+        self.assertEqual(self.manager.select(self.profile, 3, 1)["reward_points"], 8)
+
+    def test_tampered_points_cannot_acknowledge_or_replace_an_earned_claim(self):
+        self.manager.catalog.tracks[3]["levels"][1]["reward_points"] = 7
+        self.manager.select(self.profile, 3, 1)
+        self.manager.prepare(self.profile)
+        self.manager.check(self.profile)
+        receipt = self.manager.pending_rewards(self.profile, {})[0][3]
+        for points in (5, 8):
+            with self.subTest(points=points):
+                with self.assertRaises(wire.ProtocolError):
+                    self.manager.acknowledge(self.profile, 3, 1, points, receipt, True)
+                with self.assertRaises(wire.ProtocolError):
+                    self.manager.observe(self.profile, {"3:1": claim(receipt, points)}, context())
+                with self.assertRaises(wire.ProtocolError):
+                    self.manager.pending_rewards(self.profile, {"3:1": claim(receipt, points)})
+        self.assertEqual(self.manager.snapshot(self.profile)["receipts"]["3:1"], claim(receipt, 7))
+
+    def test_version_three_receipt_migration_uses_historical_five_not_current_configuration(self):
+        self.manager.close()
+        data = json.loads(self.manager.path.read_text())
+        data["version"] = 3
+        profile = data["profiles"][self.profile]
+        profile["receipts"] = {"3:1": "01" * 16, "13:65535": "02" * 16}
+        profile["acknowledged"] = {"3:1": "01" * 16}
+        self.manager.path.write_text(json.dumps(data))
+        catalog = FakeCatalog()
+        catalog.tracks[3]["levels"][1]["reward_points"] = 12
+        self.manager = AttemptManager(self.directory.name, FakeClient, catalog, FakeEnvironment)
+        self.assertEqual(self.manager.pending_rewards(self.profile, {}),
+                         [(3, 1, 5, "01" * 16), (13, 65535, 5, "02" * 16)])
+        state = self.manager.snapshot(self.profile)
+        self.assertEqual(state["acknowledged"]["3:1"], claim("01" * 16, 5))
+        self.assertEqual(json.loads(self.manager.path.read_text())["version"], 4)
 
     def test_shutdown_recreates_same_attempt_after_restart(self):
         self.manager.observe(self.profile, self.completed, context(science=15))
@@ -433,6 +521,24 @@ class AttemptTests(unittest.TestCase):
 
 
 class TrainingMenuTests(unittest.TestCase):
+    def test_menu_and_task_context_display_the_configured_reward(self):
+        with tempfile.TemporaryDirectory() as directory:
+            catalog = FakeCatalog()
+            catalog.tracks[3]["levels"][1]["reward_points"] = 7
+            manager = AttemptManager(directory, FakeClient, catalog, FakeEnvironment)
+            output = []
+            session = TrainingSession(manager, lambda kind, payload=b"": output.append((kind, payload)), None)
+            try:
+                session.start(36, 139, context(), {})
+                self.assertIn(b"[+7]", output[-1][1])
+                session.track_menu(3)
+                self.assertIn(b"earn +7 skill", output[-1][1])
+                attempt = manager.select(session.identity, 3, 1)
+                self.assertIn("assessment reward +7", manager._training_label(attempt))
+            finally:
+                session.close()
+                manager.close()
+
     def test_all_authored_skill_tracks_paginate_and_select_by_dynamic_number(self):
         with tempfile.TemporaryDirectory() as directory:
             catalog = FakeCatalog()
@@ -466,16 +572,16 @@ class TrainingMenuTests(unittest.TestCase):
             output = []
             session = TrainingSession(manager, lambda kind, payload=b"": output.append((kind, payload)), None)
             try:
-                session.start(36, 139, context(), {"13:65535": "01" * 16})
+                session.start(36, 139, context(), {"13:65535": claim("01" * 16)})
                 session.context(context(unarmed=20))
-                self.assertEqual(session.claimed, {"13:65535": "01" * 16})
+                self.assertEqual(session.claimed, {"13:65535": claim("01" * 16)})
                 manager.select(session.identity, 3, 2)
                 manager.catalog.tracks.pop(3)
                 session.hub()
                 self.assertIn(b"[R] Resume unarmed level 2", output[-1][1])
                 manager.abandon(session.identity)
                 self.assertIsNone(manager.snapshot(session.identity)["attempt"])
-                self.assertEqual(manager.snapshot(session.identity)["receipts"], {"13:65535": "01" * 16})
+                self.assertEqual(manager.snapshot(session.identity)["receipts"], {"13:65535": claim("01" * 16)})
             finally:
                 session.close()
                 manager.close()
@@ -589,7 +695,7 @@ class TrainingSocketTests(unittest.TestCase):
         restored.sendall(wire.frame(wire.CONTEXT, wire.encode_context(values)))
         output = self.until_output(restored, b"completed 1/2")
         self.assertIn(b"Unarmed", output)
-        self.assertEqual(self.manager.pending_rewards(wire.training_context(context())[0], {"3:1": reward[3:].hex()}), [])
+        self.assertEqual(self.manager.pending_rewards(wire.training_context(context())[0], {"3:1": claim(reward[5:].hex())}), [])
 
     def test_practice_check_has_no_reward(self):
         sock = self.connect()
@@ -614,7 +720,7 @@ class TrainingSocketTests(unittest.TestCase):
         sock = socket.create_connection(self.server.server_address, timeout=3)
         self.sockets.append(sock)
         invalid = wire.encode_training_open(35, 139, context(), {})
-        invalid = invalid.replace(b"training.version\x00\x00\x00\x03", b"training.version\x00\x00\x00\x63")
+        invalid = invalid.replace(b"training.version\x00\x00\x00\x04", b"training.version\x00\x00\x00\x63")
         sock.sendall(wire.frame(wire.AUTH, TOKEN) + wire.frame(wire.TRAIN_OPEN,
                      invalid))
         self.assertEqual(sock.recv(1), b"")
@@ -634,7 +740,7 @@ class TrainingSocketTests(unittest.TestCase):
     def test_zero_recovery_receipt_is_rejected_before_docker(self):
         sock = socket.create_connection(self.server.server_address, timeout=3)
         self.sockets.append(sock)
-        payload = wire.encode_training_open(35, 139, context(), {"3:1": "01" * 16})
+        payload = wire.encode_training_open(35, 139, context(), {"3:1": claim("01" * 16)})
         payload = payload[:-16] + bytes(16)
         sock.sendall(wire.frame(wire.AUTH, TOKEN) + wire.frame(wire.TRAIN_OPEN, payload))
         self.assertEqual(sock.recv(1), b"")

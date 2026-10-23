@@ -313,7 +313,7 @@ namespace nixboy {
                 || (type == kReady && (state != State::AwaitingReady || length != 0))
                 || (type == kOutput && !ready)
                 || (type == kResult && (!ready || training || length < 6 || length > 69))
-                || (type == kTrainingReward && (!ready || !training || length != 19))
+                || (type == kTrainingReward && (!ready || !training || length != 21))
                 || (type == kExit && (!ready || length != 4))
                 || (type == kError && length > 4096)
                 || (type != kReady && type != kOutput && type != kResult && type != kExit && type != kError && type != kTrainingReward)) {
@@ -350,8 +350,9 @@ namespace nixboy {
                 Event event { EventType::TrainingReward, {}, {}, 0 };
                 event.skill = payload[0];
                 event.level = (uint16_t(payload[1]) << 8) | payload[2];
-                std::copy(payload + 3, payload + 19, event.receipt.begin());
-                if (event.skill >= SKILL_COUNT || event.level == 0
+                event.points = (uint16_t(payload[3]) << 8) | payload[4];
+                std::copy(payload + 5, payload + 21, event.receipt.begin());
+                if (event.skill >= SKILL_COUNT || event.level == 0 || event.points < 1 || event.points > 300
                     || std::all_of(event.receipt.begin(), event.receipt.end(), [](uint8_t byte) { return byte == 0; })) {
                     fail(events, "Invalid nix-boy training claim.");
                     return true;
@@ -487,8 +488,8 @@ namespace nixboy {
             error = "Nix-Boy session is disconnected or already open.";
             return false;
         }
-        if (training && std::find(context.begin(), context.end(), std::make_pair(std::string("training.version"), int32_t(3))) == context.end()) {
-            error = "nix-boy training requires context version 3.";
+        if (training && std::find(context.begin(), context.end(), std::make_pair(std::string("training.version"), int32_t(4))) == context.end()) {
+            error = "nix-boy training requires context version 4.";
             return false;
         }
         if ((!training && !claims.empty()) || claims.size() > TrainingState::kMaxClaims) {
@@ -498,7 +499,7 @@ namespace nixboy {
         std::set<std::pair<uint8_t, uint16_t>> keys;
         std::set<TrainingReceipt> receipts;
         for (const auto& claim : claims) {
-            if (claim.skill >= SKILL_COUNT || claim.level == 0
+            if (claim.skill >= SKILL_COUNT || claim.level == 0 || claim.points < 1 || claim.points > 300
                 || std::all_of(claim.receipt.begin(), claim.receipt.end(), [](uint8_t byte) { return byte == 0; })
                 || !keys.emplace(claim.skill, claim.level).second || !receipts.insert(claim.receipt).second) {
                 error = "Invalid or duplicate nix-boy training claim.";
@@ -520,6 +521,7 @@ namespace nixboy {
             for (const auto& claim : claims) {
                 payload.push_back(claim.skill);
                 put16(payload, claim.level);
+                put16(payload, claim.points);
                 payload.insert(payload.end(), claim.receipt.begin(), claim.receipt.end());
             }
         }
@@ -570,12 +572,13 @@ namespace nixboy {
             && impl_->queue(kTrainingAction, { code });
     }
 
-    bool Client::acknowledgeTraining(uint8_t skill, uint16_t level, const TrainingReceipt& receipt, bool accepted)
+    bool Client::acknowledgeTraining(uint8_t skill, uint16_t level, uint16_t points, const TrainingReceipt& receipt, bool accepted)
     {
-        if (impl_->state != Impl::State::Ready || !impl_->training || skill >= SKILL_COUNT || level == 0
+        if (impl_->state != Impl::State::Ready || !impl_->training || skill >= SKILL_COUNT || level == 0 || points < 1 || points > 300
             || std::all_of(receipt.begin(), receipt.end(), [](uint8_t byte) { return byte == 0; })) return false;
         std::vector<uint8_t> payload { skill };
         put16(payload, level);
+        put16(payload, points);
         payload.insert(payload.end(), receipt.begin(), receipt.end());
         payload.push_back(accepted ? 1 : 0);
         return impl_->queue(kTrainingAck, payload);

@@ -65,9 +65,12 @@ int main()
         training.reset();
         require(training.ensureProfile(), "generic skill identity");
         int repairBefore = skillGetValue(gDude, SKILL_REPAIR);
-        require(training.accept(SKILL_REPAIR, 3, receipt)
-                && skillGetValue(gDude, SKILL_REPAIR) == repairBefore + 5,
-            "declarative Repair level three uses the real skill evaluator");
+        require(training.accept(SKILL_REPAIR, 3, receipt, 7)
+                && skillGetValue(gDude, SKILL_REPAIR) == repairBefore + 7,
+            "declarative Repair level three uses its configured award in the real skill evaluator");
+        require(training.accept(SKILL_REPAIR, 3, receipt, 7) && !training.accept(SKILL_REPAIR, 3, receipt, 8)
+                && skillGetValue(gDude, SKILL_REPAIR) == repairBefore + 7,
+            "receipt retry or conflicting award cannot change actual skill value");
         training.reset();
         int noTags[NUM_TAGGED_SKILLS] { -1, -1, -1, -1 };
         skillsSetTagged(noTags, NUM_TAGGED_SKILLS);

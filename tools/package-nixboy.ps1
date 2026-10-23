@@ -80,6 +80,8 @@ The initial catalog maps Unarmed to Filesystem and Science to Networking, each
 with two current-skill bands and five challenge options per level. Skills and
 levels can be extended in YAML using existing trusted task kinds. Restart the
 bridge after editing; preserve earned level IDs and the separate state directory.
+Each level may set reward_points from 1 to 300 (default 5). Previously earned
+amounts remain fixed when catalog rewards are edited.
 Release identity is recorded in nixboy.version and the
 source commit above; see the mod workspace's acceptance record for actual checks.
 Read nixboy/TRAINING.md for setup, controls and current limits.
