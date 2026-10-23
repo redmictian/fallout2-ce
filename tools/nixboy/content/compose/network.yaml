@@ -1,0 +1,52 @@
+services:
+  workstation:
+    image: ${NIXBOY_TRAINING_IMAGE:-fallout2-nixboy-training:dev}
+    pull_policy: never
+    user: "1000:1000"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 256m
+    cpus: 1
+    pids_limit: 128
+    tmpfs:
+      - /home/nixboy:uid=1000,gid=1000,mode=0700,rw,exec,nosuid,nodev
+      - /tmp:mode=1777
+    networks: [lab]
+    depends_on:
+      server:
+        condition: service_healthy
+    labels: &owned
+      org.fallout2-ce.nixboy.training: "1"
+      org.fallout2-ce.nixboy.owner: ${NIXBOY_OWNER}
+      org.fallout2-ce.nixboy.attempt: ${NIXBOY_ATTEMPT}
+      org.fallout2-ce.nixboy.generation: ${NIXBOY_GENERATION}
+  server:
+    image: ${NIXBOY_SSH_IMAGE:-fallout2-nixboy-sshd:dev}
+    pull_policy: never
+    read_only: true
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER, SETGID, SETUID, SYS_CHROOT]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 128m
+    cpus: 0.5
+    pids_limit: 64
+    tmpfs:
+      - /home/nixboy:uid=1000,gid=1000,mode=0700,rw,exec,nosuid,nodev
+      - /tmp:mode=1777
+      - /run:mode=0755
+    networks: [lab]
+    labels: *owned
+    healthcheck:
+      test: [CMD, /usr/sbin/sshd, -t]
+      interval: 1s
+      timeout: 2s
+      retries: 15
+networks:
+  lab:
+    internal: true
+    labels:
+      org.fallout2-ce.nixboy.training: "1"
+      org.fallout2-ce.nixboy.owner: ${NIXBOY_OWNER}
+      org.fallout2-ce.nixboy.attempt: ${NIXBOY_ATTEMPT}
+      org.fallout2-ce.nixboy.generation: ${NIXBOY_GENERATION}

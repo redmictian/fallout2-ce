@@ -1,0 +1,10 @@
+id: unarmed.permissions.shared-directory
+version: 1
+skill: 3
+level: 2
+title: Open a team workspace
+kind: shared-directory
+lesson: "On directories, read lists names, write changes entries and execute traverses paths. A shared directory generally needs all three for its collaborators. Practice: mkdir -p practice-team; chmod u=rwx,g=rx,o= practice-team; ls -ld practice-team."
+instructions: "Set ~/lab/{name} so owner and group have read/write/traverse access, others have none, and no special permission bits are set. Preserve its enclosed note.txt and ownership."
+parameters:
+  name: [engineering, medics, scouts]

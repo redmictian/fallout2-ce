@@ -1,0 +1,10 @@
+id: unarmed.permissions.executable
+version: 1
+skill: 3
+level: 2
+title: Enable a private maintenance script
+kind: executable
+lesson: "A script needs execute permission to run directly. Execute on a file differs from execute on a directory. Practice: printf '#!/bin/sh\\necho ready\\n' > practice.sh; chmod u+x practice.sh; ./practice.sh."
+instructions: "Set ~/lab/{name}.sh so the owner alone may read, write and execute. Group and others must have no access. Preserve the script and its ownership."
+parameters:
+  name: [diagnostic, maintenance, inspection]

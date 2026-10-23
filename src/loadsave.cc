@@ -35,6 +35,7 @@
 #include "memory.h"
 #include "message.h"
 #include "mouse.h"
+#include "nixboy_training_state.h"
 #include "object.h"
 #include "party_member.h"
 #include "perk.h"
@@ -1605,7 +1606,21 @@ static int lsgPerformSaveGame()
 
     debugPrint("LOADSAVE: Total save data written: %ld bytes.\n", fileTell(_flptr));
 
-    fileClose(_flptr);
+    // Training levels are also the source of their additive skill bonus. Keep
+    // levels and receipts together in the checked SAVE.DAT transaction, so a
+    // partial companion-file write cannot save a bonus without its receipt.
+    auto trainingTrailer = nixboy::trainingState().encode();
+    bool trainingSaved = fileWrite(trainingTrailer.data(), 1, trainingTrailer.size(), _flptr) == trainingTrailer.size();
+    int saveCloseResult = fileClose(_flptr);
+    if (!trainingSaved || saveCloseResult != 0) {
+        debugPrint("LOADSAVE: ** Error writing or closing Nix-Boy training state **\n");
+        _RestoreSave();
+        snprintf(_gmpath, sizeof(_gmpath), "%s\\%s%.2d\\", "SAVEGAME", "SLOT", _slot_cursor + 1);
+        MapDirErase(_gmpath, "BAK");
+        _partyMemberUnPrepSave();
+        backgroundSoundResume();
+        return -1;
+    }
 
     // SFALL: Save sfallgv.sav.
     snprintf(_gmpath, sizeof(_gmpath), "%s\\%s%.2d\\", "SAVEGAME", "SLOT", _slot_cursor + 1);
@@ -1744,6 +1759,29 @@ static int lsgLoadGameInSlot(int slot)
         }
 
         debugPrint("LOADSAVE: Load function #%d data size read: %d bytes.\n", index, fileTell(_flptr) - pos);
+    }
+
+    // Legacy saves end immediately after the ordered subsystem records. Once
+    // any extension bytes are present, accept only the complete known trailer.
+    long trainingOffset = fileTell(_flptr);
+    int saveSize = fileGetSize(_flptr);
+    std::array<uint8_t, nixboy::TrainingState::kTrailerSize> trainingTrailer {};
+    bool trainingLoaded = false;
+    if (trainingOffset >= 0 && saveSize >= trainingOffset) {
+        size_t remaining = static_cast<size_t>(saveSize - trainingOffset);
+        if (remaining == 0) {
+            trainingLoaded = nixboy::trainingState().decode(nullptr, 0);
+        } else if (remaining == trainingTrailer.size()
+            && fileRead(trainingTrailer.data(), 1, trainingTrailer.size(), _flptr) == trainingTrailer.size()) {
+            trainingLoaded = nixboy::trainingState().decode(trainingTrailer.data(), trainingTrailer.size());
+        }
+    }
+    if (!trainingLoaded) {
+        debugPrint("LOADSAVE: ** Invalid or truncated Nix-Boy training state **\n");
+        fileClose(_flptr);
+        gameReset();
+        _loadingGame = false;
+        return -1;
     }
 
     debugPrint("LOADSAVE: Total load data read: %ld bytes.\n", fileTell(_flptr));

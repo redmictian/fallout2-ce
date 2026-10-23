@@ -1,0 +1,6 @@
+ARG BASE_IMAGE=fallout2-nixboy:dev
+FROM ${BASE_IMAGE}
+USER root
+RUN apt-get update && apt-get install -y --no-install-recommends openssh-client \
+    && rm -rf /var/lib/apt/lists/*
+USER 1000:1000

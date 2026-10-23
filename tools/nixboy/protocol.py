@@ -6,7 +6,10 @@ import struct
 MAX_PAYLOAD = 65536
 MAX_CONTEXT = 128
 AUTH, OPEN, INPUT, RESIZE, CLOSE, CONTEXT = range(1, 7)
+TRAIN_OPEN, TRAIN_ACTION, TRAIN_ACK = range(7, 10)
 READY, OUTPUT, RESULT, EXIT, ERROR = range(16, 21)
+TRAIN_REWARD = 21
+TRAIN_CHECK, TRAIN_HUB, TRAIN_RESET, TRAIN_ABANDON = range(1, 5)
 NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_.-]{0,63}\Z", re.ASCII)
 TOKEN = re.compile(rb"[0-9a-fA-F]{64}\Z")
 
@@ -97,3 +100,38 @@ def decode_context(payload):
     if offset != len(payload):
         raise ProtocolError("trailing context bytes")
     return values
+
+
+def training_context(values):
+    """Validate the training handshake before catalog/state/Docker access."""
+    if values.get("training.version") != 1:
+        raise ProtocolError("unsupported training version")
+    chunks = []
+    for index in range(4):
+        value = values.get(f"training.profile.{index}")
+        if type(value) is not int or not -(2**31) <= value < 2**31:
+            raise ProtocolError("missing training profile")
+        chunks.append(struct.pack("!I", value & 0xffffffff))
+    profile = b"".join(chunks)
+    if profile == bytes(16):
+        raise ProtocolError("invalid training profile")
+    completed = {}
+    for skill, name in ((3, "unarmed"), (12, "science")):
+        level = values.get(f"training.completed.{name}")
+        if type(level) is not int or not 0 <= level <= 2:
+            raise ProtocolError("invalid training progress")
+        completed[skill] = level
+    return profile.hex(), completed
+
+
+def encode_training_reward(skill, level, receipt):
+    if skill not in (3, 12) or level not in (1, 2) or len(receipt) != 16 or not any(receipt):
+        raise ProtocolError("invalid training reward")
+    return bytes((skill, level)) + receipt
+
+
+def decode_training_ack(payload):
+    if len(payload) != 19 or payload[0] not in (3, 12) or payload[1] not in (1, 2) \
+            or not any(payload[2:18]) or payload[18] not in (0, 1):
+        raise ProtocolError("invalid training acknowledgment")
+    return payload[0], payload[1], payload[2:18].hex(), bool(payload[18])

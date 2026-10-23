@@ -1,0 +1,11 @@
+id: science.text.extract-field
+version: 1
+skill: 12
+level: 1
+title: Extract radio channels
+kind: extract-field
+lesson: "cut -d ':' -f 2 extracts field two from colon-delimited lines. awk -F: '{print $2}' is another option. Practice on printf 'post:42:active\\n'."
+instructions: "Each line in ~/lab/{name}.txt is station:channel:status. Write only its second field to ~/lab/result.txt, one channel per line in original order. Preserve the source."
+parameters:
+  name: [stations, repeaters, frequencies]
+  channel: [17, 23, 41]

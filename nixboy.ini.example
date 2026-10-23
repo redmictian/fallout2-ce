@@ -2,10 +2,13 @@
 ; Start the local bridge and use the token file it generated in that directory.
 [nixboy]
 enabled=1
+; Learning hub: two skill tracks, two levels each, five options per level.
+; Set to 0 for the original ephemeral shell and explicit legacy bindings.
+training=1
 port=47821
 token_file=nixboy.token
 
-; Named results can only write explicitly listed existing global indexes.
+; Legacy free-shell mode only: named results can write listed global indexes.
 ; No bindings are enabled by default. Choose indexes owned by YOUR mod;
 ; arbitrary vanilla indexes will change existing quests or character state.
 ; The starting value is sent to Linux as context key global.<name>.

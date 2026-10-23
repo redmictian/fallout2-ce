@@ -1,0 +1,10 @@
+ARG TRAINING_IMAGE=fallout2-nixboy-training:dev
+FROM ${TRAINING_IMAGE}
+USER root
+RUN apt-get update && apt-get install -y --no-install-recommends openssh-server \
+    && rm -rf /var/lib/apt/lists/* \
+    && ssh-keygen -A \
+    && echo 'nixboy:training' | chpasswd
+COPY container/sshd_config /etc/ssh/sshd_config
+COPY container/sshd_start.py /opt/nixboy/sshd_start.py
+CMD ["python3", "-I", "/opt/nixboy/sshd_start.py"]

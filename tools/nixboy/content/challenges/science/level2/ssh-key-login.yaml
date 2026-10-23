@@ -1,0 +1,10 @@
+id: science.network.ssh-key-login
+version: 1
+skill: 12
+level: 2
+title: Enable passwordless public-key login
+kind: ssh-key-login
+lesson: "ssh-keygen creates a private/public key pair; share only the .pub key. ssh-copy-id nixboy@server installs the public key. The lab account password is training. Keep ~/.ssh private (700) and authorized_keys owner-only (600)."
+instructions: "The workstation key ~/.ssh/id_ed25519 exists, but server does not trust it yet. Configure server so this key authenticates as nixboy without a password. The initial lab password is training. Validation makes a real public-key SSH connection."
+parameters:
+  name: [relay, uplink, archive]

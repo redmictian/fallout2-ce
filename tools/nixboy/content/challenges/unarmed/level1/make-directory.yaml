@@ -1,0 +1,10 @@
+id: unarmed.files.make-directory
+version: 1
+skill: 3
+level: 1
+title: Prepare a delivery directory
+kind: make-directory
+lesson: "Use pwd to see your location, ls to inspect it and mkdir to create directories. Practice: mkdir -p practice/one/two; ls practice/one. Paths are relative to your current directory unless they begin with /."
+instructions: "Under ~/lab create the nested directory {name}/ready. Keep the briefing.txt file intact. Read ~/CHALLENGE.txt for your resolved task. Use Check when finished."
+parameters:
+  name: [delivery, shipment, dispatch]

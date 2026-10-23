@@ -152,6 +152,7 @@ namespace {
         bool exited = false;
         bool cursorVisible = true;
         bool dirty = true;
+        bool training = false;
         nixboy::TerminalTextInput textInput;
 
         static void output(const char* bytes, size_t length, void* user)
@@ -455,7 +456,8 @@ namespace {
         const std::string status = plainStatus(state.status);
         fontDrawText(buffer + statusY * width + kMargin, status.c_str(), width - 2 * kMargin, width, textColor);
         fontDrawText(buffer + (statusY + cellHeight) * width + kMargin,
-            "Esc/Ctrl+C go to Linux. F10 closes. ASCII font: other glyphs appear as ?.",
+            state.training ? "F5 Check / F6 Hub / F7 Reset / F8 Abandon / F10 Close (keeps exercise)"
+                           : "Esc/Ctrl+C go to Linux. F10 closes. ASCII font: other glyphs appear as ?.",
             width - 2 * kMargin, width, textColor);
         windowRefresh(window);
     }
@@ -464,7 +466,8 @@ namespace {
 
 bool nixboyTerminalOpen(uint16_t port, const std::string& token,
     const nixboy::Context& context,
-    const std::function<void(const std::string&, int32_t)>& onResult)
+    const std::function<void(const std::string&, int32_t)>& onResult,
+    const NixboyTrainingCallbacks& training)
 {
     ModalState modal;
     fontSetCurrent(0);
@@ -494,6 +497,7 @@ bool nixboyTerminalOpen(uint16_t port, const std::string& token,
         kMargin, kMargin, _colorTable[992]);
 
     TerminalState state;
+    state.training = training.enabled;
     std::unique_ptr<VTerm, decltype(&vterm_free)> terminal(vterm_new(rows, cols), vterm_free);
     if (!terminal) return false;
     VTerm* term = terminal.get();
@@ -519,12 +523,12 @@ bool nixboyTerminalOpen(uint16_t port, const std::string& token,
 
     std::string error;
     bool opening = state.client.connect(port, token, error)
-        && state.client.open(static_cast<uint16_t>(rows), static_cast<uint16_t>(cols), context, error);
+        && state.client.open(static_cast<uint16_t>(rows), static_cast<uint16_t>(cols), context, error, training.enabled);
     if (!opening) {
         state.status = "Cannot start Nix-Boy: " + error;
         state.dirty = true;
     } else {
-        state.status = "Starting Linux container... (F10 cancels)";
+        state.status = training.enabled ? "Opening training hub... (F10 closes)" : "Starting Linux container... (F10 cancels)";
     }
     const unsigned int start = getTicks();
     bool close = false;
@@ -556,7 +560,8 @@ bool nixboyTerminalOpen(uint16_t port, const std::string& token,
             case nixboy::EventType::Ready:
                 state.ready = true;
                 opening = false;
-                state.status = "Linux connected. Results apply through configured game bindings.";
+                state.status = training.enabled ? "Training connected. F5 checks your work; F6 returns to the hub."
+                                                : "Linux connected. Results apply through configured game bindings.";
                 break;
             case nixboy::EventType::Output:
                 vterm_input_write(term, event.text.data(), event.text.size());
@@ -564,16 +569,26 @@ bool nixboyTerminalOpen(uint16_t port, const std::string& token,
             case nixboy::EventType::Result:
                 // Process termination has a dedicated protocol message. A
                 // shell helper must never impersonate it with a named result.
-                if (state.ready && !state.exited && event.name != "terminal_exit" && onResult) {
+                if (!training.enabled && state.ready && !state.exited && event.name != "terminal_exit" && onResult) {
                     onResult(event.name, event.value);
                 }
                 break;
+            case nixboy::EventType::TrainingReward: {
+                if (!training.enabled || !state.ready || state.exited) break;
+                bool accepted = training.reward && training.reward(event.skill, event.level, event.receipt);
+                bool queued = state.client.acknowledgeTraining(event.skill, event.level, event.receipt, accepted);
+                if (training.snapshot) queued = state.client.sendContext(training.snapshot()) && queued;
+                state.status = !queued ? "Reward response could not be sent. Reopen to reconcile training progress."
+                    : accepted         ? "Training reward recorded. Save your game to keep this progress."
+                                       : "Training reward rejected: unsupported, stale or out-of-order completion.";
+                break;
+            }
             case nixboy::EventType::Exit:
                 if (!state.exited) {
                     state.exited = true;
                     state.ready = false;
                     opening = false;
-                    if (onResult) onResult("terminal_exit", event.value);
+                    if (!training.enabled && onResult) onResult("terminal_exit", event.value);
                     state.status = "Linux session exited with code " + std::to_string(event.value) + ". F10 closes.";
                 }
                 break;
@@ -597,6 +612,17 @@ bool nixboyTerminalOpen(uint16_t port, const std::string& token,
                 break;
             }
             if (!state.ready || close) continue;
+            if (training.enabled && event.type == SDL_KEYDOWN
+                && event.key.keysym.sym >= SDLK_F5 && event.key.keysym.sym <= SDLK_F8) {
+                if (event.key.repeat == 0) {
+                    auto action = static_cast<nixboy::TrainingAction>(event.key.keysym.sym - SDLK_F5 + 1);
+                    if (!state.client.sendTrainingAction(action)) {
+                        state.status = "Training action queue full or disconnected. Reopen to resume.";
+                        state.dirty = true;
+                    }
+                }
+                continue;
+            }
             if (event.type == SDL_KEYDOWN) {
                 handleKey(term, state, event.key);
             } else if (event.type == SDL_KEYUP) {

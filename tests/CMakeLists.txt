@@ -7,6 +7,24 @@ target_include_directories(debug-launch-test PRIVATE ../src)
 target_compile_features(debug-launch-test PRIVATE cxx_std_17)
 add_test(NAME debug-launch COMMAND debug-launch-test)
 
+add_executable(nixboy-training-state-test nixboy_training_state_test.cc ../src/nixboy_training_state.cc)
+target_include_directories(nixboy-training-state-test PRIVATE ../src)
+target_compile_features(nixboy-training-state-test PRIVATE cxx_std_17)
+add_test(NAME nixboy-training-state COMMAND nixboy-training-state-test)
+
+# This focused Linux fixture links the production skill evaluator and stubs its
+# world dependencies. Section GC avoids linking unrelated skill-use gameplay.
+find_path(NIXBOY_TEST_ZLIB_INCLUDE_DIR zlib.h HINTS "${FETCHCONTENT_SOURCE_DIR_ZLIB}")
+find_path(NIXBOY_TEST_ZCONF_INCLUDE_DIR zconf.h HINTS "${NIXBOY_TEST_ZLIB_INCLUDE_DIR}")
+if(UNIX AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND NIXBOY_TEST_ZLIB_INCLUDE_DIR AND NIXBOY_TEST_ZCONF_INCLUDE_DIR)
+    add_executable(nixboy-skill-reward-test nixboy_skill_reward_test.cc ../src/skill.cc ../src/nixboy_training_state.cc)
+    target_include_directories(nixboy-skill-reward-test PRIVATE ../src "${NIXBOY_TEST_ZLIB_INCLUDE_DIR}" "${NIXBOY_TEST_ZCONF_INCLUDE_DIR}")
+    target_compile_features(nixboy-skill-reward-test PRIVATE cxx_std_17)
+    target_compile_options(nixboy-skill-reward-test PRIVATE -ffunction-sections -fdata-sections)
+    set_property(TARGET nixboy-skill-reward-test APPEND_STRING PROPERTY LINK_FLAGS " -Wl,--gc-sections")
+    add_test(NAME nixboy-skill-reward COMMAND nixboy-skill-reward-test)
+endif()
+
 find_package(Threads REQUIRED)
 add_executable(nixboy-client-test nixboy_client_test.cc ../src/nixboy_client.cc)
 target_include_directories(nixboy-client-test PRIVATE ../src)

@@ -22,6 +22,7 @@
 #include "obj_types.h"
 #include "object.h"
 #include "scripts.h"
+#include "skill.h"
 #endif
 
 namespace fallout {
@@ -31,6 +32,7 @@ namespace {
 
     struct Options {
         bool enabled = false;
+        bool training = true;
         uint16_t port = 47821;
         std::string tokenFile = "nixboy.token";
         std::unordered_map<std::string, int> bindings;
@@ -77,6 +79,16 @@ namespace {
         if (!options.enabled) return true;
 
         char* value = nullptr;
+        if (configGetString(&config, "nixboy", "training", &value)) {
+            if (std::string(value) == "1" || std::string(value) == "true")
+                options.training = true;
+            else if (std::string(value) == "0" || std::string(value) == "false")
+                options.training = false;
+            else {
+                error = "nixboy.ini: training must be 1/true or 0/false.";
+                return false;
+            }
+        }
         if (configGetString(&config, "nixboy", "port", &value)) {
             int port;
             if (!parseInteger(value, 1, 65535, port)) {
@@ -119,6 +131,51 @@ namespace {
         showDialogBox(error.c_str(), nullptr, 0, 192, 135, _colorTable[992], nullptr, _colorTable[992], DIALOG_BOX_LARGE);
     }
 
+    nixboy::Context collectContext(const Options& options)
+    {
+        const auto ticks = gameTimeGetTime();
+        nixboy::Context context {
+            { "game.time_ticks", static_cast<int32_t>(ticks > INT32_MAX ? INT32_MAX : ticks) },
+            { "game.map", mapGetCurrentMap() },
+            { "player.tile", gDude->tile },
+            { "player.elevation", gDude->elevation },
+            { "player.hp", critterGetHitPoints(gDude) },
+        };
+        if (options.training) {
+            static constexpr const char* skillNames[] = {
+                "small_guns", "big_guns", "energy_weapons", "unarmed", "melee_weapons", "throwing",
+                "first_aid", "doctor", "sneak", "lockpick", "steal", "traps", "science", "repair",
+                "speech", "barter", "gambling", "outdoorsman"
+            };
+            static_assert(sizeof(skillNames) / sizeof(skillNames[0]) == SKILL_COUNT, "Update training skill identifiers");
+            static_assert(SKILL_UNARMED == 3 && SKILL_SCIENCE == 12, "Training track wire IDs must remain stable");
+            for (int skill = 0; skill < SKILL_COUNT; skill++) {
+                context.emplace_back(std::string("skill.") + skillNames[skill], skillGetValue(gDude, skill));
+            }
+            context.emplace_back("training.version", 1);
+            for (size_t index = 0; index < 4; index++) {
+                context.emplace_back("training.profile." + std::to_string(index), nixboy::trainingState().profileWord(index));
+            }
+            context.emplace_back("training.completed.unarmed", nixboy::trainingState().completed(SKILL_UNARMED));
+            context.emplace_back("training.completed.science", nixboy::trainingState().completed(SKILL_SCIENCE));
+            for (int skill : { SKILL_UNARMED, SKILL_SCIENCE }) {
+                for (int level = 1; level <= nixboy::trainingState().completed(skill); level++) {
+                    auto receipt = nixboy::trainingState().receipt(skill, level);
+                    for (int index = 0; index < 4; index++) {
+                        const uint8_t* bytes = receipt.data() + index * 4;
+                        uint32_t bits = (uint32_t(bytes[0]) << 24) | (uint32_t(bytes[1]) << 16) | (uint32_t(bytes[2]) << 8) | bytes[3];
+                        int32_t word = bits <= uint32_t(INT32_MAX) ? static_cast<int32_t>(bits) : -1 - static_cast<int32_t>(~bits);
+                        context.emplace_back(std::string("training.receipt.") + skillNames[skill] + "." + std::to_string(level) + "." + std::to_string(index), word);
+                    }
+                }
+            }
+        } else {
+            for (const auto& binding : options.bindings)
+                context.emplace_back("global." + binding.first, gameGetGlobalVar(binding.second));
+        }
+        return context;
+    }
+
 } // namespace
 #endif
 
@@ -147,7 +204,7 @@ void nixboyOpen()
     if (!options.enabled || gDude == nullptr) return;
 
     for (const auto& binding : options.bindings) {
-        if (binding.second >= gGameGlobalVarsLength) {
+        if (!options.training && binding.second >= gGameGlobalVarsLength) {
             showError("nixboy.ini: a result binding is outside this game's global variable range.");
             return;
         }
@@ -168,19 +225,21 @@ void nixboyOpen()
         return;
     }
 
-    const auto ticks = gameTimeGetTime();
-    nixboy::Context context {
-        { "game.time_ticks", static_cast<int32_t>(ticks > INT32_MAX ? INT32_MAX : ticks) },
-        { "game.map", mapGetCurrentMap() },
-        { "player.tile", gDude->tile },
-        { "player.elevation", gDude->elevation },
-        { "player.hp", critterGetHitPoints(gDude) },
-    };
-    for (const auto& binding : options.bindings) {
-        context.emplace_back("global." + binding.first, gameGetGlobalVar(binding.second));
+    if (options.training && !nixboy::trainingState().ensureProfile()) {
+        showError("Cannot create the training character identity.");
+        return;
     }
+    NixboyTrainingCallbacks training;
+    training.enabled = options.training;
+    training.reward = [](uint8_t skill, uint8_t level, const nixboy::TrainingReceipt& receipt) {
+        bool accepted = nixboy::trainingState().accept(skill, level, receipt);
+        debugPrint("Nix-Boy training: skill %d level %d %s.\n", skill, level, accepted ? "accepted" : "rejected");
+        return accepted;
+    };
+    training.snapshot = [&options]() { return collectContext(options); };
 
-    bool opened = nixboyTerminalOpen(options.port, token, context, [&options](const std::string& name, int32_t value) {
+    bool opened = nixboyTerminalOpen(options.port, token, collectContext(options), [&options](const std::string& name, int32_t value) {
+        if (options.training) return;
         auto binding = options.bindings.find(name);
         if (binding == options.bindings.end()) {
             debugPrint("Nix-Boy: ignored unbound result '%s'.\n", name.c_str());
@@ -188,8 +247,7 @@ void nixboyOpen()
         }
         // The modal's game thread is the only writer. Never accept an index or
         // pointer from the container; bounds are checked again by the game API.
-        gameSetGlobalVar(binding->second, value);
-    });
+        gameSetGlobalVar(binding->second, value); }, training);
     if (!opened) {
         showError("Cannot create the Nix-Boy terminal window. Check available memory and game fonts.");
     }

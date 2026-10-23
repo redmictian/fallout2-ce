@@ -258,6 +258,8 @@ target_sources(${EXECUTABLE_NAME} PUBLIC
 target_sources(${EXECUTABLE_NAME} PUBLIC
     "src/nixboy.cc"
     "src/nixboy.h"
+    "src/nixboy_training_state.cc"
+    "src/nixboy_training_state.h"
     "src/audio_engine.cc"
     "src/audio_engine.h"
     "src/delay.cc"

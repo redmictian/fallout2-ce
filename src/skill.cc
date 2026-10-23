@@ -1,4 +1,5 @@
 #include "skill.h"
+#include "nixboy_training_state.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -259,6 +260,7 @@ int skillGetValue(Object* critter, int skill)
         value += traitGetSkillModifier(skill);
         value += perkGetSkillModifier(critter, skill);
         value += skillGetGameDifficultyModifier(skill);
+        value += nixboy::trainingState().bonus(skill);
     }
 
     if (value > 300) {

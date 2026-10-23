@@ -37,6 +37,7 @@
 #include "mouse.h"
 #include "movie.h"
 #include "movie_effect.h"
+#include "nixboy_training_state.h"
 #include "object.h"
 #include "options.h"
 #include "palette.h"
@@ -122,6 +123,7 @@ static void** gGameGlobalPointers = nullptr;
 // 0x442580
 int gameInitWithOptions(const char* windowTitle, bool isMapper, int font, int a4, int argc, char** argv)
 {
+    nixboy::trainingState().reset();
     char path[COMPAT_MAX_PATH];
 
     if (gameMemoryInit() == -1) {
@@ -387,6 +389,7 @@ int gameInitWithOptions(const char* windowTitle, bool isMapper, int font, int a4
 // 0x442B84
 void gameReset()
 {
+    nixboy::trainingState().reset();
     tileDisable();
     paletteReset();
     randomReset();

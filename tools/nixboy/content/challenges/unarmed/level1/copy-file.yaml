@@ -1,0 +1,10 @@
+id: unarmed.files.copy-file
+version: 1
+skill: 3
+level: 1
+title: Copy a manifest
+kind: copy-file
+lesson: "cp SOURCE DESTINATION copies a file while retaining its source. Inspect files with cat. Practice: printf 'hello\\n' > practice.txt; cp practice.txt practice-copy.txt; cat practice-copy.txt."
+instructions: "Copy ~/lab/incoming/{name}.txt to ~/lab/delivery/manifest.txt without changing or removing the original. Keep file contents intact."
+parameters:
+  name: [supplies, medicine, tools]

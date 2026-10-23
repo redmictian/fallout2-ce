@@ -7,6 +7,8 @@
 #include <utility>
 #include <vector>
 
+#include "nixboy_training_state.h"
+
 namespace fallout {
 namespace nixboy {
 
@@ -15,6 +17,7 @@ namespace nixboy {
     enum class EventType { Ready,
         Output,
         Result,
+        TrainingReward,
         Exit,
         Error };
 
@@ -23,7 +26,15 @@ namespace nixboy {
         std::string text;
         std::string name;
         int32_t value = 0;
+        uint8_t skill = 0;
+        uint8_t level = 0;
+        TrainingReceipt receipt {};
     };
+
+    enum class TrainingAction : uint8_t { Check = 1,
+        Hub = 2,
+        Reset = 3,
+        Abandon = 4 };
 
     // Single-threaded, frame-driven client. No game objects or callbacks cross this
     // boundary. Connect is loopback-only and bounded to 250 ms; other calls never
@@ -38,11 +49,13 @@ namespace nixboy {
         Client& operator=(Client&&) = delete;
 
         bool connect(uint16_t port, const std::string& token, std::string& error);
-        bool open(uint16_t rows, uint16_t cols, const Context& context, std::string& error);
+        bool open(uint16_t rows, uint16_t cols, const Context& context, std::string& error, bool training = false);
         // False means not ready, invalid arguments, or bounded send queue full.
         bool sendInput(const std::string& bytes);
         bool resize(uint16_t rows, uint16_t cols);
         bool sendContext(const Context& context);
+        bool sendTrainingAction(TrainingAction action);
+        bool acknowledgeTraining(uint8_t skill, uint8_t level, const TrainingReceipt& receipt, bool accepted);
         void poll(std::vector<Event>& events);
         void close();
         bool isConnected() const;

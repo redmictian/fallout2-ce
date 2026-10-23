@@ -193,12 +193,12 @@ struct Service {
     }
 };
 
-void start(Service& service, Client& client, const Context& context = {})
+void start(Service& service, Client& client, const Context& context = {}, bool training = false)
 {
     std::string error;
     require(client.connect(service.port, kToken, error), error.c_str());
     service.acceptClient();
-    require(client.open(24, 80, context, error), error.c_str());
+    require(client.open(24, 80, context, error, training), error.c_str());
     std::vector<Event> events;
     client.poll(events);
     require(events.empty(), "unexpected event before server sends");
@@ -208,7 +208,7 @@ void start(Service& service, Client& client, const Context& context = {})
     put16(expected, 80);
     Bytes encoded = contextBytes(context);
     expected.insert(expected.end(), encoded.begin(), encoded.end());
-    require(service.readFrame(2) == expected, "OPEN dimensions/context signed encoding");
+    require(service.readFrame(training ? 7 : 2) == expected, "OPEN dimensions/context signed encoding");
 }
 
 void pollUntil(Client& client, std::vector<Event>& events, size_t count)
@@ -273,6 +273,8 @@ void testValidation()
     require(!client.open(24, 80, { { "9invalid", 1 } }, error), "invalid first name char");
     require(!client.open(24, 80, { { "bad name", 1 } }, error), "invalid name char");
     require(!client.open(24, 80, { { std::string(65, 'a'), 1 } }, error), "context name limit");
+    require(!client.open(24, 80, {}, error, true), "training requires version context");
+    require(!client.open(24, 80, { { "training.version", 2 } }, error, true), "unsupported training context version");
     Context large;
     for (int index = 0; index < 129; index++) {
         large.emplace_back("value" + std::to_string(index), index);
@@ -333,6 +335,8 @@ void testRoundTrip()
 
 void testMalformedFrames()
 {
+    expectError(frame(21, Bytes(18, 1)));
+    expectError(frame(21, Bytes(18, 1)), true); // Legacy sessions cannot award training.
     expectError(frame(17, bytes("before-ready")));
     expectError(frame(18, { 1, 'x', 0, 0, 0, 1 }));
     expectError(frame(19, { 0, 0, 0, 0 }));
@@ -357,6 +361,70 @@ void testMalformedFrames()
     std::vector<Event> events;
     pollUntil(client, events, 1);
     require(events[0].type == EventType::Error && events[0].text == message && !client.isConnected(), "valid UTF-8 error preserved and fatal");
+}
+
+void testTrainingProtocol()
+{
+    using fallout::nixboy::TrainingAction;
+    using fallout::nixboy::TrainingReceipt;
+    Service service;
+    Client client;
+    Context context { { "training.version", 1 }, { "training.profile.0", INT32_MIN } };
+    start(service, client, context, true);
+    TrainingReceipt receipt {};
+    receipt.back() = 37;
+    require(!client.sendTrainingAction(TrainingAction::Check), "actions wait for READY");
+    require(!client.acknowledgeTraining(3, 1, receipt, true), "ack waits for READY");
+    makeReady(service, client);
+    for (int code = 1; code <= 4; code++)
+        require(client.sendTrainingAction(static_cast<TrainingAction>(code)), "training action accepted");
+    require(!client.sendTrainingAction(static_cast<TrainingAction>(5)), "invalid training action rejected");
+    std::vector<Event> events;
+    client.poll(events);
+    for (int code = 1; code <= 4; code++)
+        require(service.readFrame(8) == Bytes { static_cast<uint8_t>(code) }, "action wire encoding");
+    Bytes reward { 3, 1 };
+    reward.insert(reward.end(), receipt.begin(), receipt.end());
+    service.send(frame(21, reward));
+    pollUntil(client, events, 1);
+    require(events.size() == 1 && events[0].type == EventType::TrainingReward
+            && events[0].skill == 3 && events[0].level == 1 && events[0].receipt == receipt,
+        "typed reward receipt decoded");
+    require(client.acknowledgeTraining(3, 1, receipt, true), "queue accepted acknowledgment");
+    require(client.acknowledgeTraining(3, 1, receipt, false), "queue rejected acknowledgment");
+    events.clear();
+    client.poll(events);
+    Bytes ack = reward;
+    ack.push_back(1);
+    require(service.readFrame(9) == ack, "accepted acknowledgment preserves receipt");
+    ack.back() = 0;
+    require(service.readFrame(9) == ack, "rejected acknowledgment explicit");
+    service.send(frame(21, Bytes(17, 1)));
+    pollUntil(client, events, 1);
+    require(events[0].type == EventType::Error && !client.isConnected(), "malformed reward length disconnects");
+
+    Service helperService;
+    Client helperClient;
+    start(helperService, helperClient, context, true);
+    makeReady(helperService, helperClient);
+    helperService.send(frame(18, { 1, 'x', 0, 0, 0, 1 }));
+    events.clear();
+    pollUntil(helperClient, events, 1);
+    require(events[0].type == EventType::Error && !helperClient.isConnected(), "legacy helper result cannot enter training session");
+
+    Service earlyService;
+    Client earlyClient;
+    start(earlyService, earlyClient, context, true);
+    earlyService.send(frame(21, reward));
+    events.clear();
+    pollUntil(earlyClient, events, 1);
+    require(events[0].type == EventType::Error && !earlyClient.isConnected(), "training reward before READY rejected");
+
+    Service legacyService;
+    Client legacy;
+    start(legacyService, legacy);
+    makeReady(legacyService, legacy);
+    require(!legacy.sendTrainingAction(TrainingAction::Check) && !legacy.acknowledgeTraining(3, 1, receipt, true), "legacy client cannot send training controls");
 }
 
 void testFragmentedPayloadAndLimits()
@@ -443,6 +511,7 @@ int main()
         [[maybe_unused]] Networking networking;
         testValidation();
         testRoundTrip();
+        testTrainingProtocol();
         testMalformedFrames();
         testFragmentedPayloadAndLimits();
         testDisconnectAndClose();

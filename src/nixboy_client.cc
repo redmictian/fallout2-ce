@@ -39,11 +39,15 @@ namespace nixboy {
         constexpr uint8_t kResize = 4;
         constexpr uint8_t kClose = 5;
         constexpr uint8_t kContext = 6;
+        constexpr uint8_t kTrainingOpen = 7;
+        constexpr uint8_t kTrainingAction = 8;
+        constexpr uint8_t kTrainingAck = 9;
         constexpr uint8_t kReady = 16;
         constexpr uint8_t kOutput = 17;
         constexpr uint8_t kResult = 18;
         constexpr uint8_t kExit = 19;
         constexpr uint8_t kError = 20;
+        constexpr uint8_t kTrainingReward = 21;
 
 #ifdef _WIN32
         using Socket = SOCKET;
@@ -205,6 +209,7 @@ namespace nixboy {
             Ready };
         Socket socket = kInvalidSocket;
         State state = State::Closed;
+        bool training = false;
         std::deque<std::vector<uint8_t>> outgoing;
         size_t outgoingOffset = 0;
         size_t queuedBytes = 0;
@@ -227,6 +232,7 @@ namespace nixboy {
             }
 #endif
             state = State::Closed;
+            training = false;
             outgoing.clear();
             outgoingOffset = 0;
             queuedBytes = 0;
@@ -304,10 +310,11 @@ namespace nixboy {
             if (length > kMaxPayload
                 || (type == kReady && (state != State::AwaitingReady || length != 0))
                 || (type == kOutput && !ready)
-                || (type == kResult && (!ready || length < 6 || length > 69))
+                || (type == kResult && (!ready || training || length < 6 || length > 69))
+                || (type == kTrainingReward && (!ready || !training || length != 18))
                 || (type == kExit && (!ready || length != 4))
                 || (type == kError && length > 4096)
-                || (type != kReady && type != kOutput && type != kResult && type != kExit && type != kError)) {
+                || (type != kReady && type != kOutput && type != kResult && type != kExit && type != kError && type != kTrainingReward)) {
                 fail(events, "Invalid Nix-Boy protocol frame or session order.");
                 return true;
             }
@@ -337,6 +344,14 @@ namespace nixboy {
                 events.push_back({ EventType::Exit, {}, {}, getSigned32(payload) });
                 disconnect();
                 break;
+            case kTrainingReward: {
+                Event event { EventType::TrainingReward, {}, {}, 0 };
+                event.skill = payload[0];
+                event.level = payload[1];
+                std::copy(payload + 2, payload + 18, event.receipt.begin());
+                events.push_back(std::move(event));
+                break;
+            }
             case kError:
                 if (!validUtf8(payload, length)) {
                     fail(events, "Nix-Boy bridge returned invalid UTF-8 error text.");
@@ -457,11 +472,15 @@ namespace nixboy {
         return impl_->queue(kAuth, std::vector<uint8_t>(token.begin(), token.end()));
     }
 
-    bool Client::open(uint16_t rows, uint16_t cols, const Context& context, std::string& error)
+    bool Client::open(uint16_t rows, uint16_t cols, const Context& context, std::string& error, bool training)
     {
         error.clear();
         if (impl_->state != Impl::State::Connected) {
             error = "Nix-Boy session is disconnected or already open.";
+            return false;
+        }
+        if (training && std::find(context.begin(), context.end(), std::make_pair(std::string("training.version"), int32_t(1))) == context.end()) {
+            error = "Nix-Boy training requires context version 1.";
             return false;
         }
         std::vector<uint8_t> payload;
@@ -471,11 +490,12 @@ namespace nixboy {
             error = "Invalid Nix-Boy terminal dimensions or context (maximum 128 unique names).";
             return false;
         }
-        if (!impl_->queue(kOpen, payload)) {
+        if (!impl_->queue(training ? kTrainingOpen : kOpen, payload)) {
             error = "Nix-Boy send queue is full.";
             return false;
         }
         impl_->state = Impl::State::AwaitingReady;
+        impl_->training = training;
         return true;
     }
 
@@ -508,6 +528,22 @@ namespace nixboy {
         }
         std::vector<uint8_t> payload;
         return encodeContext(context, payload) && impl_->queue(kContext, payload);
+    }
+
+    bool Client::sendTrainingAction(TrainingAction action)
+    {
+        uint8_t code = static_cast<uint8_t>(action);
+        return impl_->state == Impl::State::Ready && impl_->training && code >= 1 && code <= 4
+            && impl_->queue(kTrainingAction, { code });
+    }
+
+    bool Client::acknowledgeTraining(uint8_t skill, uint8_t level, const TrainingReceipt& receipt, bool accepted)
+    {
+        if (impl_->state != Impl::State::Ready || !impl_->training) return false;
+        std::vector<uint8_t> payload { skill, level };
+        payload.insert(payload.end(), receipt.begin(), receipt.end());
+        payload.push_back(accepted ? 1 : 0);
+        return impl_->queue(kTrainingAck, payload);
     }
 
     void Client::poll(std::vector<Event>& events)

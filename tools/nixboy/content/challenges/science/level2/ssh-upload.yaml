@@ -1,0 +1,10 @@
+id: science.network.ssh-upload
+version: 1
+skill: 12
+level: 2
+title: Deliver a report over SSH
+kind: ssh-upload
+lesson: "The server is reachable as server on this isolated lab network. scp LOCAL nixboy@server:REMOTE copies over SSH. Keys are prepared for this exercise. Practice: ssh nixboy@server pwd. The two machines have separate filesystems."
+instructions: "Deliver ~/lab/{name}.txt to server:/home/nixboy/delivery.txt. Both source and remote file must contain the complete original report. SSH keys and known_hosts are already configured."
+parameters:
+  name: [dispatch, blueprint, survey]

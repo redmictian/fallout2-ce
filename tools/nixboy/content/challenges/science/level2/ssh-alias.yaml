@@ -1,0 +1,10 @@
+id: science.network.ssh-alias
+version: 1
+skill: 12
+level: 2
+title: Configure an SSH host alias
+kind: ssh-alias
+lesson: "~/.ssh/config Host blocks define aliases. For example: Host practice, then indented HostName server and User nixboy. Each setting is on its own line. ssh -G ALIAS displays resolved settings without connecting."
+instructions: "Configure SSH so 'ssh {name}' reaches server as nixboy using the prepared key. The alias must work with noninteractive public-key authentication. Preserve the prepared keys."
+parameters:
+  name: [relay, uplink, archive]

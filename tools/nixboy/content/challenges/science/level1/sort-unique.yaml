@@ -1,0 +1,11 @@
+id: science.text.sort-unique
+version: 1
+skill: 12
+level: 1
+title: Deduplicate a contact list
+kind: sort-unique
+lesson: "sort orders lines; sort -u also removes duplicate lines. Practice: printf 'beta\\nalpha\\nbeta\\n' | sort -u. All lab names are lowercase ASCII so sort order is unambiguous."
+instructions: "Read ~/lab/{name}.txt and write distinct names to ~/lab/result.txt in ascending alphabetical order, one per line. Preserve the source."
+parameters:
+  name: [contacts, couriers, operators]
+  subject: [delta, echo, foxtrot]

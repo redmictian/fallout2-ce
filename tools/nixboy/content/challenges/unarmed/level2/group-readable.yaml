@@ -1,0 +1,10 @@
+id: unarmed.permissions.group-readable
+version: 1
+skill: 3
+level: 2
+title: Share a report without group edits
+kind: group-readable
+lesson: "Group read access does not require group write access. chmod g-w FILE removes only group writes. A complete mode can also replace all permission bits at once. Practice with ~/practice.txt and inspect ls -l."
+instructions: "Set ~/lab/{name}.txt so owner may read/write, group may read only and others have no access. Nobody may execute. Preserve the contents and ownership."
+parameters:
+  name: [roster, schedule, stocktake]

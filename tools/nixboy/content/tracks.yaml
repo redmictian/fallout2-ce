@@ -1,0 +1,14 @@
+schema: 1
+tracks:
+  - id: unarmed
+    title: Unarmed
+    skill: 3
+    levels:
+      1: Files and navigation
+      2: Ownership and permissions
+  - id: science
+    title: Science
+    skill: 12
+    levels:
+      1: Text processing
+      2: SSH and networking

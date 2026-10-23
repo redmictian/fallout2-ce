@@ -22,6 +22,7 @@ import time
 
 from protocol import (
     AUTH, CLOSE, CONTEXT, ERROR, EXIT, INPUT, OPEN, OUTPUT, READY, RESIZE, RESULT,
+    TRAIN_OPEN, TRAIN_ACTION, TRAIN_ACK, training_context, decode_training_ack,
     MAX_PAYLOAD, TOKEN, ProtocolError, decode_context, dimensions, encode_result,
     frame, read_frame, validate_event,
 )
@@ -29,6 +30,94 @@ from protocol import (
 LOG = logging.getLogger("nixboy")
 MAX_CONTROL = 32768
 DOCKER_TIMEOUT = 10
+
+# These programs run from the immutable interpreter inside one owned exercise
+# container. A nonce-specific flock and cancellation marker order close against
+# delayed Docker exec startup. Container PIDs are never used as host PIDs.
+TRAINING_LAUNCH = r'''
+import fcntl,json,os,sys,time
+rows,cols,token=sys.argv[1:]
+base='/tmp/nixboy/attachment-'+token
+os.makedirs('/tmp/nixboy',mode=0o700,exist_ok=True)
+def start(pid):
+    return open('/proc/%d/stat'%pid).read().rsplit(')',1)[1].split()[19]
+with open(base+'.lock','a') as lock:
+    deadline=time.monotonic()+1
+    while True:
+        try:
+            fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+            break
+        except BlockingIOError:
+            if time.monotonic()>=deadline:
+                sys.exit(2)
+            time.sleep(.01)
+    if os.path.exists(base+'.cancel'):
+        sys.exit(0)
+    pid=os.getpid()
+    with open(base+'.json','x') as record:
+        json.dump({'pid':pid,'start':start(pid),'sid':os.getsid(0),'token':token},record)
+os.execv(sys.executable,[sys.executable,'/opt/nixboy/shell.py',rows,cols])
+'''
+
+TRAINING_STOP = r'''
+import fcntl,json,os,signal,sys,time
+token=sys.argv[1]
+base='/tmp/nixboy/attachment-'+token
+os.makedirs('/tmp/nixboy',mode=0o700,exist_ok=True)
+def identity(pid):
+    try:
+        return open('/proc/%d/stat'%pid).read().rsplit(')',1)[1].split()[19]
+    except (OSError,IndexError):
+        return None
+with open(base+'.lock','a') as lock:
+    deadline=time.monotonic()+1
+    while True:
+        try:
+            fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+            break
+        except BlockingIOError:
+            if time.monotonic()>=deadline:
+                sys.exit(2)
+            time.sleep(.01)
+    with open(base+'.cancel','a'):
+        pass
+    try:
+        with open(base+'.json') as record:
+            value=json.loads(record.read(1024))
+        pid=value['pid']
+        if type(pid) is not int or pid<=1 or value.get('token')!=token or identity(pid)!=value['start']:
+            sys.exit(0)
+    except (OSError,ValueError,KeyError,TypeError):
+        sys.exit(0)
+owned={pid:value['start']}
+needle=('NIXBOY_ATTACHMENT_TOKEN='+token).encode()+b'\0'
+for entry in os.listdir('/proc'):
+    if not entry.isdigit():
+        continue
+    child=int(entry)
+    if child<=1 or child==os.getpid():
+        continue
+    try:
+        if os.getsid(child)==value['sid'] and needle in open('/proc/%d/environ'%child,'rb').read(131072):
+            stamp=identity(child)
+            if stamp is not None:
+                owned[child]=stamp
+    except (OSError,ValueError):
+        pass
+for sig in (signal.SIGHUP,signal.SIGTERM,signal.SIGKILL):
+    for target,stamp in owned.items():
+        if identity(target)==stamp:
+            try:
+                os.kill(target,sig)
+            except OSError:
+                pass
+    if sig!=signal.SIGKILL:
+        time.sleep(.2)
+try:
+    os.unlink(base+'.json')
+except OSError:
+    pass
+'''
 
 
 def load_token(path):
@@ -381,6 +470,121 @@ class ContainerRef:
         self.api.remove_container(self.id, force=force, v=True)
 
 
+class TrainingShell:
+    """PTY attachment only: the durable manager owns the challenge containers.
+
+    Training intentionally has no helper RESULT relay. Assessment is performed
+    by the host validator, not commands executed by the learner.
+    """
+
+    def __init__(self, client, container_id, send, finished):
+        self.client, self.container_id = client, container_id
+        self.send, self.finished = send, finished
+        self.closed = threading.Event()
+        self.tty = None
+        self.exec_id = None
+        self.requests = queue.Queue(maxsize=16)
+        self.output_lock = threading.Lock()
+        self.attachment_token = secrets.token_hex(16)
+        self.started = False
+
+    def start(self, rows, cols, context):
+        with self.output_lock:
+            if self.closed.is_set():
+                return
+            self.started = True
+        self.exec_id = self.client.api.exec_create(
+            self.container_id, ["python3", "-I", "-c", TRAINING_LAUNCH,
+                                str(rows), str(cols), self.attachment_token],
+            stdin=True, stdout=True, stderr=True, tty=True, user="1000:1000",
+            environment={"NIXBOY_CONTEXT_JSON": json.dumps(context, separators=(",", ":")),
+                         "NIXBOY_ATTACHMENT_TOKEN": self.attachment_token,
+                         "PS1": "challenge:\\w$ "},
+        )["Id"]
+        stream = Duplex(self.client.api.exec_start(self.exec_id, tty=True, socket=True))
+        with self.output_lock:
+            if self.closed.is_set():
+                stream.close()
+                return
+            self.tty = stream
+            self.tty.timeout(None)
+        for worker in (self._output, self._requests):
+            threading.Thread(target=self._guard, args=(worker,), daemon=True).start()
+
+    def _guard(self, worker):
+        try:
+            worker()
+        except Exception:
+            if not self.closed.is_set():
+                LOG.exception("Training terminal attachment failed")
+        finally:
+            if not self.closed.is_set():
+                self.close()
+                self.finished()
+
+    def _output(self):
+        while not self.closed.is_set():
+            data = self.tty.read(16384)
+            if not data:
+                return
+            with self.output_lock:
+                if not self.closed.is_set():
+                    self.send(OUTPUT, data)
+
+    def _requests(self):
+        while not self.closed.is_set():
+            try:
+                kind, value = self.requests.get(timeout=0.25)
+            except queue.Empty:
+                continue
+            if kind == "input":
+                self.tty.write(value)
+            else:
+                rows, cols = value
+                self.client.api.exec_resize(self.exec_id, height=rows, width=cols)
+
+    def _enqueue(self, value):
+        if self.closed.is_set():
+            return
+        try:
+            self.requests.put_nowait(value)
+        except queue.Full as exc:
+            raise ProtocolError("training terminal input queue is full") from exc
+
+    def input(self, value):
+        self._enqueue(("input", value))
+
+    def resize(self, rows, cols):
+        self._enqueue(("resize", (rows, cols)))
+
+    def close(self):
+        with self.output_lock:
+            if self.closed.is_set():
+                return
+            self.closed.set()
+        if self.tty:
+            self.tty.close()
+        try:
+            if self.started:
+                stop = self.client.api.exec_create(
+                    self.container_id, ["python3", "-I", "-c", TRAINING_STOP, self.attachment_token],
+                    stdin=False, stdout=True, stderr=True, tty=False, user="1000:1000",
+                )["Id"]
+                result = self.client.api.exec_start(stop, tty=False)
+                # Fake transports use a stream; real non-streaming exec returns bytes.
+                if hasattr(result, "close"):
+                    result.close()
+                elif self.client.api.exec_inspect(stop).get("ExitCode") != 0:
+                    LOG.warning("Detached training attachment cleanup did not complete in container %s", self.container_id)
+        except Exception:
+            # An already removed/reset environment or unavailable daemon is benign
+            # here; environment ownership/reconciliation remains with the manager.
+            LOG.warning("Could not stop detached training attachment in container %s", self.container_id,
+                        exc_info=True)
+        finally:
+            self.client.close()
+
+
 class BridgeHandler(socketserver.BaseRequestHandler):
     def handle(self):
         self.session = None
@@ -394,23 +598,36 @@ class BridgeHandler(socketserver.BaseRequestHandler):
             ):
                 raise ProtocolError("authentication failed")
             kind, payload = read_frame(self.request)
-            if kind != OPEN or len(payload) < 6:
+            if kind not in (OPEN, TRAIN_OPEN) or len(payload) < 6:
                 raise ProtocolError("expected OPEN after AUTH")
+            training = kind == TRAIN_OPEN
             rows, cols = dimensions(payload[:4])
             context = decode_context(payload[4:])
+            if training:
+                training_context(context)
             acquired = self.server.active.acquire(blocking=False)
             if not acquired:
                 self.send(ERROR, b"Nix-Boy already has an active session")
                 return
-            self.session = DockerSession(
-                self.server.client_factory(), self.server.image, self.server.network,
-                self.send, self.check_connected,
-            )
+            if training:
+                from training import TrainingSession
+                self.session = TrainingSession(
+                    self.server.get_training(), self.send,
+                    lambda container_id, send, finished: TrainingShell(
+                        self.server.client_factory(), container_id, send, finished),
+                )
+            else:
+                self.session = DockerSession(
+                    self.server.client_factory(), self.server.image, self.server.network,
+                    self.send, self.check_connected,
+                )
             with self.server.handlers_lock:
                 self.server.sessions.add(self.session)
             self.session.start(rows, cols, context)
             self.request.settimeout(1)
             while not self.session.closed.is_set() and not self.server.stopping.is_set():
+                if training:
+                    self.session.poll()
                 # A timeout inside a partial frame is fatal: do not resume at the
                 # middle of a header. Idle sockets are handled before read_frame.
                 ready, _, _ = select.select([self.request], [], [], 0.5)
@@ -423,6 +640,10 @@ class BridgeHandler(socketserver.BaseRequestHandler):
                     self.session.resize(*dimensions(payload))
                 elif kind == CONTEXT:
                     self.session.context(decode_context(payload))
+                elif training and kind == TRAIN_ACTION and len(payload) == 1:
+                    self.session.action(payload[0])
+                elif training and kind == TRAIN_ACK:
+                    self.session.acknowledge(*decode_training_ack(payload))
                 elif kind == CLOSE and not payload:
                     break
                 else:
@@ -465,7 +686,8 @@ class BridgeServer(socketserver.ThreadingTCPServer):
     block_on_close = False
     request_queue_size = 4
 
-    def __init__(self, port, token, image, network="none", client_factory=local_docker_client):
+    def __init__(self, port, token, image, network="none", client_factory=local_docker_client,
+                 state_dir=None, training_manager=None):
         self.token, self.image, self.network = token, image, network
         self.client_factory = client_factory
         self.active = threading.BoundedSemaphore(1)
@@ -476,7 +698,24 @@ class BridgeServer(socketserver.ThreadingTCPServer):
         self.handlers_done = threading.Event()
         self.handlers_done.set()
         self.stopping = threading.Event()
+        self.training_manager = training_manager
+        self.training_state_dir = state_dir
+        self.training_lock = threading.Lock()
+        self.expiry_at = 0
         super().__init__(("127.0.0.1", port), BridgeHandler)
+
+    def get_training(self):
+        with self.training_lock:
+            if self.training_manager is None:
+                from training import AttemptManager, default_state_dir
+                self.training_manager = AttemptManager(
+                    self.training_state_dir or default_state_dir(), self.client_factory)
+            return self.training_manager
+
+    def service_actions(self):
+        if self.training_manager and time.monotonic() - self.expiry_at > 60:
+            self.expiry_at = time.monotonic()
+            threading.Thread(target=self.training_manager.expire, daemon=True).start()
 
     def process_request(self, request, address):
         if not self.connection_slots.acquire(blocking=False):
@@ -519,9 +758,11 @@ class BridgeServer(socketserver.ThreadingTCPServer):
         # any in-flight startup API call followed by force-remove.
         if not self.handlers_done.wait(DOCKER_TIMEOUT * 3 + 5):
             with self.handlers_lock:
-                pending = [session.container.id if session.container else "pending startup"
+                pending = [session.container.id if getattr(session, "container", None) else "pending startup/attachment"
                            for session in self.sessions]
             LOG.error("shutdown cleanup timed out; inspect Nix-Boy containers: %s", pending)
+        if self.training_manager:
+            self.training_manager.close()
 
 
 def main():
@@ -530,6 +771,8 @@ def main():
     parser.add_argument("--port", default=47821, type=int)
     parser.add_argument("--image", default="fallout2-nixboy:dev")
     parser.add_argument("--network", choices=("none", "bridge"), default="none")
+    parser.add_argument("--state-dir", type=Path,
+                        help="private durable training state (defaults to the user's local state directory)")
     parser.add_argument("--docker-endpoint", help="local unix:/// or npipe:////./pipe/ endpoint")
     args = parser.parse_args()
     if not 1 <= args.port <= 65535:
@@ -539,7 +782,8 @@ def main():
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     token = load_token(args.token_file)
     factory = lambda: local_docker_client(args.docker_endpoint)
-    with BridgeServer(args.port, token, args.image, args.network, factory) as server:
+    with BridgeServer(args.port, token, args.image, args.network, factory,
+                      state_dir=args.state_dir) as server:
         LOG.info("Nix-Boy listening on 127.0.0.1:%d (network=%s)", args.port, args.network)
         try:
             server.serve_forever(poll_interval=0.25)

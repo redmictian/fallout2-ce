@@ -1,0 +1,10 @@
+id: science.network.ssh-remote-move
+version: 1
+skill: 12
+level: 2
+title: Archive a report on another machine
+kind: ssh-remote-move
+lesson: "ssh nixboy@server COMMAND runs a command remotely. Quote compound commands so they execute on the intended machine. Practice: ssh nixboy@server 'pwd; ls'. Local and remote paths are distinct."
+instructions: "On server, move /home/nixboy/incoming/{name}.txt to /home/nixboy/archive/{name}.txt, preserving its contents. The incoming file must disappear. SSH keys are configured."
+parameters:
+  name: [broadcast, status, incident]

@@ -1,0 +1,11 @@
+id: science.text.count-matches
+version: 1
+skill: 12
+level: 1
+title: Count warning records
+kind: count-matches
+lesson: "grep -c counts matching lines. wc -l counts input lines. Practice: printf 'WARN x\\nOK y\\nWARN z\\n' | grep -c '^WARN '. Matching records and counting occurrences are different tasks."
+instructions: "Count lines beginning with 'WARN ' in ~/lab/{name}.log. Write the decimal count, and no other text, to ~/lab/result.txt. Preserve the log."
+parameters:
+  name: [security, battery, pressure]
+  subject: [gate, monitor, unit]

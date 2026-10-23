@@ -1,0 +1,10 @@
+id: unarmed.files.remove-empty
+version: 1
+skill: 3
+level: 1
+title: Remove only the empty staging folder
+kind: remove-empty
+lesson: "rmdir removes an empty directory and refuses a nonempty one. Practice: mkdir practice-empty; rmdir practice-empty. ls -a shows hidden entries. Inspect paths before removing anything."
+instructions: "Remove the empty ~/lab/{name} directory. Preserve ~/lab/records/briefing.txt and its parent directory."
+parameters:
+  name: [scratch, temporary, staging]

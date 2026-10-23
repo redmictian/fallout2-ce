@@ -1,5 +1,12 @@
 # Nix-Boy Docker bridge
 
+The current game opens the **learning hub** by default: Unarmed and Science,
+two progression levels each, with five authored challenge options per level.
+Read [training setup and controls](TRAINING.md) first. The original ephemeral
+shell and configured integer bindings remain available with `training=0` in
+`nixboy.ini`. The foundation description below applies to that legacy mode;
+training owns resumable attempts and uses trusted completion receipts instead.
+
 Nix-Boy adds an in-game terminal backed by an ephemeral Debian Linux container.
 The host bridge uses the official Docker Python SDK, a real Bash PTY and a separate
 structured control channel. The game supplies integer context; Linux helpers send

@@ -1,5 +1,11 @@
 # Nix-Boy local protocol, version 1
 
+The original OPEN mode below retains its ephemeral shell contract. Training
+extension version 1 uses TRAIN_OPEN instead, with the same frame header and
+bounded integer-context encoding; it requires `training.version=1`. The hub
+becomes READY without provisioning Docker. See [TRAINING.md](TRAINING.md) in the
+runtime package for player controls and lifecycle.
+
 The game connects by TCP to `127.0.0.1:47821` by default. Every frame is
 `type:uint8`, `payload_length:uint32 big endian`, then exactly that many payload
 bytes. The maximum payload is 65,536 bytes. There is no text delimiter, native
@@ -88,3 +94,46 @@ The Linux-side context and event values are untrusted. Arbitrary processes withi
 the session may publish allowed named integers or alter their own context files;
 the engine whitelist is the authority for game effects. This is a mod extension
 interface, not a game anti-cheat boundary.
+
+## Training extension version 1
+
+| Direction | Type | Name | Payload |
+| --- | --- | --- | --- |
+| Client -> bridge | 7 | TRAIN_OPEN | Same rows, cols and context encoding as OPEN |
+| Client -> bridge | 8 | TRAIN_ACTION | One byte: 1 Check, 2 Hub, 3 Reset, 4 Abandon |
+| Client -> bridge | 9 | TRAIN_ACK | skill:uint8, level:uint8, receipt:16 bytes, accepted:uint8 |
+| Bridge -> client | 21 | TRAIN_REWARD | skill:uint8, level:uint8, receipt:16 bytes |
+
+TRAIN_OPEN follows AUTH exactly once. It requires training.version=1, four
+training.profile.0..3 signed int32 words encoding the character's 16 identity
+bytes in big-endian order, and training.completed.unarmed/science in 0..2.
+skill.<stable_engine_name> values supply all 18 current effective skills.
+Completed levels additionally supply their saved receipt bytes through four
+training.receipt.<unarmed|science>.<1|2>.0..3 words. The complete current snapshot
+has at most 46 entries. Training mode does not include legacy global bindings.
+
+Only skill IDs 3 (Unarmed) and 12 (Science), levels 1 and 2, nonzero 16-byte
+receipts and acknowledgment values 0/1 are accepted. The bridge records successful
+host validation before sending its receipt. Fallout checks ordered progression
+and receipt identity, derives a five-point bonus per level, and acknowledges
+exact duplicate receipts without changing state. ACK is followed by fresh
+CONTEXT; a game-memory acknowledgment is not a promise that a save was written.
+
+The game stores identity, completed levels and receipts together in its checked
+SAVE.DAT trailer. The bridge retains earned receipts, can import exact receipts
+from a restored game snapshot, and replays missing earned levels after reconnect.
+It never invents success from shell exit, PTY text or learner helper events.
+
+INPUT routes to a restricted hub menu or the current exercise PTY. RESIZE and
+CONTEXT remain available. A profile cannot change within a session. F5-F8 send
+TRAIN_ACTION; F10/CLOSE or a socket disconnect detach the frontend and stop its
+specific shell attachment, preserving exercise files while the bridge runs.
+A fresh attachment starts a fresh shell. EOF from that shell returns to the hub
+and never generates EXIT as a training reward. Reset, abandon, expiry and bridge
+shutdown have separate environment lifecycle handling.
+
+Legacy RESULT events are never forwarded by the training bridge, and the C++
+client rejects RESULT in training mode. Legacy OPEN retains its original
+RESULT/EXIT/global-binding behavior. The per-installation authentication token
+never enters the learner environment. Docker/provisioning errors and validator
+errors cannot grant a completion receipt.

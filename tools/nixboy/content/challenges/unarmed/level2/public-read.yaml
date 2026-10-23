@@ -1,0 +1,10 @@
+id: unarmed.permissions.public-read
+version: 1
+skill: 3
+level: 2
+title: Publish a read-only notice
+kind: public-read
+lesson: "Separate owner, group and other permission triplets. A published document can be writable by its owner but readable by everyone. chmod u=rw,go=r FILE and equivalent octal modes express the same state."
+instructions: "Set ~/lab/{name}.txt so its owner may read/write and group/others may only read. Nobody may execute. Preserve the contents and ownership."
+parameters:
+  name: [notice, timetable, announcement]

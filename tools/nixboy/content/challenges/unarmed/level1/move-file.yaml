@@ -1,0 +1,10 @@
+id: unarmed.files.move-file
+version: 1
+skill: 3
+level: 1
+title: Archive an incoming report
+kind: move-file
+lesson: "mv SOURCE DESTINATION moves or renames files; the original path disappears. Practice: printf 'sample\\n' > practice.txt; mkdir -p practice-archive; mv practice.txt practice-archive/."
+instructions: "Move ~/lab/incoming/{name}.txt into ~/lab/archive/ under the same filename. Preserve its contents. The incoming path must no longer exist."
+parameters:
+  name: [recon, inventory, patrol]
