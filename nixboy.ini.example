@@ -38,7 +38,8 @@ enabled=1
 hotkey=Ctrl+W
 ; Reloaded whenever the wiki opens, independently of terminal presentation.
 ; 0: full-height panel with side margins; 1: fill the internal game screen.
-; Exclusive fullscreen is temporarily composited while reading, then restored.
+; Wiki-enabled Windows sessions use borderless fullscreen from game startup to
+; avoid display-mode blackouts when reading. Internal resolution is unchanged.
 fullscreen=0
 home=nixboy/wiki/index.html
 

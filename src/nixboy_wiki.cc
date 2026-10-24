@@ -26,6 +26,7 @@
 #include "nixboy_ui_art.h"
 #include "svga.h"
 #include "text_font.h"
+#include "win32.h"
 #include "window_manager.h"
 
 namespace fallout {
@@ -120,6 +121,7 @@ namespace {
         HWND back = nullptr;
         HWND home = nullptr;
         HWND close = nullptr;
+        bool popup = false;
         int x = 0;
         int y = 0;
         int width = 0;
@@ -176,7 +178,9 @@ namespace {
                 error = "The wiki needs a game screen of at least 640 by 480.";
                 return false;
             }
-            std::vector<unsigned char> indexed(width * height, _colorTable[0]);
+            // Match the lesson's paper while WebView2 starts, rather than
+            // flashing a black opening inside the completed housing.
+            std::vector<unsigned char> indexed(width * height, _colorTable[(30 << 10) | (30 << 5) | 29]);
             if (!nixboyDrawFrame(indexed.data(), width, height, 18, 56, width - 36, height - 74)) {
                 error = "Cannot load the installed game's automap frame for the wiki.";
                 return false;
@@ -244,7 +248,9 @@ namespace {
             int left = 0, top = 0, right = 0, bottom = 0;
             SDL_RenderLogicalToWindow(gSdlRenderer, static_cast<float>(x), static_cast<float>(y), &left, &top);
             SDL_RenderLogicalToWindow(gSdlRenderer, static_cast<float>(x + width), static_cast<float>(y + height), &right, &bottom);
-            return { left, top, right, bottom };
+            RECT result { left, top, right, bottom };
+            if (popup) MapWindowPoints(parent, nullptr, reinterpret_cast<POINT*>(&result), 2);
+            return result;
         }
 
         void reposition()
@@ -257,7 +263,7 @@ namespace {
             const RECT wanted = placement();
             RECT current;
             GetWindowRect(panel, &current);
-            MapWindowPoints(nullptr, parent, reinterpret_cast<POINT*>(&current), 2);
+            if (!popup) MapWindowPoints(nullptr, parent, reinterpret_cast<POINT*>(&current), 2);
             if (EqualRect(&wanted, &current)) return;
             MoveWindow(panel, wanted.left, wanted.top, wanted.right - wanted.left, wanted.bottom - wanted.top, TRUE);
             if (controller) controller->NotifyParentWindowPositionChanged();
@@ -500,11 +506,16 @@ namespace {
         }
         ~InputGuard()
         {
+            // SDL_SetEventFilter flushes queued events. Let the engine observe
+            // the owner's focus-gained event from popup destruction first,
+            // while modal filtering still prevents gameplay input leakage.
+            if (browser_.popup) _GNW95_process_message();
             SDL_SetEventFilter(previous_, previousData_);
             if (IsWindow(focus_))
                 SetFocus(focus_);
             else
                 SetFocus(browser_.parent);
+            if (browser_.popup) _GNW95_process_message();
             SDL_SetWindowGrab(gSdlWindow, grab_);
             SDL_SetRelativeMouseMode(relative_);
             SDL_ShowCursor(nativeCursor_);
@@ -515,6 +526,10 @@ namespace {
             SDL_FlushEvents(SDL_MOUSEMOTION, SDL_MOUSEWHEEL);
             SDL_GetRelativeMouseState(nullptr, nullptr);
             if (!keyboardDisabled_) keyboardEnable();
+            if (browser_.popup) {
+                debugPrint("nix-boy wiki: input restored (keyboard=%d, native focus=%d, SDL focus=%d, active=%d).\n",
+                    !keyboardIsDisabled(), GetFocus() == browser_.parent, SDL_GetKeyboardFocus() == gSdlWindow, gProgramIsActive);
+            }
             if (browser_.quit) {
                 SDL_Event event {};
                 event.type = SDL_QUIT;
@@ -561,7 +576,10 @@ namespace {
 
         bool enter()
         {
-            if (flags_ != SDL_WINDOW_FULLSCREEN) return true;
+            if (flags_ != SDL_WINDOW_FULLSCREEN) {
+                debugPrint("nix-boy wiki: presentation retained (fullscreen flags 0x%x); no display-mode transition.\n", flags_);
+                return true;
+            }
             display_ = SDL_GetWindowDisplayIndex(gSdlWindow);
             if (display_ < 0 || SDL_GetWindowDisplayMode(gSdlWindow, &mode_) != 0
                 || !GetWindowRect(window_, &rectangle_)) {
@@ -730,6 +748,10 @@ bool nixboyWikiWindowOpen(const std::string& homePath, bool fullscreen, std::str
     InputGuard input(*browser);
     FullscreenGuard presentation(browser->parent, error);
     if (!presentation.enter()) return false;
+    // Keep the native reader above a fullscreen OpenGL surface without forcing
+    // a display-mode transition. An owned, undecorated tool window stays within
+    // this game task and above its owner; windowed games retain child hosting.
+    browser->popup = (SDL_GetWindowFlags(gSdlWindow) & SDL_WINDOW_FULLSCREEN_DESKTOP) == SDL_WINDOW_FULLSCREEN_DESKTOP;
     // Native children must be destroyed before returning to exclusive mode,
     // including partial startup failures and asynchronous cancellation.
     struct NativeGuard {
@@ -740,7 +762,8 @@ bool nixboyWikiWindowOpen(const std::string& homePath, bool fullscreen, std::str
     // background once before the native child takes ownership of its rectangle.
     renderPresent();
     const RECT rectangle = browser->placement();
-    browser->panel = CreateWindowExW(0, kPanelClass, L"nix-boy wiki", WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN | WS_CLIPSIBLINGS,
+    browser->panel = CreateWindowExW(browser->popup ? WS_EX_TOOLWINDOW : 0, kPanelClass, L"nix-boy wiki",
+        (browser->popup ? WS_POPUP : WS_CHILD) | WS_VISIBLE | WS_CLIPCHILDREN | WS_CLIPSIBLINGS,
         rectangle.left, rectangle.top, rectangle.right - rectangle.left, rectangle.bottom - rectangle.top,
         browser->parent, nullptr, windowClass.hInstance, browser.get());
     if (browser->panel == nullptr) {
@@ -761,6 +784,7 @@ bool nixboyWikiWindowOpen(const std::string& homePath, bool fullscreen, std::str
     }
     browser->resize();
     SetFocus(browser->close);
+    if (browser->popup) renderPresent();
     std::weak_ptr<Browser> weak = browser;
     auto environmentReady = new Callback<ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler, HRESULT, ICoreWebView2Environment*>(
         L"{4e8a3389-c9d8-4bd2-b6b5-124fee6cc14d}", [weak](HRESULT result, ICoreWebView2Environment* environment) {
@@ -800,7 +824,8 @@ bool nixboyWikiWindowOpen(const std::string& homePath, bool fullscreen, std::str
             }
             if ((message.message == WM_KEYDOWN || message.message == WM_SYSKEYDOWN)
                 && (message.wParam == VK_F10 || message.wParam == VK_ESCAPE)
-                && (message.hwnd == browser->parent || IsChild(browser->parent, message.hwnd))) {
+                && (message.hwnd == browser->parent || IsChild(browser->parent, message.hwnd)
+                    || message.hwnd == browser->panel || IsChild(browser->panel, message.hwnd))) {
                 browser->closing = true;
                 continue;
             }
