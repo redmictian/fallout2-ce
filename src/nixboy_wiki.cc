@@ -18,6 +18,7 @@
 
 #include "art.h"
 #include "color.h"
+#include "debug.h"
 #include "game.h"
 #include "input.h"
 #include "kb.h"
@@ -25,6 +26,7 @@
 #include "nixboy_ui_art.h"
 #include "svga.h"
 #include "text_font.h"
+#include "window_manager.h"
 
 namespace fallout {
 namespace {
@@ -137,13 +139,19 @@ namespace {
 
         ~Browser()
         {
-            if (!closed && controller != nullptr) controller->Close();
-            closed = true;
-            if (panel != nullptr) DestroyWindow(panel);
+            closeNative();
             if (view4 != nullptr) view4->Release();
             if (view != nullptr) view->Release();
             if (controller != nullptr) controller->Release();
             if (environment != nullptr) environment->Release();
+        }
+
+        void closeNative()
+        {
+            if (!closed && controller != nullptr) controller->Close();
+            closed = true;
+            if (panel != nullptr) DestroyWindow(panel);
+            panel = nullptr;
         }
 
         bool check(HRESULT result, const char* operation)
@@ -161,7 +169,7 @@ namespace {
             const int screenWidth = screenGetWidth();
             const int screenHeight = screenGetHeight();
             width = fullscreen ? screenWidth : std::min(1280, screenWidth - std::max(32, screenWidth / 8));
-            height = fullscreen ? screenHeight : std::min(900, screenHeight - std::max(32, screenHeight / 7));
+            height = screenHeight;
             x = (screenWidth - width) / 2;
             y = (screenHeight - height) / 2;
             if (width < 480 || height < 240) {
@@ -539,6 +547,100 @@ namespace {
         void* previousData_ = nullptr;
     };
 
+    // Native HWND children cannot reliably composite over an exclusive OpenGL
+    // presentation. Keep the game covering its monitor using desktop fullscreen
+    // for this modal only, then restore the exact fullscreen flags on all exits.
+    class FullscreenGuard {
+    public:
+        FullscreenGuard(HWND window, std::string& error)
+            : error_(error)
+            , window_(window)
+            , flags_(SDL_GetWindowFlags(gSdlWindow) & SDL_WINDOW_FULLSCREEN_DESKTOP)
+        {
+        }
+
+        bool enter()
+        {
+            if (flags_ != SDL_WINDOW_FULLSCREEN) return true;
+            display_ = SDL_GetWindowDisplayIndex(gSdlWindow);
+            if (display_ < 0 || SDL_GetWindowDisplayMode(gSdlWindow, &mode_) != 0
+                || !GetWindowRect(window_, &rectangle_)) {
+                error_ = std::string("Cannot read the game's fullscreen display mode: ") + SDL_GetError();
+                return false;
+            }
+            // Arm restoration before the call: a platform failure may occur
+            // after SDL has already changed part of the window state.
+            changed_ = true;
+            if (SDL_SetWindowFullscreen(gSdlWindow, SDL_WINDOW_FULLSCREEN_DESKTOP) != 0) {
+                error_ = std::string("Cannot prepare fullscreen for the wiki: ") + SDL_GetError();
+                return false;
+            }
+            _GNW95_process_message();
+            if (gSdlRenderer == nullptr) {
+                error_ = "Cannot prepare the game renderer for the fullscreen wiki.";
+                return false;
+            }
+            debugPrint("nix-boy wiki: exclusive fullscreen %dx%d@%d suspended for native reader.\n",
+                mode_.w, mode_.h, mode_.refresh_rate);
+            return true;
+        }
+
+        bool restore()
+        {
+            if (!changed_) return true;
+            changed_ = false;
+            if (SDL_SetWindowFullscreen(gSdlWindow, flags_) != 0) {
+                if (!error_.empty()) error_ += " ";
+                error_ += std::string("Cannot restore the game's fullscreen mode: ") + SDL_GetError();
+                debugPrint("nix-boy wiki: %s\n", error_.c_str());
+                return false;
+            }
+            // SDL 2.26 can reuse the old desktop monitor bounds immediately
+            // after a display-mode switch, leaving a desktop-sized HWND over
+            // the smaller exclusive display. Restore the original native rect
+            // without changing SDL's saved windowed size or requested mode.
+            RECT current;
+            if (!GetWindowRect(window_, &current)
+                || (!EqualRect(&current, &rectangle_)
+                    && !SetWindowPos(window_, nullptr, rectangle_.left, rectangle_.top,
+                        rectangle_.right - rectangle_.left, rectangle_.bottom - rectangle_.top,
+                        SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOCOPYBITS))) {
+                if (!error_.empty()) error_ += " ";
+                error_ += "Cannot restore the game's fullscreen window bounds.";
+                debugPrint("nix-boy wiki: %s\n", error_.c_str());
+                return false;
+            }
+            _GNW95_process_message();
+            SDL_DisplayMode restored {};
+            if ((SDL_GetWindowFlags(gSdlWindow) & SDL_WINDOW_FULLSCREEN_DESKTOP) != flags_
+                || SDL_GetCurrentDisplayMode(display_, &restored) != 0
+                || restored.w != mode_.w || restored.h != mode_.h
+                || restored.format != mode_.format || restored.refresh_rate != mode_.refresh_rate
+                || gSdlRenderer == nullptr) {
+                if (!error_.empty()) error_ += " ";
+                error_ += "The game's original fullscreen display mode or renderer was not restored.";
+                debugPrint("nix-boy wiki: %s\n", error_.c_str());
+                return false;
+            }
+            windowRefreshAll(&_scr_size);
+            renderPresent();
+            debugPrint("nix-boy wiki: original exclusive fullscreen %dx%d@%d restored.\n",
+                restored.w, restored.h, restored.refresh_rate);
+            return true;
+        }
+
+        ~FullscreenGuard() { restore(); }
+
+    private:
+        std::string& error_;
+        HWND window_;
+        RECT rectangle_ {};
+        Uint32 flags_;
+        SDL_DisplayMode mode_ {};
+        int display_ = -1;
+        bool changed_ = false;
+    };
+
     bool contentRoot(const std::string& homePath, std::wstring& root, std::string& error)
     {
         int length = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, homePath.data(), static_cast<int>(homePath.size()), nullptr, 0);
@@ -626,6 +728,14 @@ bool nixboyWikiWindowOpen(const std::string& homePath, bool fullscreen, std::str
         return false;
     }
     InputGuard input(*browser);
+    FullscreenGuard presentation(browser->parent, error);
+    if (!presentation.enter()) return false;
+    // Native children must be destroyed before returning to exclusive mode,
+    // including partial startup failures and asynchronous cancellation.
+    struct NativeGuard {
+        Browser& browser;
+        ~NativeGuard() { browser.closeNative(); }
+    } native { *browser };
     // Centered panels leave the game visible. Present the cursor-free indexed
     // background once before the native child takes ownership of its rectangle.
     renderPresent();
@@ -708,11 +818,9 @@ bool nixboyWikiWindowOpen(const std::string& homePath, bool fullscreen, std::str
         }
         MsgWaitForMultipleObjectsEx(0, nullptr, 16, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
     }
-    browser->closed = true;
-    if (browser->controller) browser->controller->Close();
-    DestroyWindow(browser->panel);
-    browser->panel = nullptr;
+    browser->closeNative();
     error = browser->error;
+    presentation.restore();
     return error.empty();
 }
 

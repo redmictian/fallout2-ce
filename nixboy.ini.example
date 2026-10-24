@@ -37,7 +37,8 @@ token_file=nixboy.token
 enabled=1
 hotkey=Ctrl+W
 ; Reloaded whenever the wiki opens, independently of terminal presentation.
-; 0: centered panel; 1: fill the internal game screen (no OS display change).
+; 0: full-height panel with side margins; 1: fill the internal game screen.
+; Exclusive fullscreen is temporarily composited while reading, then restored.
 fullscreen=0
 home=nixboy/wiki/index.html
 
