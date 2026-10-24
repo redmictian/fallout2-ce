@@ -51,6 +51,7 @@ class Challenge:
     kind: str
     parameters: dict
     version: int = 1
+    wiki: tuple[str, ...] = ()
 
 
 def _text(value, maximum=4096):
@@ -111,7 +112,7 @@ class Catalog:
         for path in paths:
             data = self._read(path)
             required = {"id", "version", "skill", "level", "title", "instructions", "kind", "parameters"}
-            if not isinstance(data, dict) or set(data) != required:
+            if not isinstance(data, dict) or not required <= set(data) or set(data) - required - {"wiki"}:
                 raise ValueError(f"invalid challenge fields: {path}")
             if not isinstance(data["id"], str) or not IDENTIFIER.fullmatch(data["id"]) or data["id"] in self.challenges:
                 raise ValueError("invalid or duplicate challenge id")
@@ -151,7 +152,12 @@ class Catalog:
                     raise ValueError("formatted instructions exceed limit")
             except (KeyError, IndexError, ValueError) as exc:
                 raise ValueError("invalid challenge instruction placeholders") from exc
-            spec = Challenge(**data)
+            references = data.get("wiki", [])
+            if not isinstance(references, list) or len(references) > 64 \
+                    or any(not isinstance(value, str) or not IDENTIFIER.fullmatch(value) for value in references) \
+                    or len(set(references)) != len(references):
+                raise ValueError(f"wiki must be a list of distinct article IDs: {path}")
+            spec = Challenge(**dict(data, wiki=tuple(references)))
             self.challenges[spec.id] = spec
             self._pools.setdefault((spec.skill, spec.level), []).append(spec.id)
         for skill, track in self.tracks.items():
@@ -196,7 +202,11 @@ class Catalog:
     def digest(self, identifier):
         spec = self.get(identifier)
         track = self.tracks[spec.skill]
-        data = {"challenge": asdict(spec), "track": {key: value for key, value in track.items() if key != "levels"},
+        definition = asdict(spec)
+        # Reading references do not change an exercise or invalidate retained attempts.
+        # Removing the field also preserves pre-wiki fingerprints byte for byte.
+        definition.pop("wiki")
+        data = {"challenge": definition, "track": {key: value for key, value in track.items() if key != "levels"},
                 "band": track["levels"][spec.level]}
         topology = "network" if spec.kind.startswith("ssh-") else "single"
         digest = hashlib.sha256(json.dumps(data, sort_keys=True, separators=(",", ":")).encode("utf-8"))
@@ -210,11 +220,15 @@ def main():
     args = parser.parse_args()
     try:
         catalog = Catalog(args.content_dir)
+        wiki = None
+        if (catalog.root / "wiki").exists() or any(spec.wiki for spec in catalog.challenges.values()):
+            from wiki_content import WikiCatalog
+            wiki = WikiCatalog(catalog.root / "wiki", catalog)
     except (OSError, ValueError, yaml.YAMLError) as exc:
         parser.exit(1, f"Invalid content: {exc}\n")
     print(json.dumps({"status": "valid", "root": str(catalog.root), "tracks": len(catalog.tracks),
                       "levels": sum(len(track["levels"]) for track in catalog.tracks.values()),
-                      "challenges": len(catalog.challenges)}))
+                      "challenges": len(catalog.challenges), "articles": len(wiki.articles) if wiki else 0}))
 
 
 if __name__ == "__main__":

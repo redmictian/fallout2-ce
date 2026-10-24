@@ -1,0 +1,38 @@
+<p>Ordinary Linux permission bits describe access for a file's owner, its group,
+and everyone else. Read the three sets separately when inspecting
+<code>ls -l</code> output.</p>
+
+<figure>
+  <img src="../assets/permissions.svg" alt="The mode -rw-r----- has a regular-file marker, owner read and write, group read, and no access for others.">
+  <figcaption>Each set has read, write, and execute positions. A dash means the
+  permission is absent.</figcaption>
+</figure>
+
+<h2>The same letters have different directory meanings</h2>
+<table>
+  <thead><tr><th>Bit</th><th>Regular file</th><th>Directory</th></tr></thead>
+  <tbody>
+    <tr><td><code>r</code></td><td>Read contents</td><td>List entry names</td></tr>
+    <tr><td><code>w</code></td><td>Change contents</td><td>Create or remove entries</td></tr>
+    <tr><td><code>x</code></td><td>Execute as a program</td><td>Search or traverse the directory</td></tr>
+  </tbody>
+</table>
+<p>Directory operations often require a combination: listing names and accessing
+the files they name are separate permissions. A file's write bit alone does not
+control whether its directory entry can be removed.</p>
+
+<h2>Change access deliberately</h2>
+<p>For an example file that you own, this grants its owner read and write,
+and clears the group's and everyone else's permissions:</p>
+<pre><code>chmod u=rw,go= ~/wiki-demo/notes/route.txt
+ls -l ~/wiki-demo/notes/route.txt</code></pre>
+<p>The ordinary permission portion should now read <code>rw-------</code>.
+Changing permissions does not change ownership. This introduction covers ordinary
+permission bits; special mode bits and access control lists are separate topics.</p>
+
+<h2>Connect it to a task</h2>
+<p><a href="challenge:unarmed.permissions.private-file">Protect a private report</a>
+asks for a particular final access policy. Check the resolved path and preserve
+the file's other required properties.</p>
+<p>Return to <a href="wiki:linux.paths">paths and navigation</a> if the filename
+is unclear.</p>

@@ -1,0 +1,33 @@
+<p>A shell pipeline connects one command's standard output to the next command's
+standard input. Build it in stages so you can inspect what each command produces.</p>
+
+<h2>From records to a count</h2>
+<p>This example supplies three records, selects the two beginning with
+<code>ERROR </code>, then counts those lines:</p>
+<pre><code>printf 'INFO ready\nERROR relay\nERROR valve\n' | grep '^ERROR ' | wc -l</code></pre>
+<table>
+  <thead><tr><th>Stage</th><th>Role</th></tr></thead>
+  <tbody>
+    <tr><td><code>printf</code></td><td>Produce the example records</td></tr>
+    <tr><td><code>grep '^ERROR '</code></td><td>Keep lines with that prefix; <code>^</code> anchors the match at the start</td></tr>
+    <tr><td><code>wc -l</code></td><td>Count newline characters in the selected output</td></tr>
+  </tbody>
+</table>
+<p>First run only the producer. Then add the filter, inspect its output, and add
+the count last. This makes a wrong pattern easier to spot.</p>
+
+<h2>Save the output</h2>
+<p><code>&gt;</code> redirects standard output to a file, replacing its previous
+contents. <code>&gt;&gt;</code> appends. Create the directory from the
+<a href="wiki:linux.paths">paths lesson</a> before trying this example:</p>
+<pre><code>printf 'INFO ready\nERROR relay\nERROR valve\n' | grep '^ERROR ' &gt; ~/wiki-demo/errors.txt
+cat ~/wiki-demo/errors.txt</code></pre>
+<p>The ordinary <code>|</code> operator carries standard output. Diagnostic
+messages on standard error do not automatically become input for the next stage.</p>
+
+<h2>Choose what the task actually needs</h2>
+<p><a href="challenge:science.text.filter-lines">Extract failed service events</a>
+needs the matching records themselves. A counter would discard that text. Read
+the requested final output before choosing your last stage.</p>
+<p>If writing fails, inspect the destination path and its
+<a href="wiki:linux.permissions">access permissions</a>.</p>

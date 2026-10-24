@@ -29,6 +29,7 @@ $files = @(
     'tools/nixboy/requirements.txt', 'tools/nixboy/bridge.py',
     'tools/nixboy/protocol.py', 'tools/nixboy/training.py',
     'tools/nixboy/challenge_content.py', 'tools/nixboy/challenge_env.py',
+    'tools/nixboy/wiki_content.py', 'tools/nixboy/wiki_pages.py',
     'tools/nixboy/smoke_docker.py',
     'tools/nixboy/smoke_windows_wsl.py',
     'tools/nixboy/container/Dockerfile', 'tools/nixboy/container/control.py',
@@ -42,7 +43,7 @@ $files = @(
 # are not in this directory or part of the redistributable package.
 $contentRoot = Join-Path $sourceDir 'tools/nixboy/content'
 foreach ($contentFile in Get-ChildItem -LiteralPath $contentRoot -Recurse -File) {
-    if ($contentFile.Extension -notin @('.yaml', '.yml', '.md', '.txt', '.json')) {
+    if ($contentFile.Extension -notin @('.yaml', '.yml', '.md', '.txt', '.json', '.html', '.css', '.js', '.svg', '.png', '.jpg', '.jpeg', '.webp')) {
         throw "Unexpected file in authored training content: $($contentFile.Name)"
     }
     $files += $contentFile.FullName.Substring($sourceDir.Length + 1).Replace('\', '/')
@@ -79,6 +80,10 @@ required for Linux. Enable nixboy.ini in a separate owned-data test installation
 No game assets, saves, runtime configuration or authentication tokens are included.
 
 Editable catalog: nixboy/content/tracks.yaml and nixboy/content/challenges/.
+Wiki lessons: nixboy/content/wiki/index.yaml, articles/ and assets/. Reading
+references use stable article IDs in each challenge's optional wiki list.
+Validate both catalogs with python nixboy/challenge_content.py, or export the
+HTML preview with python nixboy/wiki_pages.py --output PATH-TO-NEW-DIRECTORY.
 The initial catalog maps Unarmed to Filesystem and Science to Networking, each
 with two current-skill bands and five challenge options per level. Skills and
 levels can be extended in YAML using existing trusted task kinds. Restart the

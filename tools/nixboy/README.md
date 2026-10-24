@@ -10,6 +10,13 @@ The shipped catalog maps Unarmed to **Filesystem** and Science to
 editable catalog, rather than a two-track engine limit.
 Each level can set `reward_points` (1–300, default 5); earned amounts stay fixed
 after completion even when the catalog changes.
+The new [wiki authoring prototype](content/wiki/README.md) holds separate HTML
+lessons organized by Linux subject, with stable reading references from challenge
+YAML. Validate both catalogs with `python tools/nixboy/challenge_content.py` and
+export an offline preview with `python tools/nixboy/wiki_pages.py --output NEW-DIR`
+from the source root. These tools need Python/PyYAML, without Docker. The in-game
+HTML viewer is pending the architectural choice; the terminal is still the
+existing in-game entry point for challenges.
 Read [training setup and controls](TRAINING.md) first. The original ephemeral
 shell and configured integer bindings remain available with `training=0` in
 `nixboy.ini`. The foundation description below applies to that legacy mode;
