@@ -11,7 +11,7 @@ namespace nixboy {
         constexpr int kMaxGlassWidth = 2048;
         constexpr int kMaxGlassHeight = 1536;
         constexpr int kBezel = 18;
-        constexpr int kTextPadding = 20;
+        constexpr int kTextPadding = 8;
         constexpr int kBloomScale = 4;
 
     } // namespace
@@ -55,6 +55,11 @@ namespace nixboy {
         if (width < 8 || width > kMaxGlassWidth || height < 8 || height > kMaxGlassHeight
             || settings.warp < kTerminalCrtStrengthMin || settings.warp > kTerminalCrtStrengthMax
             || settings.glow < kTerminalCrtStrengthMin || settings.glow > kTerminalCrtStrengthMax
+            || settings.scanlines < kTerminalCrtStrengthMin || settings.scanlines > kTerminalCrtStrengthMax
+            || settings.noise < kTerminalCrtStrengthMin || settings.noise > kTerminalCrtStrengthMax
+            || settings.jitter < kTerminalCrtStrengthMin || settings.jitter > kTerminalCrtStrengthMax
+            || settings.bloom < kTerminalCrtStrengthMin || settings.bloom > kTerminalCrtStrengthMax
+            || settings.rgbShift < kTerminalCrtStrengthMin || settings.rgbShift > kTerminalCrtStrengthMax
             || settings.persistenceMs < kTerminalCrtPersistenceMinMs || settings.persistenceMs > kTerminalCrtPersistenceMaxMs) {
             return false;
         }
@@ -69,6 +74,7 @@ namespace nixboy {
         current_.assign(pixels, 0);
         history_.assign(pixels, 0);
         emission_.assign(pixels, 0);
+        localGlow_.assign(pixels, 0);
         const size_t bloomPixels = static_cast<size_t>(bloomWidth_) * bloomHeight_;
         downsampled_.assign(bloomPixels, 0);
         bloomNear_.assign(bloomPixels, 0);
@@ -91,23 +97,23 @@ namespace nixboy {
             bloomY_[y] = std::min(static_cast<int>(position), bloomHeight_ - 2);
             bloomYFraction_[y] = static_cast<uint8_t>(std::clamp(static_cast<int>((position - bloomY_[y]) * 255), 0, 255));
         }
-        const double radius = std::min(28.0, std::min(width, height) * 0.12);
+        const double radius = std::min(6.0, std::min(width, height) * 0.12);
         for (int y = 0; y < height; y++) {
             const double ny = (2.0 * y + 1.0) / height - 1.0;
             for (int x = 0; x < width; x++) {
                 const double nx = (2.0 * x + 1.0) / width - 1.0;
-                // Symmetric radial barrel lens: cardinal edges move as well as the
-                // corners. Aperture and text use the same original transform.
+                // The lens only projects source light. Its opaque glass stays in
+                // the native frame opening instead of leaving a bowed black moat.
                 const double radialSquared = nx * nx + ny * ny;
                 const double radial = 1.0 + settings_.warp / 100.0 * (0.055 * radialSquared + 0.002 * radialSquared * radialSquared);
                 // The zero setting must not acquire fractional sampling through
                 // floating-point roundoff: it preserves the source pixel positions.
                 const double sx = settings_.warp == 0 ? x : (nx * radial + 1.0) * width / 2 - 0.5;
                 const double sy = settings_.warp == 0 ? y : (ny * radial + 1.0) * height / 2 - 0.5;
-                const double dx = std::max(std::abs(sx - (width - 1) / 2.0) - (width / 2.0 - radius), 0.0);
-                const double dy = std::max(std::abs(sy - (height - 1) / 2.0) - (height / 2.0 - radius), 0.0);
+                const double dx = std::max(std::abs(x - (width - 1) / 2.0) - (width / 2.0 - radius), 0.0);
+                const double dy = std::max(std::abs(y - (height - 1) / 2.0) - (height / 2.0 - radius), 0.0);
                 const double roundedDistance = radius - std::sqrt(dx * dx + dy * dy);
-                const double edge = std::min({ sx + 0.5, sy + 0.5, width - 0.5 - sx, height - 0.5 - sy, roundedDistance });
+                const double edge = std::min({ x + 0.5, y + 0.5, width - 0.5 - x, height - 0.5 - y, roundedDistance });
                 const int coverage = std::clamp(static_cast<int>((edge + 0.5) * 255), 0, 255);
                 if (coverage == 0) {
                     samples_.push_back({ -1, 0, 0, 0, 0 });
@@ -187,7 +193,23 @@ namespace nixboy {
             emission_[index] = static_cast<uint8_t>(std::max<int>(current_[index], history_[index] * 3 / 8));
         }
         lightDirty_ = false;
-        if (settings_.glow == 0) return;
+        if (settings_.glow != 0) {
+            // A narrow, full-resolution phosphor halo is deliberately separate
+            // from the broad quarter-resolution optical bloom below.
+            for (int y = 0; y < height_; y++) {
+                for (int x = 0; x < width_; x++) {
+                    const int index = y * width_ + x;
+                    const int left = y * width_ + std::max(0, x - 1);
+                    const int right = y * width_ + std::min(width_ - 1, x + 1);
+                    const int above = std::max(0, y - 1) * width_ + x;
+                    const int below = std::min(height_ - 1, y + 1) * width_ + x;
+                    localGlow_[index] = static_cast<uint8_t>((emission_[index] * 4
+                                                                 + emission_[left] + emission_[right] + emission_[above] + emission_[below])
+                        / 8);
+                }
+            }
+        }
+        if (settings_.bloom == 0) return;
         for (int by = 0; by < bloomHeight_; by++) {
             for (int bx = 0; bx < bloomWidth_; bx++) {
                 int sum = 0;
@@ -226,6 +248,16 @@ namespace nixboy {
         return (top * (255 - yf) + bottom * yf) / 255;
     }
 
+    int TerminalCrt::lightAt(const std::vector<uint8_t>& light, int x256, int y) const
+    {
+        x256 = std::clamp(x256, 0, (width_ - 1) * 256);
+        const int x = x256 / 256;
+        const int fraction = x256 % 256;
+        return (light[y * width_ + x] * (256 - fraction)
+                   + light[y * width_ + std::min(x + 1, width_ - 1)] * fraction)
+            / 256;
+    }
+
     void TerminalCrt::render(uint32_t* destination, int pitchPixels, uint32_t ticks)
     {
         if (destination == nullptr || pitchPixels < width_ || width_ == 0) return;
@@ -233,9 +265,13 @@ namespace nixboy {
         previousTicks_ = ticks;
         hasPreviousTicks_ = true;
         updateLight(elapsed);
-        const int flicker = 250 + static_cast<int>(3 * std::sin(ticks * 0.017) + 2 * std::sin(ticks * 0.0113));
+        const int flicker = 256 + static_cast<int>((3 * std::sin(ticks * 0.017) + 2 * std::sin(ticks * 0.0113)) * settings_.noise / 100);
         const uint32_t noiseFrame = ticks / 33;
+        const int chroma256 = settings_.rgbShift * 768 / 100;
         for (int y = 0; y < height_; y++) {
+            uint32_t lineHash = static_cast<uint32_t>(y / 3) * 668265263u + noiseFrame * 2246822519u;
+            lineHash = (lineHash ^ (lineHash >> 13)) * 1274126177u;
+            const int jitter256 = (static_cast<int>((lineHash >> 16) & 255) - 128) * settings_.jitter * 6 / 100;
             for (int x = 0; x < width_; x++) {
                 const size_t index = static_cast<size_t>(y) * width_ + x;
                 const Sample& sample = samples_[index];
@@ -243,20 +279,36 @@ namespace nixboy {
                     destination[y * pitchPixels + x] = 0;
                     continue;
                 }
-                int core = emission_[index] * sample.shade / 255;
-                core = core * ((y & 1) ? 238 : 256) / 256;
+                const int sourceX256 = x * 256 + jitter256;
+                const int light = settings_.jitter == 0 ? emission_[index] : lightAt(emission_, sourceX256, y);
+                int core = light * sample.shade / 255;
+                const int raster = (y & 1) ? 256 - settings_.scanlines * 166 / 100 : 256;
+                core = core * raster / 256;
                 core = core * flicker / 256;
-                const int near = settings_.glow == 0 ? 0 : bloomAt(bloomNear_, x, y);
-                const int wide = settings_.glow == 0 ? 0 : bloomAt(bloomWide_, x, y);
-                const int glow = (near * 3 / 4 + wide / 2) * settings_.glow / (256 * 100);
+                const int phosphor = settings_.glow == 0 ? 0
+                                                         : lightAt(localGlow_, sourceX256, y) * settings_.glow * 3 / (100 * 4);
+                const int near = settings_.bloom == 0 ? 0 : bloomAt(bloomNear_, x, y);
+                const int wide = settings_.bloom == 0 ? 0 : bloomAt(bloomWide_, x, y);
+                const int bloom = (near * 3 / 4 + wide / 2) * settings_.bloom / (256 * 100);
                 uint32_t hash = static_cast<uint32_t>(x) * 374761393u
                     + static_cast<uint32_t>(y) * 668265263u + noiseFrame * 2246822519u;
                 hash = (hash ^ (hash >> 13)) * 1274126177u;
-                const int noise = static_cast<int>((hash >> 29) & 3) - 1;
+                const int grain = static_cast<int>((hash >> 24) & 255) - 128;
+                // Stochastic rounding keeps even strength 1 observable, without
+                // forcing an entire extra brightness step onto every dark pixel.
+                const int rounding = static_cast<int>((hash >> 8) & 255);
+                const int noise = (grain * settings_.noise + (grain < 0 ? -rounding : rounding)) / 300;
                 const int ambient = glass_[index];
-                const int red = std::clamp(1 + core * 12 / 255 + glow / 24, 0, 255) * sample.coverage / 255;
-                const int green = std::clamp(ambient + core * 204 / 255 + glow + noise, 0, 255) * sample.coverage / 255;
-                const int blue = std::clamp(3 + core * 104 / 255 + glow * 3 / 8 + noise / 2, 0, 255) * sample.coverage / 255;
+                const int redFringe = settings_.rgbShift == 0 ? 0
+                                                              : std::max(0, lightAt(emission_, sourceX256 + chroma256, y) - light) * settings_.rgbShift / 200;
+                const int blueLight = settings_.rgbShift == 0 ? core
+                                                              : (core * (100 - settings_.rgbShift)
+                                                                    + lightAt(emission_, sourceX256 - chroma256, y) * settings_.rgbShift * sample.shade * raster / (255 * 256))
+                        / 100;
+                const int halo = phosphor + bloom;
+                const int red = std::clamp(1 + core * 12 / 255 + halo / 24 + redFringe, 0, 255) * sample.coverage / 255;
+                const int green = std::clamp(ambient + core * 204 / 255 + halo + noise, 0, 255) * sample.coverage / 255;
+                const int blue = std::clamp(3 + blueLight * 104 / 255 + halo * 3 / 8 + noise / 2, 0, 255) * sample.coverage / 255;
                 destination[y * pitchPixels + x] = static_cast<uint32_t>((red << 16) | (green << 8) | blue);
             }
         }

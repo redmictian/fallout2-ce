@@ -292,6 +292,37 @@ namespace {
         const auto mod = static_cast<SDL_Keymod>(event.keysym.mod);
         VTermKey special = terminalKey(key);
         state.textInput.keyDown(event.keysym.scancode);
+        // Readline word editing is more portable as Esc-b/f than modified
+        // cursor CSI sequences. Keep AltGr and plain application-mode keys intact.
+        if (!(mod & (KMOD_RALT | KMOD_MODE))) {
+            nixboy::TerminalEditingKey editing = nixboy::TerminalEditingKey::None;
+            switch (key) {
+            case SDLK_LEFT:
+                editing = nixboy::TerminalEditingKey::Left;
+                break;
+            case SDLK_RIGHT:
+                editing = nixboy::TerminalEditingKey::Right;
+                break;
+            case SDLK_BACKSPACE:
+                editing = nixboy::TerminalEditingKey::Backspace;
+                break;
+            case SDLK_DELETE:
+                editing = nixboy::TerminalEditingKey::Delete;
+                break;
+            }
+            const auto sequence = nixboy::terminalEditingSequence(editing,
+                (mod & KMOD_CTRL) != 0, (mod & KMOD_LALT) != 0, (mod & KMOD_GUI) != 0);
+            if (!sequence.empty()) {
+                if (editing == nixboy::TerminalEditingKey::Backspace) {
+                    state.textInput.keyDown(event.keysym.scancode, '\b', '\x7f');
+                }
+                if (!state.client.sendInput(std::string(sequence))) {
+                    state.status = "Terminal input queue full or disconnected. Wait, or close with F10.";
+                    state.dirty = true;
+                }
+                return;
+            }
+        }
         if (special != VTERM_KEY_NONE) {
             char duplicate = '\0';
             char alternate = '\0';
@@ -584,6 +615,8 @@ namespace {
     void renderTerminal(int window, TerminalPresentation& presentation, int cellWidth, int cellHeight,
         VTerm* term, VTermScreen* screen, const TerminalState& state)
     {
+        const int previousFont = fontGetCurrent();
+        fontSetCurrent(101);
         const auto& layout = presentation.layout;
         const int pitch = layout.glassWidth;
         unsigned char* source = presentation.source.data();
@@ -607,7 +640,7 @@ namespace {
                     std::fill_n(source + (y + offset) * pitch + x, cellWidth, background);
                 }
                 if (cell.chars[0] == UINT32_MAX || cell.attrs.conceal) continue;
-                nixboy::drawTerminalGlyph(source, pitch, x, y, legacyGlyph(cell.chars[0]), foreground);
+                nixboy::drawTerminalGlyph(source, pitch, x, y, legacyGlyph(cell.chars[0]), foreground, cellWidth, cellHeight);
                 if (cell.attrs.underline) {
                     std::fill_n(source + (y + cellHeight - 2) * pitch + x, cellWidth, foreground);
                 }
@@ -623,7 +656,7 @@ namespace {
             for (size_t index = 0; index < count; index++) {
                 nixboy::drawTerminalGlyph(source, pitch,
                     layout.textX + (index % layout.cols) * cellWidth,
-                    top + (index / layout.cols) * cellHeight, state.notice[index], _colorTable[992]);
+                    top + (index / layout.cols) * cellHeight, state.notice[index], _colorTable[992], cellWidth, cellHeight);
             }
         }
         unsigned char* buffer = windowGetBuffer(window);
@@ -635,6 +668,7 @@ namespace {
             presentation.crt.update(source, presentation.luminance);
             presentation.sourceChanged = true;
         }
+        fontSetCurrent(previousFont);
         windowRefresh(window);
     }
 
@@ -647,12 +681,13 @@ bool nixboyTerminalOpen(uint16_t port, const std::string& token,
     const NixboyTerminalOptions& options)
 {
     ModalState modal;
-    fontSetCurrent(0);
+    fontSetCurrent(101);
+    if (fontGetCurrent() != 101) return false;
     gameMouseSetCursor(MOUSE_CURSOR_ARROW);
     mouseShowCursor();
 
-    constexpr int cellWidth = nixboy::kTerminalCellWidth;
-    constexpr int cellHeight = nixboy::kTerminalCellHeight;
+    const int cellWidth = fontGetMonospacedCharacterWidth();
+    const int cellHeight = fontGetLineHeight();
     const int chromeHeight = fontGetLineHeight() + 1;
     if (chromeHeight <= 1) return false;
     TerminalPresentation presentation;
@@ -666,20 +701,20 @@ bool nixboyTerminalOpen(uint16_t port, const std::string& token,
     nixboyDrawTerminalFrame(modal.window, layout.width, layout.height,
         layout.glassX, layout.glassY, layout.glassWidth, layout.glassHeight, layout.statusY);
     unsigned char* windowBuffer = windowGetBuffer(modal.window);
-    fontDrawText(windowBuffer + 8 * layout.width + kMargin, "NIX-BOY / Linux terminal",
-        layout.width / 2, layout.width, _colorTable[992]);
-    const char* closeTitle = "Close [F10]";
+    const char* closeTitle = "CLOSE";
     const bool closeArt = modal.closeUp.lock(buildFid(OBJ_TYPE_INTERFACE, 8, 0, 0, 0))
         && modal.closeDown.lock(buildFid(OBJ_TYPE_INTERFACE, 9, 0, 0, 0));
     const int closeWidth = closeArt ? modal.closeUp.getWidth() : 16;
     const int closeHeight = closeArt ? modal.closeUp.getHeight() : 16;
     const int closeX = layout.width - kMargin - fontGetStringWidth(closeTitle) - closeWidth - 6;
-    const int closeButton = buttonCreate(modal.window, closeX, 6, closeWidth, closeHeight,
+    const int closeY = (layout.glassY - closeHeight) / 2;
+    const int closeLabelY = (layout.glassY - fontGetLineHeight()) / 2;
+    const int closeButton = buttonCreate(modal.window, closeX, closeY, closeWidth, closeHeight,
         -1, -1, -1, kCloseEvent, closeArt ? modal.closeUp.getData() : nullptr,
         closeArt ? modal.closeDown.getData() : nullptr, nullptr, BUTTON_FLAG_TRANSPARENT);
     if (closeButton == -1) return false;
     buttonSetCallbacks(closeButton, _gsound_red_butt_press, _gsound_red_butt_release);
-    fontDrawText(windowBuffer + (6 + std::max(0, (closeHeight - fontGetLineHeight()) / 2)) * layout.width
+    fontDrawText(windowBuffer + closeLabelY * layout.width
             + closeX + closeWidth + 6,
         closeTitle, fontGetStringWidth(closeTitle), layout.width, _colorTable[992]);
 

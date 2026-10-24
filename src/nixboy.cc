@@ -119,6 +119,11 @@ namespace {
         const EffectSetting effects[] = {
             { "crt_warp", &options.terminal.crt.warp, nixboy::kTerminalCrtStrengthMax },
             { "crt_glow", &options.terminal.crt.glow, nixboy::kTerminalCrtStrengthMax },
+            { "crt_bloom", &options.terminal.crt.bloom, nixboy::kTerminalCrtStrengthMax },
+            { "crt_scanlines", &options.terminal.crt.scanlines, nixboy::kTerminalCrtStrengthMax },
+            { "crt_noise", &options.terminal.crt.noise, nixboy::kTerminalCrtStrengthMax },
+            { "crt_jitter", &options.terminal.crt.jitter, nixboy::kTerminalCrtStrengthMax },
+            { "crt_rgb_shift", &options.terminal.crt.rgbShift, nixboy::kTerminalCrtStrengthMax },
             { "crt_persistence_ms", &options.terminal.crt.persistenceMs, nixboy::kTerminalCrtPersistenceMaxMs },
         };
         for (const auto& effect : effects) {

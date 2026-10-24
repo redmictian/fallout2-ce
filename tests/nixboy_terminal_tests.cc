@@ -4,6 +4,8 @@
 #include <iostream>
 #include <stdexcept>
 #include <string>
+#include <utility>
+#include <vector>
 
 #include "../src/nixboy_terminal_input.h"
 
@@ -129,6 +131,91 @@ void keyboardModes()
     require(t.output == "\x1bOA\x1b[Z\x1b[15~", "application cursor/shift tab/function key");
 }
 
+void terminalWordEditing()
+{
+    using fallout::nixboy::TerminalEditingKey;
+    using fallout::nixboy::terminalEditingSequence;
+    for (const auto& wordModifiers : { std::pair<bool, bool> { true, false }, { false, true }, { true, true } }) {
+        require(terminalEditingSequence(TerminalEditingKey::Left, wordModifiers.first, wordModifiers.second, false) == "\x1b"
+                                                                                                                       "b",
+            "modified left uses built-in backward-word");
+        require(terminalEditingSequence(TerminalEditingKey::Right, wordModifiers.first, wordModifiers.second, false) == "\x1b"
+                                                                                                                        "f",
+            "modified right uses built-in forward-word");
+    }
+    require(terminalEditingSequence(TerminalEditingKey::Left, false, true, true) == "\x1b"
+                                                                                    "b",
+        "delivered Win+Alt+Left moves a word");
+    require(terminalEditingSequence(TerminalEditingKey::Right, false, true, true) == "\x1b"
+                                                                                     "f",
+        "delivered Win+Alt+Right moves a word");
+    require(terminalEditingSequence(TerminalEditingKey::Backspace, true, false, false) == "\x17", "Ctrl+Backspace erases a whitespace-delimited word");
+    require(terminalEditingSequence(TerminalEditingKey::Backspace, false, true, false) == "\x1b\x7f", "Alt+Backspace erases a Readline word");
+    require(terminalEditingSequence(TerminalEditingKey::Delete, true, false, false) == "\x1b"
+                                                                                       "d",
+        "Ctrl+Delete erases the next word");
+    require(terminalEditingSequence(TerminalEditingKey::Delete, false, true, false) == "\x1b"
+                                                                                       "d",
+        "Alt+Delete erases the next word");
+    for (auto key : { TerminalEditingKey::Left, TerminalEditingKey::Right, TerminalEditingKey::Backspace, TerminalEditingKey::Delete }) {
+        require(terminalEditingSequence(key, false, false, false).empty(), "plain navigation retains libvterm mode handling");
+        require(terminalEditingSequence(key, false, false, true).empty(), "GUI alone has no terminal editing override");
+    }
+    require(terminalEditingSequence(TerminalEditingKey::None, true, true, false).empty(), "unmapped keys retain ordinary forwarding");
+    require(terminalEditingSequence(TerminalEditingKey::Backspace, true, true, false).empty(), "ambiguous Ctrl+Alt+Backspace remains unassigned");
+    require(terminalEditingSequence(TerminalEditingKey::Delete, true, true, false).empty(), "ambiguous Ctrl+Alt+Delete remains unassigned");
+    require(terminalEditingSequence(TerminalEditingKey::Backspace, false, true, true).empty(), "GUI override is restricted to word arrows");
+
+    Terminal t;
+    // These printable Ctrl chords already use the C0 path in handleKey. Check
+    // the actual output callback, including libvterm's special Ctrl-I/J/M cases.
+    for (char key : std::string("acdek luwyijm")) {
+        if (key != ' ') vterm_keyboard_unichar(t.term, key & 0x1f, VTERM_MOD_NONE);
+    }
+    require(t.output == "\x01\x03\x04\x05\x0b\x0c\x15\x17\x19\x09\x0a\x0d", "basic Emacs controls, interrupt, EOF, completion and Enter remain C0 bytes");
+}
+
+// Print production-emitted bytes for the optional real Bash/PTY smoke probe.
+// This avoids maintaining a second byte-encoding implementation in the probe.
+void editingProbeData()
+{
+    using fallout::nixboy::TerminalEditingKey;
+    using fallout::nixboy::terminalEditingSequence;
+    std::vector<std::pair<std::string, std::string>> sequences;
+    const auto addEditing = [&](const char* name, TerminalEditingKey key, bool ctrl, bool alt, bool gui = false) {
+        sequences.emplace_back(name, terminalEditingSequence(key, ctrl, alt, gui));
+    };
+    addEditing("CtrlLeft", TerminalEditingKey::Left, true, false);
+    addEditing("CtrlRight", TerminalEditingKey::Right, true, false);
+    addEditing("AltLeft", TerminalEditingKey::Left, false, true);
+    addEditing("AltRight", TerminalEditingKey::Right, false, true);
+    addEditing("WinAltLeft", TerminalEditingKey::Left, false, true, true);
+    addEditing("WinAltRight", TerminalEditingKey::Right, false, true, true);
+    addEditing("CtrlBackspace", TerminalEditingKey::Backspace, true, false);
+    addEditing("AltBackspace", TerminalEditingKey::Backspace, false, true);
+    addEditing("CtrlDelete", TerminalEditingKey::Delete, true, false);
+    addEditing("AltDelete", TerminalEditingKey::Delete, false, true);
+    for (char key : std::string("acdekluwy")) {
+        Terminal t;
+        vterm_keyboard_unichar(t.term, key & 0x1f, VTERM_MOD_NONE);
+        sequences.emplace_back(std::string("Ctrl") + static_cast<char>(key - 'a' + 'A'), t.output);
+    }
+    for (const auto& key : { std::pair<const char*, VTermKey> { "Left", VTERM_KEY_LEFT }, { "Right", VTERM_KEY_RIGHT },
+             { "Home", VTERM_KEY_HOME }, { "End", VTERM_KEY_END }, { "Delete", VTERM_KEY_DEL },
+             { "Backspace", VTERM_KEY_BACKSPACE }, { "Tab", VTERM_KEY_TAB } }) {
+        Terminal t;
+        vterm_keyboard_key(t.term, key.second, VTERM_MOD_NONE);
+        sequences.emplace_back(key.first, t.output);
+    }
+    constexpr char hex[] = "0123456789abcdef";
+    for (const auto& sequence : sequences) {
+        std::cout << sequence.first << ' ';
+        for (unsigned char byte : sequence.second)
+            std::cout << hex[byte >> 4] << hex[byte & 15];
+        std::cout << '\n';
+    }
+}
+
 void generatedCharacterTables()
 {
     Terminal t;
@@ -209,14 +296,19 @@ void textOnlyInputAfterTerminalKeys()
 
 } // namespace
 
-int main()
+int main(int argc, char** argv)
 {
     try {
+        if (argc == 2 && std::string_view(argv[1]) == "--editing-probe-data") {
+            editingProbeData();
+            return EXIT_SUCCESS;
+        }
         fragmentedTextAndAttributes();
         alternateScreenAndCursor();
         scrollRegion();
         editingAndReports();
         keyboardModes();
+        terminalWordEditing();
         generatedCharacterTables();
         textOnlyInputAfterTerminalKeys();
         std::cout << "Nix-Boy VT regression tests passed\n";
