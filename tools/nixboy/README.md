@@ -62,9 +62,13 @@ Connection/error notices and control hints appear inside the terminal. The
 frame carries only a native red button and centered CLOSE label; no title or
 status/footer panel is reserved. The glass fills the frame opening.
 
-The terminal uses the installed game's Pip-Boy font, font 101, through the native
-font renderer and its monospaced mode. Native glyphs and antialiasing are retained;
-the owned English assets give 10×10 cells. No Fallout font pixels are embedded.
+The terminal body uses the readable Departure Mono ASCII raster in fixed 8×16
+cells. It is independent of the native Fallout font 101 used for the CLOSE label
+and frame measurements. The pinned font source, attribution and regeneration
+instructions are in [the font notice](../../third_party/departure-mono/README.nixboy.md),
+with its [SIL OFL 1.1 license](../../third_party/departure-mono/OFL.txt).
+Pillow is needed only to regenerate the bitmap; no font library is needed at
+runtime. No Fallout font pixels are embedded.
 
 ## Basic shell editing
 

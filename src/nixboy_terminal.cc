@@ -615,8 +615,6 @@ namespace {
     void renderTerminal(int window, TerminalPresentation& presentation, int cellWidth, int cellHeight,
         VTerm* term, VTermScreen* screen, const TerminalState& state)
     {
-        const int previousFont = fontGetCurrent();
-        fontSetCurrent(101);
         const auto& layout = presentation.layout;
         const int pitch = layout.glassWidth;
         unsigned char* source = presentation.source.data();
@@ -640,7 +638,7 @@ namespace {
                     std::fill_n(source + (y + offset) * pitch + x, cellWidth, background);
                 }
                 if (cell.chars[0] == UINT32_MAX || cell.attrs.conceal) continue;
-                nixboy::drawTerminalGlyph(source, pitch, x, y, legacyGlyph(cell.chars[0]), foreground, cellWidth, cellHeight);
+                nixboy::drawTerminalGlyph(source, pitch, x, y, legacyGlyph(cell.chars[0]), foreground);
                 if (cell.attrs.underline) {
                     std::fill_n(source + (y + cellHeight - 2) * pitch + x, cellWidth, foreground);
                 }
@@ -656,7 +654,7 @@ namespace {
             for (size_t index = 0; index < count; index++) {
                 nixboy::drawTerminalGlyph(source, pitch,
                     layout.textX + (index % layout.cols) * cellWidth,
-                    top + (index / layout.cols) * cellHeight, state.notice[index], _colorTable[992], cellWidth, cellHeight);
+                    top + (index / layout.cols) * cellHeight, state.notice[index], _colorTable[992]);
             }
         }
         unsigned char* buffer = windowGetBuffer(window);
@@ -668,7 +666,6 @@ namespace {
             presentation.crt.update(source, presentation.luminance);
             presentation.sourceChanged = true;
         }
-        fontSetCurrent(previousFont);
         windowRefresh(window);
     }
 
@@ -686,8 +683,8 @@ bool nixboyTerminalOpen(uint16_t port, const std::string& token,
     gameMouseSetCursor(MOUSE_CURSOR_ARROW);
     mouseShowCursor();
 
-    const int cellWidth = fontGetMonospacedCharacterWidth();
-    const int cellHeight = fontGetLineHeight();
+    constexpr int cellWidth = nixboy::kTerminalCellWidth;
+    constexpr int cellHeight = nixboy::kTerminalCellHeight;
     const int chromeHeight = fontGetLineHeight() + 1;
     if (chromeHeight <= 1) return false;
     TerminalPresentation presentation;

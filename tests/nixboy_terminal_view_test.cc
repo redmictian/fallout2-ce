@@ -1,3 +1,4 @@
+#include "nixboy_terminal_font.h"
 #include "nixboy_terminal_view.h"
 
 #include <algorithm>
@@ -101,6 +102,51 @@ void testLayouts()
     require(!terminalViewLayout(640, 480, 64, 64, false, layout, 11), "unusable grid rejected");
     require(!terminalViewLayout(20000, 480, 8, 16, true, layout, 11), "unbounded screen rejected");
     require(layout.width == 0 && layout.rows == 0, "failed layout clears previous values");
+}
+
+void testFontBounds()
+{
+    constexpr int pitch = 23;
+    constexpr int height = 24;
+    constexpr int x = 7;
+    constexpr int y = 4;
+    constexpr unsigned char background = 17;
+    constexpr unsigned char foreground = 231;
+    for (uint32_t glyph = 32; glyph <= 126; glyph++) {
+        std::vector<unsigned char> target(pitch * height, background);
+        fallout::nixboy::drawTerminalGlyph(target.data(), pitch, x, y, glyph, foreground);
+        int ink = 0;
+        for (int row = 0; row < height; row++) {
+            for (int col = 0; col < pitch; col++) {
+                const unsigned char pixel = target[row * pitch + col];
+                if (col >= x && col < x + fallout::nixboy::kTerminalCellWidth
+                    && row >= y && row < y + fallout::nixboy::kTerminalCellHeight) {
+                    require(pixel == background || pixel == foreground, "font preserves the caller's cell background");
+                    if (pixel == foreground) ink++;
+                } else {
+                    require(pixel == background, "every ASCII glyph stays inside its 8x16 cell");
+                }
+            }
+        }
+        require(glyph == ' ' ? ink == 0 : ink > 0 && ink < 128,
+            "space is blank and printable glyphs contain sparse visible ink");
+    }
+
+    std::vector<unsigned char> fallback(pitch * height, background);
+    auto expected = fallback;
+    fallout::nixboy::drawTerminalGlyph(expected.data(), pitch, x, y, '?', foreground);
+    fallout::nixboy::drawTerminalGlyph(fallback.data(), pitch, x, y, 0x1f600, foreground);
+    require(fallback == expected, "unavailable Unicode glyph uses the visible ASCII replacement");
+
+    const auto unchanged = fallback;
+    fallout::nixboy::drawTerminalGlyph(fallback.data(), 6, 0, 0, 'X', foreground);
+    fallout::nixboy::drawTerminalGlyph(fallback.data(), -1, 0, 0, 'X', foreground);
+    fallout::nixboy::drawTerminalGlyph(fallback.data(), pitch, -1, 0, 'X', foreground);
+    fallout::nixboy::drawTerminalGlyph(fallback.data(), pitch, 0, -1, 'X', foreground);
+    fallout::nixboy::drawTerminalGlyph(fallback.data(), pitch,
+        pitch - fallout::nixboy::kTerminalCellWidth + 1, 0, 'X', foreground);
+    fallout::nixboy::drawTerminalGlyph(nullptr, pitch, 0, 0, 'X', foreground);
+    require(fallback == unchanged, "invalid glyph arguments cannot write");
 }
 
 void testRgbBounds()
@@ -529,6 +575,7 @@ int main(int argc, char** argv)
             return EXIT_SUCCESS;
         }
         testLayouts();
+        testFontBounds();
         testRgbBounds();
         testLensAndEdgeCells();
         testBloomAndTime();
