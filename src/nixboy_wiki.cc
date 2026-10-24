@@ -6,6 +6,8 @@
 #include <WebView2.h>
 #include <windows.h>
 
+#include <algorithm>
+#include <array>
 #include <atomic>
 #include <filesystem>
 #include <functional>
@@ -14,11 +16,15 @@
 #include <utility>
 #include <vector>
 
+#include "art.h"
+#include "color.h"
 #include "game.h"
 #include "input.h"
 #include "kb.h"
 #include "mouse.h"
+#include "nixboy_ui_art.h"
 #include "svga.h"
+#include "text_font.h"
 
 namespace fallout {
 namespace {
@@ -29,6 +35,43 @@ namespace {
     constexpr int kBack = 1;
     constexpr int kHome = 2;
     constexpr int kClose = 3;
+
+    // Cache only our composed pixels. All source art and lettering come from
+    // the installed game; no game assets are included with the mod.
+    struct Image {
+        int width = 0;
+        int height = 0;
+        std::vector<uint32_t> pixels;
+
+        void assign(const unsigned char* indexed, int w, int h)
+        {
+            width = w;
+            height = h;
+            pixels.resize(w * h);
+            for (int i = 0; i < w * h; ++i) {
+                const int color = indexed[i] * 3;
+                pixels[i] = (static_cast<uint32_t>(_cmap[color]) * 4 << 16)
+                    | (static_cast<uint32_t>(_cmap[color + 1]) * 4 << 8)
+                    | static_cast<uint32_t>(_cmap[color + 2]) * 4;
+            }
+        }
+
+        void draw(HDC dc, const RECT& destination) const
+        {
+            if (pixels.empty()) return;
+            BITMAPINFO info {};
+            info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+            info.bmiHeader.biWidth = width;
+            info.bmiHeader.biHeight = -height;
+            info.bmiHeader.biPlanes = 1;
+            info.bmiHeader.biBitCount = 32;
+            info.bmiHeader.biCompression = BI_RGB;
+            SetStretchBltMode(dc, COLORONCOLOR);
+            StretchDIBits(dc, destination.left, destination.top,
+                destination.right - destination.left, destination.bottom - destination.top,
+                0, 0, width, height, pixels.data(), &info, DIB_RGB_COLORS, SRCCOPY);
+        }
+    };
 
     IID interfaceId(const wchar_t* text)
     {
@@ -75,6 +118,12 @@ namespace {
         HWND back = nullptr;
         HWND home = nullptr;
         HWND close = nullptr;
+        int x = 0;
+        int y = 0;
+        int width = 0;
+        int height = 0;
+        Image frame;
+        std::array<std::array<Image, 2>, 3> buttons;
         ICoreWebView2Environment* environment = nullptr;
         ICoreWebView2Controller* controller = nullptr;
         ICoreWebView2* view = nullptr;
@@ -107,20 +156,103 @@ namespace {
             return false;
         }
 
+        bool compose(bool fullscreen)
+        {
+            const int screenWidth = screenGetWidth();
+            const int screenHeight = screenGetHeight();
+            width = fullscreen ? screenWidth : std::min(1280, screenWidth - std::max(32, screenWidth / 8));
+            height = fullscreen ? screenHeight : std::min(900, screenHeight - std::max(32, screenHeight / 7));
+            x = (screenWidth - width) / 2;
+            y = (screenHeight - height) / 2;
+            if (width < 480 || height < 240) {
+                error = "The wiki needs a game screen of at least 640 by 480.";
+                return false;
+            }
+            std::vector<unsigned char> indexed(width * height, _colorTable[0]);
+            if (!nixboyDrawFrame(indexed.data(), width, height, 18, 56, width - 36, height - 74)) {
+                error = "Cannot load the installed game's automap frame for the wiki.";
+                return false;
+            }
+            frame.assign(indexed.data(), width, height);
+
+            FrmImage up;
+            FrmImage down;
+            if (!up.lock(buildFid(OBJ_TYPE_INTERFACE, 221, 0, 0, 0))
+                || !down.lock(buildFid(OBJ_TYPE_INTERFACE, 222, 0, 0, 0))
+                || up.getWidth() < 100 || up.getHeight() < 30
+                || down.getWidth() < 100 || down.getHeight() < 30) {
+                error = "Cannot load the installed game's wiki navigation buttons.";
+                return false;
+            }
+            const int oldFont = fontGetCurrent();
+            fontSetCurrent(103);
+            if (fontGetCurrent() != 103) {
+                fontSetCurrent(oldFont);
+                error = "Cannot load the installed game's wiki control font.";
+                return false;
+            }
+            const char* labels[] = { "BACK", "HOME", "CLOSE" };
+            for (int button = 0; button < 3; ++button) {
+                for (int pressed = 0; pressed < 2; ++pressed) {
+                    const auto& source = pressed ? down : up;
+                    std::vector<unsigned char> pixels(source.getData(), source.getData() + source.getWidth() * source.getHeight());
+                    const int textWidth = fontGetStringWidth(labels[button]);
+                    const int textX = (source.getWidth() - textWidth) / 2 + pressed;
+                    const int textY = (source.getHeight() - fontGetLineHeight()) / 2 + pressed;
+                    fontDrawText(pixels.data() + textY * source.getWidth() + textX, labels[button],
+                        textWidth, source.getWidth(), _colorTable[992] | FONT_SHADOW);
+                    buttons[button][pressed].assign(pixels.data(), source.getWidth(), source.getHeight());
+                }
+            }
+            fontSetCurrent(oldFont);
+            return true;
+        }
+
+        RECT scaled(int left, int top, int right, int bottom) const
+        {
+            RECT client;
+            GetClientRect(panel, &client);
+            return { MulDiv(left, client.right, width), MulDiv(top, client.bottom, height),
+                MulDiv(right, client.right, width), MulDiv(bottom, client.bottom, height) };
+        }
+
         void resize()
         {
             if (panel == nullptr) return;
-            RECT rectangle;
-            GetClientRect(panel, &rectangle);
-            const int scale = GetDpiForWindow(panel);
-            const int bar = MulDiv(42, scale ? scale : 96, 96);
-            const int gap = MulDiv(7, scale ? scale : 96, 96);
-            const int width = MulDiv(84, scale ? scale : 96, 96);
-            MoveWindow(back, gap, gap, width, bar - gap * 2, TRUE);
-            MoveWindow(home, gap * 2 + width, gap, width, bar - gap * 2, TRUE);
-            MoveWindow(close, rectangle.right - width - gap, gap, width, bar - gap * 2, TRUE);
-            rectangle.top = bar;
-            if (controller != nullptr) controller->put_Bounds(rectangle);
+            const auto move = [&](HWND button, int left, int right) {
+                const RECT rectangle = scaled(left, 8, right, 48);
+                if (button) MoveWindow(button, rectangle.left, rectangle.top,
+                    rectangle.right - rectangle.left, rectangle.bottom - rectangle.top, TRUE);
+            };
+            move(back, 22, 170);
+            move(home, 180, 328);
+            move(close, width - 170, width - 22);
+            if (controller != nullptr) controller->put_Bounds(scaled(18, 56, width - 18, height - 18));
+            InvalidateRect(panel, nullptr, FALSE);
+        }
+
+        RECT placement() const
+        {
+            int left = 0, top = 0, right = 0, bottom = 0;
+            SDL_RenderLogicalToWindow(gSdlRenderer, static_cast<float>(x), static_cast<float>(y), &left, &top);
+            SDL_RenderLogicalToWindow(gSdlRenderer, static_cast<float>(x + width), static_cast<float>(y + height), &right, &bottom);
+            return { left, top, right, bottom };
+        }
+
+        void reposition()
+        {
+            if (gSdlRenderer == nullptr) {
+                error = "The game renderer stopped. Close and reopen the wiki.";
+                closing = true;
+                return;
+            }
+            const RECT wanted = placement();
+            RECT current;
+            GetWindowRect(panel, &current);
+            MapWindowPoints(nullptr, parent, reinterpret_cast<POINT*>(&current), 2);
+            if (EqualRect(&wanted, &current)) return;
+            MoveWindow(panel, wanted.left, wanted.top, wanted.right - wanted.left, wanted.bottom - wanted.top, TRUE);
+            if (controller) controller->NotifyParentWindowPositionChanged();
         }
 
         void goBack()
@@ -155,6 +287,28 @@ namespace {
                     browser->closing = true;
                     return 0;
                 }
+            } else if (message == WM_DRAWITEM) {
+                auto* item = reinterpret_cast<DRAWITEMSTRUCT*>(lParam);
+                if (item->CtlID >= kBack && item->CtlID <= kClose) {
+                    const bool pressed = (item->itemState & ODS_SELECTED) != 0;
+                    browser->buttons[item->CtlID - kBack][pressed].draw(item->hDC, item->rcItem);
+                    if (item->itemState & ODS_FOCUS) {
+                        RECT focus = item->rcItem;
+                        InflateRect(&focus, -5, -5);
+                        DrawFocusRect(item->hDC, &focus);
+                    }
+                    return TRUE;
+                }
+            } else if (message == WM_PAINT) {
+                PAINTSTRUCT paint;
+                HDC dc = BeginPaint(window, &paint);
+                RECT client;
+                GetClientRect(window, &client);
+                browser->frame.draw(dc, client);
+                EndPaint(window, &paint);
+                return 0;
+            } else if (message == WM_ERASEBKGND) {
+                return 1;
             } else if (message == WM_SIZE) {
                 browser->resize();
                 return 0;
@@ -410,13 +564,13 @@ namespace {
 
 } // namespace
 
-bool nixboyWikiWindowOpen(const std::string& homePath, std::string& error)
+bool nixboyWikiWindowOpen(const std::string& homePath, bool fullscreen, std::string& error)
 {
     std::wstring root;
     if (!contentRoot(homePath, root, error)) return false;
     SDL_SysWMinfo info {};
     SDL_VERSION(&info.version);
-    if (gSdlWindow == nullptr || !SDL_GetWindowWMInfo(gSdlWindow, &info) || info.subsystem != SDL_SYSWM_WINDOWS) {
+    if (gSdlWindow == nullptr || gSdlRenderer == nullptr || !SDL_GetWindowWMInfo(gSdlWindow, &info) || info.subsystem != SDL_SYSWM_WINDOWS) {
         error = "Cannot find the game's native Windows window.";
         return false;
     }
@@ -448,6 +602,10 @@ bool nixboyWikiWindowOpen(const std::string& homePath, std::string& error)
     auto browser = std::make_shared<Browser>();
     browser->root = std::move(root);
     browser->parent = info.info.win.window;
+    if (!browser->compose(fullscreen)) {
+        error = browser->error;
+        return false;
+    }
     std::wstring profile;
     try {
         auto directory = std::filesystem::path(browser->root).parent_path() / L"wiki-webview2-profile";
@@ -462,25 +620,26 @@ bool nixboyWikiWindowOpen(const std::string& homePath, std::string& error)
     windowClass.lpfnWndProc = panelProcedure;
     windowClass.hInstance = GetModuleHandleW(nullptr);
     windowClass.hCursor = LoadCursorW(nullptr, MAKEINTRESOURCEW(32512));
-    windowClass.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_BTNFACE + 1);
     windowClass.lpszClassName = kPanelClass;
     if (!RegisterClassW(&windowClass) && GetLastError() != ERROR_CLASS_ALREADY_EXISTS) {
         error = "Cannot register the wiki panel.";
         return false;
     }
     InputGuard input(*browser);
-    RECT rectangle;
-    GetClientRect(browser->parent, &rectangle);
+    // Centered panels leave the game visible. Present the cursor-free indexed
+    // background once before the native child takes ownership of its rectangle.
+    renderPresent();
+    const RECT rectangle = browser->placement();
     browser->panel = CreateWindowExW(0, kPanelClass, L"nix-boy wiki", WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN | WS_CLIPSIBLINGS,
-        0, 0, rectangle.right, rectangle.bottom, browser->parent, nullptr, windowClass.hInstance, browser.get());
+        rectangle.left, rectangle.top, rectangle.right - rectangle.left, rectangle.bottom - rectangle.top,
+        browser->parent, nullptr, windowClass.hInstance, browser.get());
     if (browser->panel == nullptr) {
         error = "Cannot create the in-game wiki panel.";
         return false;
     }
     auto button = [&](int id, const wchar_t* label) {
-        HWND control = CreateWindowExW(0, L"BUTTON", label, WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
+        HWND control = CreateWindowExW(0, L"BUTTON", label, WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
             0, 0, 1, 1, browser->panel, reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)), windowClass.hInstance, nullptr);
-        if (control) SendMessageW(control, WM_SETFONT, reinterpret_cast<WPARAM>(GetStockObject(DEFAULT_GUI_FONT)), TRUE);
         return control;
     };
     browser->back = button(kBack, L"Back");
@@ -542,11 +701,7 @@ bool nixboyWikiWindowOpen(const std::string& homePath, std::string& error)
         }
         _GNW95_process_message();
         tickersExecute();
-        GetClientRect(browser->parent, &rectangle);
-        RECT panelRectangle;
-        GetClientRect(browser->panel, &panelRectangle);
-        if (rectangle.right != panelRectangle.right || rectangle.bottom != panelRectangle.bottom)
-            MoveWindow(browser->panel, 0, 0, rectangle.right, rectangle.bottom, TRUE);
+        browser->reposition();
         if (!browser->ready && GetTickCount() - start > 15000) {
             browser->error = "Wiki browser startup timed out. Close and reopen the wiki.";
             browser->closing = true;
@@ -567,7 +722,7 @@ bool nixboyWikiWindowOpen(const std::string& homePath, std::string& error)
 
 namespace fallout {
 
-bool nixboyWikiWindowOpen(const std::string&, std::string& error)
+bool nixboyWikiWindowOpen(const std::string&, bool, std::string& error)
 {
     error = "The in-game HTML wiki requires a Windows nix-boy build.";
     return false;

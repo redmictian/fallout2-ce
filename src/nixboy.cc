@@ -46,6 +46,7 @@ namespace {
 
     struct WikiOptions {
         bool enabled = false;
+        bool fullscreen = false;
         nixboy::Hotkey hotkey { nixboy::HotkeyKind::ControlLetter, 'W' };
         std::string home = "nixboy/wiki/index.html";
     };
@@ -203,6 +204,16 @@ namespace {
             }
         }
         if (!options.enabled) return true;
+        if (configGetString(&config, "wiki", "fullscreen", &value)) {
+            if (std::string(value) == "1" || std::string(value) == "true") {
+                options.fullscreen = true;
+            } else if (std::string(value) == "0" || std::string(value) == "false") {
+                options.fullscreen = false;
+            } else {
+                error = "nixboy.ini: [wiki] fullscreen must be 1/true or 0/false.";
+                return false;
+            }
+        }
         if (configGetString(&config, "wiki", "hotkey", &value)
             && !nixboy::parseHotkey(value, options.hotkey)) {
             error = "nixboy.ini: [wiki] hotkey must be Ctrl+A..Z (except H/I/M), Alt+A..Z, A..Z, F1..F12 or none.";
@@ -366,7 +377,7 @@ void nixboyOpenWiki()
         return;
     }
     if (!options.enabled || gDude == nullptr) return;
-    if (!nixboyWikiWindowOpen(options.home, error)) {
+    if (!nixboyWikiWindowOpen(options.home, options.fullscreen, error)) {
         showWikiError(error);
     }
 #endif

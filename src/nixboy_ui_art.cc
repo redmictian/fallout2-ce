@@ -87,15 +87,12 @@ namespace {
 
 } // namespace
 
-bool nixboyDrawTerminalFrame(int window, int width, int height,
-    int glassX, int glassY, int glassWidth, int glassHeight, int statusY)
+bool nixboyDrawFrame(unsigned char* buffer, int width, int height,
+    int glassX, int glassY, int glassWidth, int glassHeight)
 {
-    unsigned char* buffer = windowGetBuffer(window);
-    if (buffer == nullptr || width != windowGetWidth(window) || height != windowGetHeight(window)
-        || width < 96 || height < 96 || glassX < 14 || glassY < 14
+    if (buffer == nullptr || width < 96 || height < 96 || glassX < 14 || glassY < 14
         || glassWidth < 48 || glassHeight < 48 || glassX + glassWidth > width - 14
-        || glassY + glassHeight > height - 14 || statusY < glassY + glassHeight
-        || statusY >= height) {
+        || glassY + glassHeight > height - 14) {
         return false;
     }
     FrmImage frame;
@@ -133,6 +130,17 @@ bool nixboyDrawTerminalFrame(int window, int width, int height,
         }
     }
     return true;
+}
+
+bool nixboyDrawTerminalFrame(int window, int width, int height,
+    int glassX, int glassY, int glassWidth, int glassHeight, int statusY)
+{
+    if (width != windowGetWidth(window) || height != windowGetHeight(window)
+        || statusY < glassY + glassHeight || statusY >= height) {
+        return false;
+    }
+    return nixboyDrawFrame(windowGetBuffer(window), width, height,
+        glassX, glassY, glassWidth, glassHeight);
 }
 
 bool nixboyDrawPipboyLabel(unsigned char* buffer, int width, int height,

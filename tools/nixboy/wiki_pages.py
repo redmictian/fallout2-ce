@@ -24,6 +24,9 @@ header a { color: inherit; text-decoration: none; font-weight: 750; letter-spaci
 header span { display: block; opacity: .8; font-size: .8rem; }
 main { max-width: 56rem; margin: auto; padding: 1.4rem 1.2rem 3rem; }
 nav { display: flex; gap: .7rem 1.1rem; flex-wrap: wrap; margin-bottom: 1.7rem; font-size: .9rem; }
+.wiki-embedded #wiki-back, .wiki-embedded nav .wiki-home { display: none; }
+.wiki-embedded header { padding-top: .45rem; padding-bottom: .45rem; }
+.wiki-embedded header span { display: none; }
 a { color: #17694c; text-underline-offset: .18em; }
 a:hover { color: #094732; }
 a:focus-visible, button:focus-visible { outline: 3px solid #ad6b12; outline-offset: 4px; }
@@ -57,6 +60,10 @@ footer { max-width: 56rem; margin: auto; padding: 0 1.2rem 2rem; color: #526456;
 """
 
 NAVIGATION = r"""// Ordinary links and the parent fallback work without JavaScript/storage.
+// The in-game frame owns Back/Home. Browser previews keep their ordinary links.
+if (window.location.origin === 'https://nixboy-wiki.invalid') {
+  document.documentElement.classList.add('wiki-embedded');
+}
 const root = new URL('.', window.location.href).href;
 const key = 'nixboy-wiki:' + root;
 function localPage(value) {
@@ -115,7 +122,7 @@ def _page(title, body, parent="index.html", subject=None):
 <header><a href="index.html">nix-boy</a><span>Linux field wiki</span></header>
 <main>
 <nav aria-label="Wiki navigation"><a id="wiki-back" href="{escape(parent, quote=True)}">&#8592; Back</a>
-<a href="index.html">Home</a>{subject_link}</nav>
+<a class="wiki-home" href="index.html">Home</a>{subject_link}</nav>
 {body}
 </main>
 <footer>Learning reference &middot; Challenges run through the nix-boy training hub.</footer>

@@ -2,6 +2,7 @@ from html.parser import HTMLParser
 import hashlib
 import json
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -21,6 +22,9 @@ class Links(HTMLParser):
         super().__init__()
         self.urls = []
         self.back = None
+        self.home = None
+        self.subjects = []
+        self.html_classes = []
         self.feed(html)
 
     def handle_starttag(self, tag, attrs):
@@ -30,6 +34,12 @@ class Links(HTMLParser):
                 self.urls.append(values[name])
         if values.get("id") == "wiki-back":
             self.back = values["href"]
+        if tag == "a" and "wiki-home" in values.get("class", "").split():
+            self.home = values["href"]
+        if tag == "a" and values.get("href", "").startswith("subject-"):
+            self.subjects.append(values["href"])
+        if tag == "html":
+            self.html_classes = values.get("class", "").split()
 
 
 class WikiPageTests(unittest.TestCase):
@@ -157,6 +167,29 @@ class WikiPageTests(unittest.TestCase):
         self.assertIn("nixboyWikiPrevious", script)
         self.assertIn("localPage(previous) || localPage(document.referrer)", script)
         self.assertIn("history.back()", script)
+
+    def test_embedded_frame_controls_preserve_browser_preview_and_subject_links(self):
+        self.export()
+        for path in self.output.glob("*.html"):
+            with self.subTest(page=path.name):
+                links = Links(path.read_text(encoding="utf-8"))
+                self.assertIsNotNone(links.back)
+                self.assertEqual(links.home, "index.html")
+                self.assertNotIn("wiki-embedded", links.html_classes)
+        article = Links(self.read("article-linux.paths.html"))
+        self.assertIn("subject-filesystem.html", article.subjects)
+        css = self.read("wiki.css")
+        hiding = [selectors.strip() for selectors, declarations in
+                  re.findall(r"([^{}]+)\{([^{}]*)\}", css) if "display: none" in declarations]
+        self.assertTrue(hiding)
+        for selectors in hiding:
+            self.assertTrue(all(selector.strip().startswith(".wiki-embedded ")
+                                for selector in selectors.split(",")), selectors)
+        self.assertIn(".wiki-embedded #wiki-back, .wiki-embedded nav .wiki-home", hiding)
+        self.assertTrue(all("subject-" not in selectors for selectors in hiding))
+        script = self.read("navigation.js")
+        self.assertIn("window.location.origin === 'https://nixboy-wiki.invalid'", script)
+        self.assertIn("document.documentElement.classList.add('wiki-embedded')", script)
 
     def test_nonempty_or_source_output_is_rejected_without_overwriting(self):
         self.output.mkdir()
