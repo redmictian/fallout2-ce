@@ -250,6 +250,13 @@ namespace {
         showDialogBox(error.c_str(), nullptr, 0, 192, 135, _colorTable[992], nullptr, _colorTable[992], DIALOG_BOX_LARGE);
     }
 
+    void showWikiError(const std::string& error)
+    {
+        debugPrint("Nix-Boy wiki: %s\n", error.c_str());
+        const char* body[] = { error.c_str() };
+        showDialogBox("nix-boy wiki", body, 1, 192, 135, _colorTable[992], nullptr, _colorTable[992], DIALOG_BOX_LARGE);
+    }
+
     nixboy::Context collectContext(const Options& options)
     {
         const auto ticks = gameTimeGetTime();
@@ -355,12 +362,12 @@ void nixboyOpenWiki()
     WikiOptions options;
     std::string error;
     if (!readWikiOptions(options, error)) {
-        showError(error);
+        showWikiError(error);
         return;
     }
     if (!options.enabled || gDude == nullptr) return;
     if (!nixboyWikiWindowOpen(options.home, error)) {
-        showError(error);
+        showWikiError(error);
     }
 #endif
 }
