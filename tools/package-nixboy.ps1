@@ -1,14 +1,90 @@
 param(
     [Parameter(Mandatory = $true)][string]$Executable,
     [Parameter(Mandatory = $true)][string]$Destination,
+    [Parameter(Mandatory = $true)][string]$WikiDirectory,
+    [Parameter(Mandatory = $true)][string]$WebView2Loader,
     [string]$LiveProbe
 )
 $ErrorActionPreference = 'Stop'
+
+function Get-PackageFiles([string]$Root) {
+    foreach ($item in Get-ChildItem -LiteralPath $Root -Recurse -Force) {
+        if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) {
+            throw "Package input must not contain symbolic links or junctions: $($item.FullName)"
+        }
+        if (-not $item.PSIsContainer) { $item }
+    }
+}
+
+function Get-RelativeFile([string]$Root, [string]$RelativePath) {
+    if (-not $RelativePath -or $RelativePath -match '[\\:?#]' -or $RelativePath.StartsWith('/') -or
+        @($RelativePath.Split('/') | Where-Object { $_ -in @('', '.', '..') }).Count) {
+        throw "Invalid package manifest path: $RelativePath"
+    }
+    $path = [IO.Path]::GetFullPath((Join-Path $Root $RelativePath))
+    if (-not $path.StartsWith($Root + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase) -or
+        -not (Test-Path -LiteralPath $path -PathType Leaf)) {
+        throw "Missing package manifest file: $RelativePath"
+    }
+    return $path
+}
+
+function Assert-ManifestHash([string]$Path, [string]$Expected) {
+    if ($Expected -cnotmatch '^[a-f0-9]{64}$' -or
+        (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant() -cne $Expected) {
+        throw "Wiki export hash mismatch; regenerate the wiki: $Path"
+    }
+}
+
 $sourceDir = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path
 $executablePath = (Resolve-Path -LiteralPath $Executable).Path
+$wikiPath = (Resolve-Path -LiteralPath $WikiDirectory).Path.TrimEnd('\', '/')
+$loaderPath = (Resolve-Path -LiteralPath $WebView2Loader).Path
 $destinationPath = [IO.Path]::GetFullPath($Destination)
 if (Test-Path -LiteralPath $destinationPath) {
     throw 'Use a new package destination; existing files are never overwritten.'
+}
+$archivePath = "$destinationPath.zip"
+if (Test-Path -LiteralPath $archivePath) { throw 'Archive already exists.' }
+
+# An explicit export lets the build machine use its existing Python environment,
+# including WSL. Players only need these static files and the WebView2 runtime.
+$runtimeRoot = Join-Path $sourceDir 'tools/nixboy'
+$wikiFiles = @(Get-PackageFiles $wikiPath)
+$manifestPath = Join-Path $wikiPath 'wiki-export.json'
+if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
+    throw 'WikiDirectory needs wiki-export.json; run wiki_pages.py --output NEW-DIRECTORY first.'
+}
+$manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+if ($manifest.schema -ne 1 -or $null -eq $manifest.source_sha256 -or $null -eq $manifest.files_sha256) {
+    throw 'Unsupported wiki export manifest.'
+}
+$sourceNames = @('challenge_content.py', 'wiki_content.py', 'wiki_pages.py')
+foreach ($item in Get-PackageFiles (Join-Path $runtimeRoot 'content')) {
+    $sourceNames += $item.FullName.Substring($runtimeRoot.Length + 1).Replace('\', '/')
+}
+$sourceProperties = @($manifest.source_sha256.PSObject.Properties)
+if (@(Compare-Object ($sourceNames | Sort-Object) ($sourceProperties.Name | Sort-Object)).Count) {
+    throw 'Wiki source files changed; regenerate the wiki before packaging.'
+}
+foreach ($entry in $sourceProperties) {
+    Assert-ManifestHash (Get-RelativeFile $runtimeRoot $entry.Name) $entry.Value
+}
+$exportProperties = @($manifest.files_sha256.PSObject.Properties)
+$exportNames = @($wikiFiles | Where-Object { $_.FullName -ne $manifestPath } |
+    ForEach-Object { $_.FullName.Substring($wikiPath.Length + 1).Replace('\', '/') })
+if (-not $exportProperties.Count -or
+    @(Compare-Object ($exportNames | Sort-Object) ($exportProperties.Name | Sort-Object)).Count -or
+    @('index.html', 'wiki.css', 'navigation.js' | Where-Object { $_ -notin $exportNames }).Count) {
+    throw 'Wiki export files changed or are incomplete; regenerate the wiki before packaging.'
+}
+foreach ($entry in $exportProperties) {
+    Assert-ManifestHash (Get-RelativeFile $wikiPath $entry.Name) $entry.Value
+}
+$loaderHashPath = Join-Path $sourceDir 'third_party/webview2/loader.sha256'
+$expectedLoader = (Get-Content -LiteralPath $loaderHashPath -Raw).Trim().Split(' ')[0]
+if ((Get-FileHash -LiteralPath $loaderPath -Algorithm SHA256).Hash.ToLowerInvariant() -cne $expectedLoader) {
+    throw 'WebView2Loader must be the pinned official x64 loader; see third_party/webview2/README.nixboy.md.'
 }
 $sourceCommit = (& git -C $sourceDir rev-parse HEAD).Trim()
 if ($LASTEXITCODE -ne 0) { throw 'Cannot determine source revision.' }
@@ -20,6 +96,7 @@ $sourceStatus = & git -C $sourceDir status --porcelain
 if ($sourceStatus) { throw 'Commit the reviewed source before packaging.' }
 New-Item -ItemType Directory -Path $destinationPath | Out-Null
 Copy-Item -LiteralPath $executablePath -Destination (Join-Path $destinationPath 'fallout2-ce.exe')
+Copy-Item -LiteralPath $loaderPath -Destination (Join-Path $destinationPath 'WebView2Loader.dll')
 
 # Explicit source allowlist: no game assets, saves, runtime config or tokens.
 $files = @(
@@ -37,12 +114,14 @@ $files = @(
     'tools/nixboy/container/Dockerfile.training', 'tools/nixboy/container/Dockerfile.sshd',
     'tools/nixboy/container/sshd_config', 'tools/nixboy/container/sshd_start.py',
     'third_party/libvterm/LICENSE', 'third_party/libvterm/README.nixboy.md',
+    'third_party/webview2/LICENSE.txt', 'third_party/webview2/NOTICE.txt',
+    'third_party/webview2/README.nixboy.md', 'third_party/webview2/loader.sha256',
     'third_party/fpattern/LICENSE', 'third_party/sdl2/LICENSE', 'third_party/zlib/LICENSE'
 )
 # Content is authored data only; runtime attempts, credentials and test solvers
 # are not in this directory or part of the redistributable package.
 $contentRoot = Join-Path $sourceDir 'tools/nixboy/content'
-foreach ($contentFile in Get-ChildItem -LiteralPath $contentRoot -Recurse -File) {
+foreach ($contentFile in Get-PackageFiles $contentRoot) {
     if ($contentFile.Extension -notin @('.yaml', '.yml', '.md', '.txt', '.json', '.html', '.css', '.js', '.svg', '.png', '.jpg', '.jpeg', '.webp')) {
         throw "Unexpected file in authored training content: $($contentFile.Name)"
     }
@@ -56,7 +135,8 @@ foreach ($relativePath in $files) {
     $targetPath = Join-Path $destinationPath $packageRelativePath
     New-Item -ItemType Directory -Force -Path (Split-Path -Parent $targetPath) | Out-Null
     Copy-Item -LiteralPath (Join-Path $sourceDir $relativePath) -Destination $targetPath
-    if ($packageRelativePath.StartsWith('nixboy/') -and $packageRelativePath.EndsWith('.md')) {
+    if ($packageRelativePath.StartsWith('nixboy/') -and -not $packageRelativePath.StartsWith('nixboy/content/') -and
+        $packageRelativePath.EndsWith('.md')) {
         # The operator guides retain working source links, one directory deeper.
         $markdown = Get-Content -LiteralPath $targetPath -Raw
         $markdown = $markdown.Replace('(../../nixboy.version)', '(../nixboy.version)')
@@ -65,25 +145,38 @@ foreach ($relativePath in $files) {
         Set-Content -LiteralPath $targetPath -Value $markdown -Encoding utf8 -NoNewline
     }
 }
+foreach ($wikiFile in $wikiFiles) {
+    if ($wikiFile.Extension -notin @('.json', '.html', '.css', '.js', '.svg', '.png', '.jpg', '.jpeg', '.webp')) {
+        throw "Unexpected file in generated wiki: $($wikiFile.Name)"
+    }
+    $relativePath = $wikiFile.FullName.Substring($wikiPath.Length + 1)
+    $targetPath = Join-Path (Join-Path $destinationPath 'nixboy/wiki') $relativePath
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $targetPath) | Out-Null
+    Copy-Item -LiteralPath $wikiFile.FullName -Destination $targetPath
+}
 $notice = @"
 nix-boy $modVersion - modified Fallout 2 Community Edition
 Source branch: $sourceBranch
 Source commit: $sourceCommit
 
 This copy has been modified to add the nix-boy terminal, its challenge-based
-skill progression and a Windows build portability fix. These are one mod.
+skill progression, offline HTML wiki and a Windows build portability fix. These are one mod.
 See LICENSE.md for the engine's terms and third_party/*/LICENSE for dependencies.
 Departure Mono font data is covered by third_party/departure-mono/OFL.txt.
 
 Read nixboy/README.md before setup. Docker and a local Python bridge are
-required for Linux. Enable nixboy.ini in a separate owned-data test installation.
+required for the Linux terminal and challenges. Wiki reading uses the Windows
+WebView2 runtime and needs no Python, Docker or running bridge. Enable nixboy.ini
+in a separate owned-data test installation. Ctrl+W opens the wiki by default;
+Escape closes it. Its generated home is nixboy/wiki/index.html.
 No game assets, saves, runtime configuration or authentication tokens are included.
 
 Editable catalog: nixboy/content/tracks.yaml and nixboy/content/challenges/.
 Wiki lessons: nixboy/content/wiki/index.yaml, articles/ and assets/. Reading
 references use stable article IDs in each challenge's optional wiki list.
-Validate both catalogs with python nixboy/challenge_content.py, or export the
-HTML preview with python nixboy/wiki_pages.py --output PATH-TO-NEW-DIRECTORY.
+Validate both catalogs with python nixboy/challenge_content.py. After authoring,
+regenerate the HTML with python nixboy/wiki_pages.py --output PATH-TO-NEW-DIRECTORY.
+Close the wiki, preserve local edits, then deploy the new export as nixboy/wiki/.
 The initial catalog maps Unarmed to Filesystem and Science to Networking, each
 with two current-skill bands and five challenge options per level. Skills and
 levels can be extended in YAML using existing trusted task kinds. Restart the
@@ -101,13 +194,13 @@ Neither option saves or loads automatically. Never test in your clean game copy.
 Set-Content -LiteralPath (Join-Path $destinationPath 'READ-ME.txt') -Value $notice -Encoding utf8
 $checksum = (Get-FileHash -LiteralPath (Join-Path $destinationPath 'fallout2-ce.exe') -Algorithm SHA256).Hash.ToLowerInvariant()
 Set-Content -LiteralPath (Join-Path $destinationPath 'SHA256.txt') -Value "$checksum  fallout2-ce.exe" -Encoding ascii
+$loaderChecksum = (Get-FileHash -LiteralPath $loaderPath -Algorithm SHA256).Hash.ToLowerInvariant()
+Add-Content -LiteralPath (Join-Path $destinationPath 'SHA256.txt') -Value "$loaderChecksum  WebView2Loader.dll" -Encoding ascii
 if ($LiveProbe) {
     $probePath = (Resolve-Path -LiteralPath $LiveProbe).Path
     Copy-Item -LiteralPath $probePath -Destination (Join-Path $destinationPath 'nixboy-live-probe.exe')
     $probeChecksum = (Get-FileHash -LiteralPath $probePath -Algorithm SHA256).Hash.ToLowerInvariant()
     Add-Content -LiteralPath (Join-Path $destinationPath 'SHA256.txt') -Value "$probeChecksum  nixboy-live-probe.exe" -Encoding ascii
 }
-$archivePath = "$destinationPath.zip"
-if (Test-Path -LiteralPath $archivePath) { throw 'Archive already exists.' }
 Compress-Archive -LiteralPath $destinationPath -DestinationPath $archivePath
 Write-Output $archivePath

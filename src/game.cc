@@ -551,7 +551,9 @@ int gameHandleKey(int eventCode, bool isInCombatMode)
 
     // An explicitly configured shortcut takes precedence over its vanilla
     // action. With the default Ctrl+N, plain N still cycles weapon actions.
-    if (nixboyIsHotkey(eventCode)) {
+    bool terminalRequested = nixboyIsHotkey(eventCode);
+    bool wikiRequested = nixboyIsWikiHotkey(eventCode);
+    if (terminalRequested || wikiRequested) {
         if (interfaceBarEnabled()) {
             if (isInCombatMode) {
                 soundPlayFile("iisxxxx1");
@@ -565,7 +567,11 @@ int gameHandleKey(int eventCode, bool isInCombatMode)
                 colorCycleDisable();
                 bool indicatorBarWasVisible = indicatorBarHide();
                 if (mouseObjectsWereVisible) gameMouseObjectsHide();
-                nixboyOpen();
+                if (terminalRequested) {
+                    nixboyOpen();
+                } else {
+                    nixboyOpenWiki();
+                }
                 if (colorCycleWasEnabled) colorCycleEnable();
                 if (indicatorBarWasVisible) indicatorBarShow();
                 if (mouseObjectsWereVisible) gameMouseObjectsShow();

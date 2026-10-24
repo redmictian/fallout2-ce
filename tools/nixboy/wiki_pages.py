@@ -1,6 +1,7 @@
 """Export the trusted wiki as ordinary HTML, without Docker or the game."""
 
 import argparse
+import hashlib
 from html import escape
 from html.parser import HTMLParser
 import json
@@ -104,6 +105,7 @@ def _page(title, body, parent="index.html", subject=None):
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src 'none'; frame-src 'none'; worker-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; script-src 'self'; style-src 'self'">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{escape(title)} | nix-boy wiki</title>
 <link rel="stylesheet" href="wiki.css">
@@ -183,9 +185,27 @@ class _Fragment(HTMLParser):
         self.parts.append(f"<!{decl}>")
 
 
+def _sha256(path):
+    with path.open("rb") as stream:
+        return hashlib.file_digest(stream, "sha256").hexdigest()
+
+
+def _source_hashes(content_dir):
+    sources = {}
+    for path in sorted(Path(content_dir).rglob("*")):
+        if path.is_symlink():
+            raise ValueError(f"wiki export input must not contain symbolic links: {path}")
+        if path.is_file():
+            sources["content/" + path.relative_to(content_dir).as_posix()] = _sha256(path)
+    for name in ("challenge_content.py", "wiki_content.py", "wiki_pages.py"):
+        sources[name] = _sha256(Path(__file__).resolve().parent / name)
+    return sources
+
+
 def export_wiki(content_dir, output):
     """Validate first, then export into a new or empty directory. Never replace files."""
     challenges = Catalog(content_dir)
+    source_hashes = _source_hashes(challenges.root)
     wiki = WikiCatalog(challenges.root / "wiki", challenges)
     requested = Path(output)
     if requested.is_symlink():
@@ -252,12 +272,20 @@ def export_wiki(content_dir, output):
         destination.parent.mkdir(parents=True, exist_ok=True)
         with source.open("rb") as incoming, destination.open("xb") as outgoing:
             outgoing.write(incoming.read())
+    if _source_hashes(challenges.root) != source_hashes:
+        raise ValueError("wiki content changed during export; export again to a fresh directory")
+    manifest = {"schema": 1, "source_sha256": source_hashes,
+                "files_sha256": {path.relative_to(output).as_posix(): _sha256(path)
+                                 for path in sorted(output.rglob("*")) if path.is_file()}}
+    with (output / "wiki-export.json").open("x", encoding="utf-8", newline="\n") as stream:
+        json.dump(manifest, stream, indent=2, sort_keys=True)
+        stream.write("\n")
     return {"status": "exported", "output": str(output), "subjects": len(wiki.subjects),
             "articles": len(wiki.articles), "challenges": len(challenges.challenges), "assets": len(assets)}
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Export the nix-boy wiki for local HTML preview")
+    parser = argparse.ArgumentParser(description="Export the offline nix-boy wiki for preview, packaging or deployment")
     parser.add_argument("--content-dir", type=Path, default=CONTENT_ROOT)
     parser.add_argument("--output", type=Path, required=True, help="new or empty output directory")
     args = parser.parse_args()

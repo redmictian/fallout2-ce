@@ -399,6 +399,7 @@ unsigned char _stat_flag;
 static int gPipboyPrevTab;
 static bool pipboy_available_at_game_start = false;
 static bool gPipboyNixboyEnabled = false;
+static bool gPipboyWikiEnabled = false;
 
 static FrmImage _pipboyFrmImages[PIPBOY_FRM_COUNT];
 
@@ -447,8 +448,14 @@ int pipboyOpen(int intent)
             }
         }
 
-        if (gPipboyNixboyEnabled && nixboyIsHotkey(keyCode)) {
-            nixboyOpen();
+        bool terminalRequested = gPipboyNixboyEnabled && nixboyIsHotkey(keyCode);
+        bool wikiRequested = gPipboyWikiEnabled && nixboyIsWikiHotkey(keyCode);
+        if (terminalRequested || wikiRequested) {
+            if (terminalRequested) {
+                nixboyOpen();
+            } else {
+                nixboyOpenWiki();
+            }
             gPipboyLastEventTimestamp = getTicks();
             mouseGetPositionInWindow(gPipboyWindow, &gPipboyPreviousMouseX, &gPipboyPreviousMouseY);
             windowRefresh(gPipboyWindow);
@@ -466,8 +473,12 @@ int pipboyOpen(int intent)
             break;
         }
 
-        if (gPipboyNixboyEnabled && keyCode == 529) {
-            nixboyOpen();
+        if ((gPipboyNixboyEnabled && keyCode == 529) || (gPipboyWikiEnabled && keyCode == 530)) {
+            if (keyCode == 529) {
+                nixboyOpen();
+            } else {
+                nixboyOpenWiki();
+            }
             gPipboyLastEventTimestamp = getTicks();
             mouseGetPositionInWindow(gPipboyWindow, &gPipboyPreviousMouseX, &gPipboyPreviousMouseY);
             windowRefresh(gPipboyWindow);
@@ -642,6 +653,26 @@ static int pipboyWindowInit(int intent)
                     && _pipboyFrmImages[PIPBOY_FRM_BACKGROUND].getHeight() == PIPBOY_WINDOW_HEIGHT
                 ? _pipboyFrmImages[PIPBOY_FRM_BACKGROUND].getData()
                 : nullptr);
+    }
+
+    gPipboyWikiEnabled = nixboyIsWikiEnabled();
+    if (gPipboyWikiEnabled) {
+        // A separate bezel control keeps the terminal's original row intact.
+        int button = buttonCreate(gPipboyWindow, 527, 18,
+            _pipboyFrmImages[PIPBOY_FRM_LITTLE_RED_BUTTON_UP].getWidth(),
+            _pipboyFrmImages[PIPBOY_FRM_LITTLE_RED_BUTTON_UP].getHeight(),
+            -1, -1, -1, 530,
+            _pipboyFrmImages[PIPBOY_FRM_LITTLE_RED_BUTTON_UP].getData(),
+            _pipboyFrmImages[PIPBOY_FRM_LITTLE_RED_BUTTON_DOWN].getData(),
+            nullptr, BUTTON_FLAG_TRANSPARENT);
+        if (button != -1) {
+            buttonSetCallbacks(button, _gsound_red_butt_press, _gsound_red_butt_release);
+        }
+        int previousFont = fontGetCurrent();
+        fontSetCurrent(101);
+        fontDrawText(gPipboyWindowBuffer + PIPBOY_WINDOW_WIDTH * 18 + 548,
+            "WIKI", 72, PIPBOY_WINDOW_WIDTH, _colorTable[(23 << 10) | (20 << 5) | 5]);
+        fontSetCurrent(previousFont);
     }
 
     if (intent == PIPBOY_OPEN_INTENT_REST) {

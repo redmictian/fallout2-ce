@@ -1,0 +1,28 @@
+# Official SDK, downloaded unchanged; no browser runtime is bundled.
+include(FetchContent)
+if(POLICY CMP0135)
+    cmake_policy(SET CMP0135 NEW)
+endif()
+FetchContent_Declare(nixboy_webview2
+    URL "https://api.nuget.org/v3-flatcontainer/microsoft.web.webview2/1.0.2903.40/microsoft.web.webview2.1.0.2903.40.nupkg"
+    URL_HASH SHA256=ef128016dd1e51c59178c827ed5b8aa3322c57afa8675d930f8109505542ad74)
+if(CMAKE_VERSION VERSION_LESS "3.14")
+    FetchContent_GetProperties(nixboy_webview2)
+    if(NOT nixboy_webview2_POPULATED)
+        FetchContent_Populate(nixboy_webview2)
+    endif()
+else()
+    FetchContent_MakeAvailable(nixboy_webview2)
+endif()
+
+add_library(nixboy-webview2 INTERFACE)
+target_include_directories(nixboy-webview2 SYSTEM INTERFACE "${nixboy_webview2_SOURCE_DIR}/build/native/include")
+if(MINGW)
+    target_include_directories(nixboy-webview2 SYSTEM BEFORE INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}/mingw")
+endif()
+if(CMAKE_SIZEOF_VOID_P EQUAL 8)
+    set(NIXBOY_WEBVIEW2_ARCH x64)
+else()
+    set(NIXBOY_WEBVIEW2_ARCH x86)
+endif()
+set(NIXBOY_WEBVIEW2_LOADER "${nixboy_webview2_SOURCE_DIR}/build/native/${NIXBOY_WEBVIEW2_ARCH}/WebView2Loader.dll" PARENT_SCOPE)

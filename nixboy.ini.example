@@ -30,6 +30,14 @@ training=1
 port=47821
 token_file=nixboy.token
 
+; Offline HTML reader, independent of the terminal/bridge/Docker. Requires the
+; WebView2 Runtime on Windows and the generated wiki shipped beside the game.
+; Omitted settings use these defaults when [nixboy] enabled=1.
+[wiki]
+enabled=1
+hotkey=Ctrl+W
+home=nixboy/wiki/index.html
+
 ; Legacy free-shell mode only: named results can write listed global indexes.
 ; No bindings are enabled by default. Choose indexes owned by YOUR mod;
 ; arbitrary vanilla indexes will change existing quests or character state.

@@ -1,4 +1,5 @@
 from html.parser import HTMLParser
+import hashlib
 import json
 from pathlib import Path
 import shutil
@@ -102,6 +103,27 @@ class WikiPageTests(unittest.TestCase):
                       self.read("article-linux.paths.html"))
         self.assertEqual((self.output / "wiki-assets/assets/path tree.svg").read_bytes(), self.asset)
 
+    def test_export_manifest_records_current_sources_and_exact_generated_files(self):
+        self.export()
+        manifest = json.loads(self.read("wiki-export.json"))
+        self.assertEqual(manifest["schema"], 1)
+        self.assertIn("content/wiki/index.yaml", manifest["source_sha256"])
+        self.assertIn("wiki_pages.py", manifest["source_sha256"])
+        expected = {path.relative_to(self.output).as_posix() for path in self.output.rglob("*")
+                    if path.is_file() and path.name != "wiki-export.json"}
+        self.assertEqual(set(manifest["files_sha256"]), expected)
+        for name, fingerprint in manifest["files_sha256"].items():
+            self.assertEqual(hashlib.sha256((self.output / name).read_bytes()).hexdigest(), fingerprint)
+        source = self.content / "wiki/index.yaml"
+        self.assertEqual(hashlib.sha256(source.read_bytes()).hexdigest(),
+                         manifest["source_sha256"]["content/wiki/index.yaml"])
+        source.write_text(source.read_text(encoding="utf-8") + "\n# Authored revision\n", encoding="utf-8")
+        self.assertNotEqual(hashlib.sha256(source.read_bytes()).hexdigest(),
+                            manifest["source_sha256"]["content/wiki/index.yaml"])
+        (self.output / "index.html").write_text("Changed output", encoding="utf-8")
+        self.assertNotEqual(hashlib.sha256((self.output / "index.html").read_bytes()).hexdigest(),
+                            manifest["files_sha256"]["index.html"])
+
     def test_catalog_labels_and_plain_challenge_text_are_escaped(self):
         self.export()
         self.assertIn("Files &amp; &lt;folders&gt;", self.read("index.html"))
@@ -110,6 +132,17 @@ class WikiPageTests(unittest.TestCase):
         self.assertIn('<code>cd ~/lab</code>', article)
         self.assertIn("Copy &amp; &lt;keep&gt;", article)
         self.assertIn("&lt;script&gt; as plain text.", self.read("challenge-unarmed.files.copy-file.html"))
+
+    def test_every_generated_page_enforces_local_resources_and_blocks_active_connections(self):
+        self.export()
+        policy = "default-src 'self'; connect-src 'none'; frame-src 'none'; worker-src 'none'; " \
+                 "object-src 'none'; base-uri 'none'; form-action 'none'; script-src 'self'; style-src 'self'"
+        for path in self.output.glob("*.html"):
+            with self.subTest(page=path.name):
+                html = path.read_text(encoding="utf-8")
+                self.assertIn(f'<meta http-equiv="Content-Security-Policy" content="{policy}">', html)
+                self.assertLess(html.index('http-equiv="Content-Security-Policy"'), html.index('href="wiki.css"'))
+                self.assertIn('<script src="navigation.js" defer></script>', html)
 
     def test_each_view_has_a_deterministic_back_fallback(self):
         self.export()
