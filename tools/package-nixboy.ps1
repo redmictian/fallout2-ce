@@ -24,6 +24,7 @@ Copy-Item -LiteralPath $executablePath -Destination (Join-Path $destinationPath 
 # Explicit source allowlist: no game assets, saves, runtime config or tokens.
 $files = @(
     'LICENSE.md', 'nixboy.ini.example', 'nixboy.version',
+    'third_party/departure-mono/README.nixboy.md', 'third_party/departure-mono/OFL.txt',
     'tools/nixboy/README.md', 'tools/nixboy/TRAINING.md', 'tools/nixboy/protocol.md', 'tools/nixboy/.dockerignore',
     'tools/nixboy/requirements.txt', 'tools/nixboy/bridge.py',
     'tools/nixboy/protocol.py', 'tools/nixboy/training.py',
@@ -71,6 +72,7 @@ Source commit: $sourceCommit
 This copy has been modified to add the nix-boy terminal, its challenge-based
 skill progression and a Windows build portability fix. These are one mod.
 See LICENSE.md for the engine's terms and third_party/*/LICENSE for dependencies.
+Departure Mono font data is covered by third_party/departure-mono/OFL.txt.
 
 Read nixboy/README.md before setup. Docker and a local Python bridge are
 required for Linux. Enable nixboy.ini in a separate owned-data test installation.
