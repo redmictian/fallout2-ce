@@ -21,7 +21,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED YES)
 set(CMAKE_CXX_EXTENSIONS NO)
 
 option(FALLOUT_VENDORED "Use vendored third-party libraries" ON)
-option(FALLOUT_NIXBOY_PERK_TRAINING "Use Nix-Boy training ranks for the 76 level-up perks (new saves only)" OFF)
+option(FALLOUT_NIXBOY_PERK_TRAINING "Use Nix-Boy training ranks for the 76 level-up perks (new saves only)" ON)
 option(FALLOUT_NIXBOY "Build the desktop Nix-Boy terminal (runtime opt-in)" ON)
 
 if(ANDROID OR IOS)

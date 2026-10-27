@@ -102,7 +102,7 @@ Copy-Item -LiteralPath $loaderPath -Destination (Join-Path $destinationPath 'Web
 $files = @(
     'LICENSE.md', 'nixboy.ini.example', 'nixboy.version',
     'third_party/departure-mono/README.nixboy.md', 'third_party/departure-mono/OFL.txt',
-    'tools/nixboy/README.md', 'tools/nixboy/TRAINING.md', 'tools/nixboy/protocol.md', 'tools/nixboy/.dockerignore',
+    'tools/nixboy/README.md', 'tools/nixboy/DEBUGGING.md', 'tools/nixboy/TRAINING.md', 'tools/nixboy/protocol.md', 'tools/nixboy/.dockerignore',
     'tools/nixboy/requirements.txt', 'tools/nixboy/bridge.py',
     'tools/nixboy/protocol.py', 'tools/nixboy/training.py',
     'tools/nixboy/challenge_content.py', 'tools/nixboy/challenge_env.py',
@@ -160,7 +160,8 @@ Source branch: $sourceBranch
 Source commit: $sourceCommit
 
 This copy has been modified to add the nix-boy terminal, its challenge-based
-skill progression, offline HTML wiki and a Windows build portability fix. These are one mod.
+skill progression, offline HTML wiki, perk training and a Windows build portability
+fix. These modules share one mod version.
 See LICENSE.md for the engine's terms and third_party/*/LICENSE for dependencies.
 Departure Mono font data is covered by third_party/departure-mono/OFL.txt.
 
@@ -187,9 +188,16 @@ Release identity is recorded in nixboy.version and the
 source commit above; see the mod workspace's acceptance record for actual checks.
 Read nixboy/TRAINING.md for setup, controls and current limits.
 
-For fast disposable tests, --debug-new-game=narg starts a fresh predetermined
-character without menus or MVE movies. --debug-no-movies keeps normal menus.
-Neither option saves or loads automatically. Never test in your clean game copy.
+The standard 0.7.0 perk module requires new characters and uses 1.2T saves;
+ordinary 1.2R saves are incompatible. All 76 selectable perks gain a harmless
+unlock rank; original benefits start at rank two, and normal upgrades require
+level 310. Challenge-to-perk rewards are not connected yet.
+
+For fast disposable tests, --debug-perks=all opens all rank-one perk cards,
+--debug-perk-picker opens the real level-up picker, and --debug-perk=12:2 opens
+Toughness rank two. These skip menus, character creation and MVE movies.
+The separate nixboy/DEBUGGING.md documents every option and logging/limitations.
+No debug option saves or loads automatically. Never test in your clean game copy.
 "@
 Set-Content -LiteralPath (Join-Path $destinationPath 'READ-ME.txt') -Value $notice -Encoding utf8
 $checksum = (Get-FileHash -LiteralPath (Join-Path $destinationPath 'fallout2-ce.exe') -Algorithm SHA256).Hash.ToLowerInvariant()
