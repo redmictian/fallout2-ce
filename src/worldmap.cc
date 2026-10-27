@@ -3589,15 +3589,15 @@ static int wmRndEncounterPick()
     int effectiveLuck = critterGetStat(gDude, STAT_LUCK) - 5;
     int chance = randomBetween(0, totalChance) + effectiveLuck;
 
-    if (perkHasRank(gDude, PERK_EXPLORER)) {
+    if (perkHasBenefit(gDude, PERK_EXPLORER)) {
         chance += 2;
     }
 
-    if (perkHasRank(gDude, PERK_RANGER)) {
+    if (perkHasBenefit(gDude, PERK_RANGER)) {
         chance += 1;
     }
 
-    if (perkHasRank(gDude, PERK_SCOUT)) {
+    if (perkHasBenefit(gDude, PERK_SCOUT)) {
         chance += 1;
     }
 
@@ -3877,7 +3877,7 @@ static int wmSetupCritterObjs(int encounterIndex, Object** critterPtr, int critt
                 }
 
                 if (encounterItem->pid == PROTO_ID_MONEY) {
-                    if (perkHasRank(gDude, PERK_FORTUNE_FINDER)) {
+                    if (perkHasBenefit(gDude, PERK_FORTUNE_FINDER)) {
                         quantity *= 2;
                     }
                 }
@@ -3982,7 +3982,7 @@ static int wmSetupRndNextTileNum(Encounter* encounter, EncounterEntry* encounter
 
                 distance += critterGetStat(gDude, STAT_PERCEPTION);
 
-                if (perkHasRank(gDude, PERK_CAUTIOUS_NATURE)) {
+                if (perkHasBenefit(gDude, PERK_CAUTIOUS_NATURE)) {
                     distance += 3;
                 }
             }
@@ -4176,7 +4176,7 @@ static bool wmGameTimeIncrement(int ticksToAdd)
     }
 
     // SFALL: Fix Pathfinder perk.
-    int pathfinderRank = perkGetRank(gDude, PERK_PATHFINDER);
+    int pathfinderRank = perkGetBenefitRank(gDude, PERK_PATHFINDER);
     double bonus = static_cast<double>(ticksToAdd) * static_cast<double>(pathfinderRank) * 0.25 + gGameTimeIncRemainder;
     gGameTimeIncRemainder = modf(bonus, &bonus);
     ticksToAdd -= static_cast<int>(bonus);
@@ -5065,7 +5065,7 @@ static void wmMarkSubTileRadiusVisited(int x, int y)
 {
     int radius = 1;
 
-    if (perkHasRank(gDude, PERK_SCOUT)) {
+    if (perkHasBenefit(gDude, PERK_SCOUT)) {
         radius = 2;
     }
 

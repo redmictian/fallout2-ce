@@ -668,7 +668,7 @@ int animationRegisterRunToObject(Object* owner, Object* destination, int actionP
     animationDescription->destination = destination;
 
     if ((FID_TYPE(owner->fid) == OBJ_TYPE_CRITTER && (owner->data.critter.combat.results & DAM_CRIP_LEG_ANY) != 0)
-        || (owner == gDude && dudeHasState(DUDE_STATE_SNEAKING) && !perkGetRank(gDude, PERK_SILENT_RUNNING))
+        || (owner == gDude && dudeHasState(DUDE_STATE_SNEAKING) && !perkGetBenefitRank(gDude, PERK_SILENT_RUNNING))
         || !artExists(buildFid(FID_TYPE(owner->fid), owner->fid & 0xFFF, ANIM_RUNNING, 0, owner->rotation + 1))) {
         animationDescription->anim = ANIM_WALK;
     } else {
@@ -751,7 +751,7 @@ int animationRegisterRunToTile(Object* owner, int tile, int elevation, int actio
     animationDescription->elevation = elevation;
 
     if ((FID_TYPE(owner->fid) == OBJ_TYPE_CRITTER && (owner->data.critter.combat.results & DAM_CRIP_LEG_ANY) != 0)
-        || (owner == gDude && dudeHasState(DUDE_STATE_SNEAKING) && !perkGetRank(gDude, PERK_SILENT_RUNNING))
+        || (owner == gDude && dudeHasState(DUDE_STATE_SNEAKING) && !perkGetBenefitRank(gDude, PERK_SILENT_RUNNING))
         || !artExists(buildFid(FID_TYPE(owner->fid), owner->fid & 0xFFF, ANIM_RUNNING, 0, owner->rotation + 1))) {
         animationDescription->anim = ANIM_WALK;
     } else {
@@ -3004,7 +3004,7 @@ int _dude_run(int actionPoints)
         return -1;
     }
 
-    if (!perkGetRank(gDude, PERK_SILENT_RUNNING)) {
+    if (!perkGetBenefitRank(gDude, PERK_SILENT_RUNNING)) {
         dudeDisableState(DUDE_STATE_SNEAKING);
     }
 

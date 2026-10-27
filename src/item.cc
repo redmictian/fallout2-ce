@@ -1267,7 +1267,7 @@ int weaponGetDamage(Object* critter, int hitMode)
             if (damageModGetBonusHthDamageFix()) {
                 if (critter == gDude) {
                     // See explanation below.
-                    minDamage += 2 * perkGetRank(gDude, PERK_BONUS_HTH_DAMAGE);
+                    minDamage += 2 * perkGetBenefitRank(gDude, PERK_BONUS_HTH_DAMAGE);
                 }
             }
         }
@@ -1282,7 +1282,7 @@ int weaponGetDamage(Object* critter, int hitMode)
                 // Increase only min damage. Max damage should not be changed.
                 // It is calculated later by adding `meleeDamage` which already
                 // includes damage bonus (via `perkAddEffect`).
-                minDamage += 2 * perkGetRank(gDude, PERK_BONUS_HTH_DAMAGE);
+                minDamage += 2 * perkGetBenefitRank(gDude, PERK_BONUS_HTH_DAMAGE);
             }
         }
     }
@@ -1610,7 +1610,7 @@ int weaponGetRange(Object* critter, int hitMode)
 
         if (weaponGetAttackTypeForHitMode(weapon, hitMode) == ATTACK_TYPE_THROW) {
             if (critter == gDude) {
-                effectiveStrength = critterGetStat(critter, STAT_STRENGTH) + 2 * perkGetRank(critter, PERK_HEAVE_HO);
+                effectiveStrength = critterGetStat(critter, STAT_STRENGTH) + 2 * perkGetBenefitRank(critter, PERK_HEAVE_HO);
 
                 // SFALL: Fix for Heave Ho! increasing effective strength above
                 // 10.
@@ -1690,13 +1690,13 @@ int weaponGetActionPointCost(Object* critter, int hitMode, bool aiming)
     if (critter == gDude) {
         int attackType = weaponGetAttackTypeForHitMode(weapon, hitMode);
 
-        if (perkHasRank(gDude, PERK_BONUS_HTH_ATTACKS)) {
+        if (perkHasBenefit(gDude, PERK_BONUS_HTH_ATTACKS)) {
             if (attackType == ATTACK_TYPE_MELEE || attackType == ATTACK_TYPE_UNARMED) {
                 actionPoints -= 1;
             }
         }
 
-        if (perkHasRank(gDude, PERK_BONUS_RATE_OF_FIRE)) {
+        if (perkHasBenefit(gDude, PERK_BONUS_RATE_OF_FIRE)) {
             if (attackType == ATTACK_TYPE_RANGED) {
                 actionPoints -= 1;
             }
@@ -2830,7 +2830,7 @@ int _item_d_take_drug(Object* critter, Object* item)
                 addictionChance /= 2;
             }
 
-            if (perkGetRank(gDude, PERK_FLOWER_CHILD)) {
+            if (perkGetBenefitRank(gDude, PERK_FLOWER_CHILD)) {
                 addictionChance /= 2;
             }
         }
@@ -3059,7 +3059,7 @@ static void performWithdrawalStart(Object* obj, int perk, int pid)
             duration /= 2;
         }
 
-        if (perkGetRank(obj, PERK_FLOWER_CHILD)) {
+        if (perkGetBenefitRank(obj, PERK_FLOWER_CHILD)) {
             duration /= 2;
         }
     }

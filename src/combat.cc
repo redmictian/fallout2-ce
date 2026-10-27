@@ -3234,7 +3234,7 @@ static int _combat_turn(Object* obj, bool a2)
         if (obj == gDude) {
             keyboardReset();
             interfaceRenderArmorClass(true);
-            _combat_free_move = 2 * perkGetRank(gDude, PERK_BONUS_MOVE);
+            _combat_free_move = 2 * perkGetBenefitRank(gDude, PERK_BONUS_MOVE);
             interfaceRenderActionPoints(gDude->data.critter.combat.ap, _combat_free_move);
         } else {
             soundContinueAll();
@@ -3854,7 +3854,7 @@ static int attackCompute(Attack* attack)
     }
 
     if (roll == ROLL_FAILURE) {
-        if (traitIsSelected(TRAIT_JINXED) || perkHasRank(gDude, PERK_JINXED)) {
+        if (traitIsSelected(TRAIT_JINXED) || perkHasBenefit(gDude, PERK_JINXED)) {
             if (randomBetween(0, 1) == 1) {
                 roll = ROLL_CRITICAL_FAILURE;
             }
@@ -3863,11 +3863,11 @@ static int attackCompute(Attack* attack)
 
     if (roll == ROLL_SUCCESS) {
         if ((attackType == ATTACK_TYPE_MELEE || attackType == ATTACK_TYPE_UNARMED) && attack->attacker == gDude) {
-            if (perkHasRank(attack->attacker, PERK_SLAYER)) {
+            if (perkHasBenefit(attack->attacker, PERK_SLAYER)) {
                 roll = ROLL_CRITICAL_SUCCESS;
             }
 
-            if (perkHasRank(gDude, PERK_SILENT_DEATH)
+            if (perkHasBenefit(gDude, PERK_SILENT_DEATH)
                 && !_is_hit_from_front(gDude, attack->defender)
                 && dudeHasState(DUDE_STATE_SNEAKING)
                 && gDude != attack->defender->data.critter.combat.whoHitMe) {
@@ -3888,7 +3888,7 @@ static int attackCompute(Attack* attack)
         attack->ammoQuantity = v26;
 
         if (roll == ROLL_SUCCESS && attack->attacker == gDude) {
-            if (perkGetRank(gDude, PERK_SNIPER) != 0) {
+            if (perkGetBenefitRank(gDude, PERK_SNIPER) != 0) {
                 int d10 = randomBetween(1, 10);
                 int luck = critterGetStat(gDude, STAT_LUCK);
                 if (d10 <= luck) {
@@ -3912,7 +3912,7 @@ static int attackCompute(Attack* attack)
 
         // SFALL: Fix Silent Death bonus not being applied to critical hits.
         if ((attackType == ATTACK_TYPE_MELEE || attackType == ATTACK_TYPE_UNARMED) && attack->attacker == gDude) {
-            if (perkHasRank(gDude, PERK_SILENT_DEATH)
+            if (perkHasBenefit(gDude, PERK_SILENT_DEATH)
                 && !_is_hit_from_front(gDude, attack->defender)
                 && dudeHasState(DUDE_STATE_SNEAKING)
                 && gDude != attack->defender->data.critter.combat.whoHitMe) {
@@ -4352,7 +4352,7 @@ static int attackDetermineToHit(Object* attacker, int tile, Object* defender, in
 
             // SFALL: Fix Sharpshooter.
             if (attacker == gDude) {
-                perception += 2 * perkGetRank(gDude, PERK_SHARPSHOOTER);
+                perception += 2 * perkGetBenefitRank(gDude, PERK_SHARPSHOOTER);
             }
 
             int distanceMod = 0;
@@ -4411,7 +4411,7 @@ static int attackDetermineToHit(Object* attacker, int tile, Object* defender, in
 
         int minStrength = weaponGetMinStrengthRequired(weapon);
         int minStrengthMod = minStrength - critterGetStat(attacker, STAT_STRENGTH);
-        if (attacker == gDude && perkGetRank(gDude, PERK_WEAPON_HANDLING) != 0) {
+        if (attacker == gDude && perkGetBenefitRank(gDude, PERK_WEAPON_HANDLING) != 0) {
             minStrengthMod -= 3;
         }
 
@@ -4544,7 +4544,7 @@ static void attackComputeDamage(Attack* attack, int ammoQuantity, int bonusDamag
 
     int damageBonus;
     if (attack->attacker == gDude && weaponGetAttackTypeForHitMode(attack->weapon, attack->hitMode) == ATTACK_TYPE_RANGED) {
-        damageBonus = 2 * perkGetRank(gDude, PERK_BONUS_RANGED_DAMAGE);
+        damageBonus = 2 * perkGetBenefitRank(gDude, PERK_BONUS_RANGED_DAMAGE);
     } else {
         damageBonus = 0;
     }
@@ -4616,14 +4616,14 @@ static void attackComputeDamage(Attack* attack, int ammoQuantity, int bonusDamag
     }
 
     if (attack->attacker == gDude) {
-        if (perkGetRank(attack->attacker, PERK_LIVING_ANATOMY) != 0) {
+        if (perkGetBenefitRank(attack->attacker, PERK_LIVING_ANATOMY) != 0) {
             int kt = critterGetKillType(attack->defender);
             if (kt != KILL_TYPE_ROBOT && kt != KILL_TYPE_ALIEN) {
                 *damagePtr += 5;
             }
         }
 
-        if (perkGetRank(attack->attacker, PERK_PYROMANIAC) != 0) {
+        if (perkGetBenefitRank(attack->attacker, PERK_PYROMANIAC) != 0) {
             if (weaponGetDamageType(attack->attacker, attack->weapon) == DAMAGE_TYPE_FIRE) {
                 *damagePtr += 5;
             }
@@ -4638,7 +4638,7 @@ static void attackComputeDamage(Attack* attack, int ammoQuantity, int bonusDamag
         bool shouldKnockback = true;
         bool hasStonewall = false;
         if (critter == gDude) {
-            if (perkGetRank(critter, PERK_STONEWALL) != 0) {
+            if (perkGetBenefitRank(critter, PERK_STONEWALL) != 0) {
                 int chance = randomBetween(0, 100);
                 hasStonewall = true;
                 if (chance < 50) {
@@ -4893,7 +4893,7 @@ void _combat_display(Attack* attack)
         Object* weapon = critterGetWeaponForHitMode(attack->attacker, attack->hitMode);
         int strengthRequired = weaponGetMinStrengthRequired(weapon);
 
-        if (perkGetRank(attack->attacker, PERK_WEAPON_HANDLING) != 0) {
+        if (perkGetBenefitRank(attack->attacker, PERK_WEAPON_HANDLING) != 0) {
             strengthRequired -= 3;
         }
 
@@ -5393,7 +5393,7 @@ static void _combat_standup(Object* a1)
     int v2;
 
     v2 = 3;
-    if (a1 == gDude && perkGetRank(a1, PERK_QUICK_RECOVERY)) {
+    if (a1 == gDude && perkGetBenefitRank(a1, PERK_QUICK_RECOVERY)) {
         v2 = 1;
     }
 

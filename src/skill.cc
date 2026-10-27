@@ -252,7 +252,7 @@ int skillGetValue(Object* critter, int skill)
         if (skillIsTagged(skill)) {
             value += baseValue * skillDescription->baseValueMult;
 
-            if (!perkGetRank(critter, PERK_TAG) || skill != gTaggedSkills[3]) {
+            if (!perkGetBenefitRank(critter, PERK_TAG) || skill != gTaggedSkills[3]) {
                 value += 20;
             }
         }
@@ -560,7 +560,7 @@ int skillUse(Object* obj, Object* target, int skill, int criticalChanceModifier)
 
     if (obj == gDude) {
         if (skill == SKILL_FIRST_AID || skill == SKILL_DOCTOR) {
-            int healerRank = perkGetRank(obj, PERK_HEALER);
+            int healerRank = perkGetBenefitRank(obj, PERK_HEALER);
             minimumHpToHeal = 4 * healerRank;
             maximumHpToHeal = 10 * healerRank;
         }
@@ -1036,7 +1036,7 @@ int skillsPerformStealing(Object* thief, Object* target, Object* item, bool isPl
 
     int stealModifier = -_gStealCount + 1;
 
-    if (thief != gDude || !perkHasRank(thief, PERK_PICKPOCKET)) {
+    if (thief != gDude || !perkHasBenefit(thief, PERK_PICKPOCKET)) {
         // -4% per item size
         stealModifier -= 4 * itemGetSize(item);
 

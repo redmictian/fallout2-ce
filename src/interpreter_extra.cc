@@ -2569,7 +2569,7 @@ static void opHasTrait(Program* program)
         switch (type) {
         case CRITTER_TRAIT_PERK:
             if (param < PERK_COUNT) {
-                result = perkGetRank(object, param);
+                result = perkGetBenefitRank(object, param);
             } else {
                 scriptError("\nScript Error: %s: op_has_trait: Perk out of range", program->name);
             }
@@ -3863,7 +3863,7 @@ static void _op_giq_option(Program* program)
     int iq = programStackPopInteger(program);
 
     int intelligence = critterGetStat(gDude, STAT_INTELLIGENCE);
-    intelligence += perkGetRank(gDude, PERK_SMOOTH_TALKER);
+    intelligence += perkGetBenefitRank(gDude, PERK_SMOOTH_TALKER);
 
     if (iq < 0) {
         if (-intelligence < iq) {

@@ -6,6 +6,13 @@ namespace fallout {
 struct DebugLaunchOptions {
     bool skipMovies = false;
     const char* newGameCharacter = nullptr;
+    int newGameLevel = 1;
+    bool reviewAllPerks = false;
+    bool reviewPerkPicker = false;
+    int reviewPerk = -1;
+    int reviewRank = 1;
+
+    bool reviewPerks() const { return reviewAllPerks || reviewPerkPicker || reviewPerk >= 0; }
 };
 
 // Explicit test-run switches; unrelated engine/config arguments are preserved.

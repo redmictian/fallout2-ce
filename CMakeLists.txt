@@ -21,6 +21,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED YES)
 set(CMAKE_CXX_EXTENSIONS NO)
 
 option(FALLOUT_VENDORED "Use vendored third-party libraries" ON)
+option(FALLOUT_NIXBOY_PERK_TRAINING "Use Nix-Boy training ranks for the 76 level-up perks (new saves only)" OFF)
 option(FALLOUT_NIXBOY "Build the desktop Nix-Boy terminal (runtime opt-in)" ON)
 
 if(ANDROID OR IOS)
@@ -33,7 +34,15 @@ else()
     add_executable(${EXECUTABLE_NAME} WIN32 MACOSX_BUNDLE)
 endif()
 
+if(FALLOUT_NIXBOY_PERK_TRAINING)
+    target_compile_definitions(${EXECUTABLE_NAME} PRIVATE FALLOUT_NIXBOY_PERK_TRAINING)
+endif()
+
 target_sources(${EXECUTABLE_NAME} PUBLIC
+    "src/perk_training.cc"
+    "src/perk_training.h"
+    "src/debug_perks.cc"
+    "src/debug_perks.h"
     "src/actions.cc"
     "src/actions.h"
     "src/animation.cc"

@@ -6,6 +6,7 @@
 
 #include "art.h"
 #include "autorun.h"
+#include "character_editor.h"
 #include "character_selector.h"
 #include "color.h"
 #include "credits.h"
@@ -13,6 +14,7 @@
 #include "db.h"
 #include "debug.h"
 #include "debug_launch.h"
+#include "debug_perks.h"
 #include "draw.h"
 #include "endgame.h"
 #include "game.h"
@@ -34,6 +36,7 @@
 #include "random.h"
 #include "scripts.h"
 #include "settings.h"
+#include "stat.h"
 #include "sfall_config.h"
 #include "sfall_global_scripts.h"
 #include "svga.h"
@@ -56,7 +59,7 @@ static int _main_load_new(char* fname);
 static int main_loadgame_new();
 static void main_unload_new();
 static void mainLoop();
-static void mainNewGame();
+static bool mainNewGame(const DebugLaunchOptions* debugOptions = nullptr);
 static void showDeath();
 static void _main_death_voiceover_callback();
 static int _mainDeathGrabTextFile(const char* fileName, char* dest);
@@ -79,7 +82,7 @@ int falloutMain(int argc, char** argv)
 {
     DebugLaunchOptions debugLaunch;
     if (!debugLaunchParseOptions(argc, argv, debugLaunch)) {
-        fprintf(stderr, "Invalid debug launch option. Use --debug-no-movies or --debug-new-game=narg|chitsa|mingun.\n");
+        fprintf(stderr, "Invalid debug launch option. Use --debug-perks=all, --debug-perk=ID:RANK, or --debug-new-game=narg|chitsa|mingun [--debug-new-game-level=1..99].\n");
         return 1;
     }
 
@@ -110,7 +113,11 @@ int falloutMain(int argc, char** argv)
             return 1;
         }
         debugPrint("\nDebug launch: new game as %s; movie playback disabled\n", debugLaunch.newGameCharacter);
-        mainNewGame();
+        if (!mainNewGame(&debugLaunch)) {
+            main_exit_system();
+            autorunMutexClose();
+            return 1;
+        }
     }
 
     if (mainMenuWindowInit() == 0) {
@@ -222,7 +229,7 @@ int falloutMain(int argc, char** argv)
 
 // Both interactive selection and explicit debug launches use the same session
 // setup/hooks/teardown. Neither path saves or loads a slot automatically.
-static void mainNewGame()
+static bool mainNewGame(const DebugLaunchOptions* debugOptions)
 {
     gameMoviePlay(MOVIE_ELDER, GAME_MOVIE_STOP_MUSIC);
     randomSeedPrerandom(-1);
@@ -242,7 +249,20 @@ static void mainNewGame()
     // SFALL: AfterNewGameStartHook.
     sfall_gl_scr_exec_start_proc();
 
-    mainLoop();
+    int debugLevel = debugOptions != nullptr ? debugOptions->newGameLevel : 1;
+    if (debugLevel > 1) {
+        pcAddExperienceWithOptions(pcGetExperienceForLevel(debugLevel), false);
+        debugPrint("\nDebug launch: fresh character advanced to level %d\n", debugLevel);
+    }
+
+    bool reviewReady = true;
+    if (debugOptions != nullptr && debugOptions->reviewPerks()) {
+        reviewReady = debugGrantReviewPerks(*debugOptions);
+        if (reviewReady) {
+            characterEditorShow(false, debugOptions->reviewAllPerks ? 0 : debugOptions->reviewPerk);
+        }
+    }
+    if (reviewReady) mainLoop();
     paletteFadeTo(gPaletteWhite);
     main_unload_new();
     main_reset_system();
@@ -251,6 +271,7 @@ static void mainNewGame()
         showDeath();
         _main_show_death_scene = 0;
     }
+    return reviewReady;
 }
 
 // 0x480CC0
