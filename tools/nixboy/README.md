@@ -1,7 +1,7 @@
 # nix-boy terminal and Docker bridge
 
 nix-boy is the mod and terminal name. The terminal and its skill-progression
-feature are released together, using the version in
+feature, offline wiki and perk-training module are released together, using the version in
 [`nixboy.version`](../../nixboy.version). The current game opens the **training
 hub** by default: Unarmed and Science, two levels each selected from the
 character's current skill percentage, with five authored options per level.
@@ -18,6 +18,11 @@ from the source root. Authoring tools need Python/PyYAML, without Docker.
 Deploy the export as `nixboy/wiki/`, separate from editable `nixboy/content/wiki/`.
 The Windows reader opens with Ctrl+W from gameplay or Pip-Boy, and Escape
 closes it. Reading uses WebView2 and requires no Python, Docker or bridge.
+The standard 0.7.0 perk policy uses new characters and 1.2T saves: level-up
+selection unlocks training without a bonus, and original benefits start at rank
+two. Further ordinary ranks require level 310; challenge grants are not wired
+yet. The [debug guide](DEBUGGING.md) documents direct-to-game, perk gallery,
+focused-rank and picker launches for disposable testing.
 Configure `[wiki]` with `enabled=1`, `hotkey=Ctrl+W` and
 `home=nixboy/wiki/index.html` in `nixboy.ini`. This section does not need the
 terminal authentication token. Ctrl+W inside the terminal retains shell editing.

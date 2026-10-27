@@ -10,7 +10,7 @@ source_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 deps_dir=$(CDPATH= cd -- "$1" && pwd)
 build_dir=$(realpath -m -- "$2")
 feature=${3:-ON}
-perk_training=${4:-OFF}
+perk_training=${4:-ON}
 case "$build_dir/" in
     "$source_dir/"*) echo 'Build output must be outside source.' >&2; exit 2 ;;
 esac

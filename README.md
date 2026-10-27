@@ -6,8 +6,8 @@ Popular Fallout 2 total conversion mods are partially supported. Original versio
 
 There is also [Fallout Community Edition](https://github.com/alexbatalov/fallout1-ce).
 
-This feature branch includes **nix-boy**, one mod combining a Pip-Boy Linux
-terminal, Docker-backed challenges and earned Fallout skill progression.
+This checkout includes **nix-boy 0.7.0**, one mod combining a Pip-Boy Linux
+terminal and its challenges, an offline wiki, and perk training.
 Its release version is in [nixboy.version](nixboy.version). See the
 [nix-boy setup and protocol guide](tools/nixboy/README.md) and
 [development workspace pointer](MODLOG.md). The terminal and challenges require
@@ -60,11 +60,19 @@ exporter sources and generated files, then includes both `nixboy/wiki/` and
 editable `nixboy/content/wiki/`. It rejects stale or modified exports. Package
 creation does not edit a game installation or install WebView2.
 
-For disposable test runs, `--debug-new-game=narg` bypasses the main menu and
-character selection and starts a fresh original premade with MVE playback off.
-`chitsa` and `mingun` are also accepted. `--debug-no-movies` keeps normal menus
-and suppresses MVE playback. These explicit switches do not save or load slots
-automatically; launch without them for ordinary play.
+The perk module adds a harmless training-unlock rank to all 76 selectable perks.
+Original benefits start at rank two; further normal selection requires level 310.
+Challenge-to-perk grants are not connected yet. The module is enabled by default;
+`-DFALLOUT_NIXBOY_PERK_TRAINING=OFF` builds the original rank policy. The standard
+0.7.0 build requires new characters: its 1.2T saves and ordinary 1.2R saves are
+mutually incompatible. The existing skill-reward protocol remains v4.
+
+For disposable tests, `--debug-perks=all` opens a gallery of all rank-one perks,
+`--debug-perk-picker` opens the real level-up picker, and `--debug-perk=12:2`
+opens Toughness at rank two. These imply a fresh Narg, skip menus/creation/movies,
+and never load or save a slot automatically. The separate
+[debug guide](tools/nixboy/DEBUGGING.md) documents every switch, rank limits,
+logging, instance handling and examples. Launch without switches for normal play.
 
 ## Installation
 
