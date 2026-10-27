@@ -569,7 +569,7 @@ void inventoryOpen()
 
     if (isInCombat()) {
         if (_inven_dude == gDude) {
-            int actionPointsRequired = 4 - 2 * perkGetRank(_inven_dude, PERK_QUICK_POCKETS);
+            int actionPointsRequired = 4 - 2 * perkGetBenefitRank(_inven_dude, PERK_QUICK_POCKETS);
             if (actionPointsRequired > 0 && actionPointsRequired > gDude->data.critter.combat.ap) {
                 // You don't have enough action points to use inventory
                 MessageListItem messageListItem;
@@ -3079,7 +3079,7 @@ static void inventoryRenderSummary()
 
             // SFALL: Display melee damage without "Bonus HtH Damage" bonus.
             if (damageModGetBonusHthDamageFix() && !damageModGetDisplayBonusDamage()) {
-                meleeDamage -= 2 * perkGetRank(gDude, PERK_BONUS_HTH_DAMAGE);
+                meleeDamage -= 2 * perkGetBenefitRank(gDude, PERK_BONUS_HTH_DAMAGE);
             }
         } else {
             meleeDamage = 0;
@@ -3095,7 +3095,7 @@ static void inventoryRenderSummary()
                     // unarmed.
                     if (_stack[0] == gDude && (attackType == ATTACK_TYPE_MELEE || attackType == ATTACK_TYPE_UNARMED)) {
                         // See explanation in `weaponGetDamage`.
-                        damageMin += 2 * perkGetRank(gDude, PERK_BONUS_HTH_DAMAGE);
+                        damageMin += 2 * perkGetBenefitRank(gDude, PERK_BONUS_HTH_DAMAGE);
                     }
                 }
                 snprintf(formattedText, sizeof(formattedText), "%s %d-%d", messageListItem.text, damageMin, damageMax + meleeDamage);
@@ -3109,7 +3109,7 @@ static void inventoryRenderSummary()
                         // bonus for melee weapons with range > 1 (spears,
                         // sledgehammers) and throwables (secondary mode).
                         if (_stack[0] == gDude && attackType == ATTACK_TYPE_RANGED) {
-                            int damageBonus = 2 * perkGetRank(gDude, PERK_BONUS_RANGED_DAMAGE);
+                            int damageBonus = 2 * perkGetBenefitRank(gDude, PERK_BONUS_RANGED_DAMAGE);
                             damageMin += damageBonus;
                             damageMax += damageBonus;
                         }
@@ -4682,7 +4682,7 @@ static int _barter_compute_value(Object* dude, Object* npc)
 
     double perkBonus = 0.0;
     if (dude == gDude) {
-        if (perkHasRank(gDude, PERK_MASTER_TRADER)) {
+        if (perkHasBenefit(gDude, PERK_MASTER_TRADER)) {
             perkBonus = 25.0;
         }
     }

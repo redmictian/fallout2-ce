@@ -4,19 +4,26 @@
 #include <vterm.h>
 
 #include <algorithm>
+#include <array>
 #include <deque>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <utility>
 #include <vector>
 
+#include "art.h"
 #include "color.h"
 #include "game.h"
 #include "game_mouse.h"
+#include "game_sound.h"
 #include "input.h"
 #include "kb.h"
 #include "mouse.h"
+#include "nixboy_terminal_font.h"
 #include "nixboy_terminal_input.h"
+#include "nixboy_terminal_view.h"
+#include "nixboy_ui_art.h"
 #include "svga.h"
 #include "text_font.h"
 #include "window_manager.h"
@@ -27,7 +34,7 @@ namespace {
     constexpr int kCloseEvent = 19901;
     constexpr unsigned int kStartupTimeoutMs = 15000;
     constexpr size_t kMaxInputEvents = 256;
-    constexpr int kMargin = 12;
+    constexpr int kMargin = 22;
 
     // SDL may call filters from threads which push events. Only queue event copies
     // here; libvterm, the socket and all game state stay on the modal's UI thread.
@@ -129,6 +136,8 @@ namespace {
         int cursor = gameMouseGetCursor();
         bool hidden = cursorIsHidden();
         int window = -1;
+        FrmImage closeUp;
+        FrmImage closeDown;
 
         ~ModalState()
         {
@@ -148,6 +157,10 @@ namespace {
     struct TerminalState {
         nixboy::Client client;
         std::string status = "Connecting to local nix-boy service...";
+        std::string printedStatus;
+        std::string notice;
+        uint32_t noticeStarted = 0;
+        bool hasOutput = false;
         bool ready = false;
         bool exited = false;
         bool cursorVisible = true;
@@ -279,6 +292,37 @@ namespace {
         const auto mod = static_cast<SDL_Keymod>(event.keysym.mod);
         VTermKey special = terminalKey(key);
         state.textInput.keyDown(event.keysym.scancode);
+        // Readline word editing is more portable as Esc-b/f than modified
+        // cursor CSI sequences. Keep AltGr and plain application-mode keys intact.
+        if (!(mod & (KMOD_RALT | KMOD_MODE))) {
+            nixboy::TerminalEditingKey editing = nixboy::TerminalEditingKey::None;
+            switch (key) {
+            case SDLK_LEFT:
+                editing = nixboy::TerminalEditingKey::Left;
+                break;
+            case SDLK_RIGHT:
+                editing = nixboy::TerminalEditingKey::Right;
+                break;
+            case SDLK_BACKSPACE:
+                editing = nixboy::TerminalEditingKey::Backspace;
+                break;
+            case SDLK_DELETE:
+                editing = nixboy::TerminalEditingKey::Delete;
+                break;
+            }
+            const auto sequence = nixboy::terminalEditingSequence(editing,
+                (mod & KMOD_CTRL) != 0, (mod & KMOD_LALT) != 0, (mod & KMOD_GUI) != 0);
+            if (!sequence.empty()) {
+                if (editing == nixboy::TerminalEditingKey::Backspace) {
+                    state.textInput.keyDown(event.keysym.scancode, '\b', '\x7f');
+                }
+                if (!state.client.sendInput(std::string(sequence))) {
+                    state.status = "Terminal input queue full or disconnected. Wait, or close with F10.";
+                    state.dirty = true;
+                }
+                return;
+            }
+        }
         if (special != VTERM_KEY_NONE) {
             char duplicate = '\0';
             char alternate = '\0';
@@ -418,15 +462,167 @@ namespace {
         return result;
     }
 
-    void renderTerminal(int window, int width, int height, int cellWidth, int cellHeight,
-        int rows, int cols, VTerm* term, VTermScreen* screen, const TerminalState& state)
+    void publishStatus(VTerm* term, TerminalState& state)
     {
-        unsigned char* buffer = windowGetBuffer(window);
-        const int top = 3 * cellHeight;
+        if (state.status == state.printedStatus) return;
+        state.printedStatus = state.status;
+        // Live PTY frames may split UTF-8 and escape sequences. Display rare
+        // asynchronous notices inside the glass without changing its parser,
+        // cursor or application screen. Restore the covered cells on expiry.
+        if (state.hasOutput && state.ready) {
+            state.notice = "[nix-boy] " + plainStatus(state.status);
+            state.noticeStarted = getTicks();
+            state.dirty = true;
+            return;
+        }
+        state.notice.clear();
+        // Startup and ended-session messages can be printed into the terminal.
+        // Cancel an unfinished sequence only after the live stream has ended.
+        const std::string message = "\x18\x1b[0m\r\n[nix-boy] " + plainStatus(state.status) + "\r\n";
+        vterm_input_write(term, message.data(), message.size());
+        state.dirty = true;
+    }
+
+    struct TerminalPresentation {
+        nixboy::TerminalViewLayout layout;
+        nixboy::TerminalCrt crt;
+        std::vector<unsigned char> source;
+        std::vector<uint32_t> rgb;
+        std::array<unsigned char, 256> luminance;
+        SDL_Texture* texture = nullptr;
+        uint32_t generation = std::numeric_limits<uint32_t>::max();
+        uint32_t previousFrame = 0;
+        bool retro = false;
+        bool textureFailed = false;
+        bool sourceChanged = true;
+        bool hasFrame = false;
+
+        ~TerminalPresentation()
+        {
+            if (texture != nullptr && generation == renderGetGeneration()) SDL_DestroyTexture(texture);
+        }
+
+        bool initialize(int cellWidth, int cellHeight, int chromeHeight, const NixboyTerminalOptions& options)
+        {
+            if (!nixboy::terminalViewLayout(screenGetWidth(), screenGetHeight(),
+                    cellWidth, cellHeight, options.fullscreen, layout, chromeHeight)) {
+                return false;
+            }
+            source.resize(static_cast<size_t>(layout.glassWidth) * layout.glassHeight);
+            retro = options.retro && crt.initialize(layout.glassWidth, layout.glassHeight, options.crt);
+            if (retro) rgb.resize(source.size());
+            for (int index = 0; index < 256; index++) {
+                const int red = _cmap[index * 3];
+                const int green = _cmap[index * 3 + 1];
+                const int blue = _cmap[index * 3 + 2];
+                // ANSI hues retain useful brightness when converted to green;
+                // saturated blue/red warnings must not disappear into the glass.
+                const int peak = std::max({ red, green, blue });
+                const int weighted = (red * 77 + green * 150 + blue * 29) / 256;
+                luminance[index] = std::min(255, (peak * 3 + weighted) * 9 / 8);
+            }
+            return true;
+        }
+
+        void drawCursor(const SDL_Rect& glass)
+        {
+            int width;
+            int height;
+            int pitch;
+            unsigned char transparent;
+            const unsigned char* shape = mouseGetShape(&width, &height, &pitch, &transparent);
+            if (shape == nullptr || gSdlSurface == nullptr || gSdlSurface->format->palette == nullptr) return;
+            Rect mouse;
+            mouseGetRect(&mouse);
+            const int left = std::max(0, glass.x - mouse.left);
+            const int right = std::min(width, glass.x + glass.w - mouse.left);
+            const int top = std::max(0, glass.y - mouse.top);
+            const int bottom = std::min(height, glass.y + glass.h - mouse.top);
+            if (left >= right || top >= bottom) return;
+            Uint8 red;
+            Uint8 green;
+            Uint8 blue;
+            Uint8 alpha;
+            SDL_BlendMode blend;
+            SDL_GetRenderDrawColor(gSdlRenderer, &red, &green, &blue, &alpha);
+            SDL_GetRenderDrawBlendMode(gSdlRenderer, &blend);
+            SDL_SetRenderDrawBlendMode(gSdlRenderer, SDL_BLENDMODE_NONE);
+            const SDL_Color* colors = gSdlSurface->format->palette->colors;
+            for (int y = top; y < bottom; y++) {
+                for (int x = left; x < right;) {
+                    const unsigned char color = shape[y * pitch + x];
+                    const int start = x++;
+                    while (x < right && shape[y * pitch + x] == color)
+                        x++;
+                    if (color == transparent) continue;
+                    SDL_SetRenderDrawColor(gSdlRenderer, colors[color].r, colors[color].g, colors[color].b, 255);
+                    SDL_RenderDrawLine(gSdlRenderer, mouse.left + start, mouse.top + y,
+                        mouse.left + x - 1, mouse.top + y);
+                }
+            }
+            SDL_SetRenderDrawColor(gSdlRenderer, red, green, blue, alpha);
+            SDL_SetRenderDrawBlendMode(gSdlRenderer, blend);
+        }
+
+        static void overlay(void* context)
+        {
+            auto& self = *static_cast<TerminalPresentation*>(context);
+            if (!self.retro || gSdlRenderer == nullptr) return;
+            if (self.generation != renderGetGeneration()) {
+                // SDL destroyed the old texture with its renderer. Never call
+                // DestroyTexture on that stale pointer, even if addresses repeat.
+                self.texture = nullptr;
+                self.generation = renderGetGeneration();
+                self.textureFailed = false;
+                self.hasFrame = false;
+            }
+            if (self.textureFailed) return; // The indexed grid is the fallback.
+            const auto& layout = self.layout;
+            if (self.texture == nullptr) {
+                self.texture = SDL_CreateTexture(gSdlRenderer, SDL_PIXELFORMAT_RGB888,
+                    SDL_TEXTUREACCESS_STREAMING, layout.glassWidth, layout.glassHeight);
+                if (self.texture == nullptr) {
+                    self.textureFailed = true;
+                    return;
+                }
+                SDL_SetTextureBlendMode(self.texture, SDL_BLENDMODE_NONE);
+            }
+            const uint32_t now = getTicks();
+            if (!self.hasFrame || self.sourceChanged || now - self.previousFrame >= 33) {
+                self.crt.render(self.rgb.data(), layout.glassWidth, now);
+                if (SDL_UpdateTexture(self.texture, nullptr, self.rgb.data(), layout.glassWidth * sizeof(uint32_t)) != 0) {
+                    SDL_DestroyTexture(self.texture);
+                    self.texture = nullptr;
+                    self.textureFailed = true;
+                    return;
+                }
+                self.previousFrame = now;
+                self.hasFrame = true;
+                self.sourceChanged = false;
+            }
+            const SDL_Rect destination = { layout.x + layout.glassX, layout.y + layout.glassY,
+                layout.glassWidth, layout.glassHeight };
+            if (SDL_RenderCopy(gSdlRenderer, self.texture, nullptr, &destination) != 0) {
+                self.textureFailed = true;
+                return;
+            }
+            // Only the cursor's overlap with the glass was covered. Its other
+            // pixels remain in the normal game canvas, with no double cursor.
+            self.drawCursor(destination);
+        }
+    };
+
+    void renderTerminal(int window, TerminalPresentation& presentation, int cellWidth, int cellHeight,
+        VTerm* term, VTermScreen* screen, const TerminalState& state)
+    {
+        const auto& layout = presentation.layout;
+        const int pitch = layout.glassWidth;
+        unsigned char* source = presentation.source.data();
+        std::fill(presentation.source.begin(), presentation.source.end(), _colorTable[0]);
         VTermPos cursor;
         vterm_state_get_cursorpos(vterm_obtain_state(term), &cursor);
-        for (int row = 0; row < rows; row++) {
-            for (int col = 0; col < cols; col++) {
+        for (int row = 0; row < layout.rows; row++) {
+            for (int col = 0; col < layout.cols; col++) {
                 VTermScreenCell cell = {};
                 vterm_screen_get_cell(screen, { row, col }, &cell);
                 unsigned char foreground = paletteColor(screen, cell.fg);
@@ -436,29 +632,40 @@ namespace {
                     reverse = !reverse;
                 }
                 if (reverse) std::swap(foreground, background);
-                const int x = kMargin + col * cellWidth;
-                const int y = top + row * cellHeight;
-                windowFill(window, x, y, cellWidth, cellHeight, background);
+                const int x = layout.textX + col * cellWidth;
+                const int y = layout.textY + row * cellHeight;
+                for (int offset = 0; offset < cellHeight; offset++) {
+                    std::fill_n(source + (y + offset) * pitch + x, cellWidth, background);
+                }
                 if (cell.chars[0] == UINT32_MAX || cell.attrs.conceal) continue;
-                const char glyph[2] = { legacyGlyph(cell.chars[0]), '\0' };
-                const int inset = std::max(0, (cellWidth - fontGetCharacterWidth(glyph[0])) / 2);
-                fontDrawText(buffer + y * width + x + inset, glyph,
-                    cellWidth - inset, width, foreground);
+                nixboy::drawTerminalGlyph(source, pitch, x, y, legacyGlyph(cell.chars[0]), foreground);
                 if (cell.attrs.underline) {
-                    windowDrawLine(window, x, y + cellHeight - 2,
-                        x + cellWidth - 1, y + cellHeight - 2, foreground);
+                    std::fill_n(source + (y + cellHeight - 2) * pitch + x, cellWidth, foreground);
                 }
             }
         }
-        const int textColor = _colorTable[992];
-        const int statusY = height - 3 * cellHeight;
-        windowFill(window, kMargin, statusY, width - 2 * kMargin, 3 * cellHeight - 4, _colorTable[0]);
-        const std::string status = plainStatus(state.status);
-        fontDrawText(buffer + statusY * width + kMargin, status.c_str(), width - 2 * kMargin, width, textColor);
-        fontDrawText(buffer + (statusY + cellHeight) * width + kMargin,
-            state.training ? "F5 Check / F6 Hub / F7 Reset / F8 Abandon / F10 Close (keeps exercise)"
-                           : "Esc/Ctrl+C go to Linux. F10 closes. ASCII font: other glyphs appear as ?.",
-            width - 2 * kMargin, width, textColor);
+        if (!state.notice.empty()) {
+            const int noticeRows = std::min(3, static_cast<int>((state.notice.size() + layout.cols - 1) / layout.cols));
+            const int top = layout.textY + (layout.rows - noticeRows) * cellHeight;
+            for (int y = 0; y < noticeRows * cellHeight; y++) {
+                std::fill_n(source + (top + y) * pitch + layout.textX, layout.cols * cellWidth, _colorTable[0]);
+            }
+            const size_t count = std::min(state.notice.size(), static_cast<size_t>(noticeRows * layout.cols));
+            for (size_t index = 0; index < count; index++) {
+                nixboy::drawTerminalGlyph(source, pitch,
+                    layout.textX + (index % layout.cols) * cellWidth,
+                    top + (index / layout.cols) * cellHeight, state.notice[index], _colorTable[992]);
+            }
+        }
+        unsigned char* buffer = windowGetBuffer(window);
+        for (int y = 0; y < layout.glassHeight; y++) {
+            std::copy_n(source + y * pitch, pitch,
+                buffer + (layout.glassY + y) * layout.width + layout.glassX);
+        }
+        if (presentation.retro) {
+            presentation.crt.update(source, presentation.luminance);
+            presentation.sourceChanged = true;
+        }
         windowRefresh(window);
     }
 
@@ -467,34 +674,46 @@ namespace {
 bool nixboyTerminalOpen(uint16_t port, const std::string& token,
     const nixboy::Context& context,
     const std::function<void(const std::string&, int32_t)>& onResult,
-    const NixboyTrainingCallbacks& training)
+    const NixboyTrainingCallbacks& training,
+    const NixboyTerminalOptions& options)
 {
     ModalState modal;
-    fontSetCurrent(0);
+    fontSetCurrent(101);
+    if (fontGetCurrent() != 101) return false;
     gameMouseSetCursor(MOUSE_CURSOR_ARROW);
     mouseShowCursor();
 
-    int cellWidth = 1;
-    for (int ch = 32; ch <= 126; ch++) {
-        cellWidth = std::max(cellWidth, fontGetCharacterWidth(ch) + fontGetLetterSpacing());
-    }
-    const int cellHeight = fontGetLineHeight() + 1;
-    if (cellHeight <= 1) return false;
-    const int width = std::min(screenGetWidth(), 1280);
-    const int height = std::min(screenGetHeight(), 900);
-    const int cols = std::min(300, (width - 2 * kMargin) / cellWidth);
-    const int rows = std::min(200, (height - 7 * cellHeight) / cellHeight);
-    if (cols < 20 || rows < 10) return false;
-
-    modal.window = windowCreate((screenGetWidth() - width) / 2,
-        (screenGetHeight() - height) / 2, width, height, _colorTable[0], WINDOW_MODAL | WINDOW_MOVE_ON_TOP);
+    constexpr int cellWidth = nixboy::kTerminalCellWidth;
+    constexpr int cellHeight = nixboy::kTerminalCellHeight;
+    const int chromeHeight = fontGetLineHeight() + 1;
+    if (chromeHeight <= 1) return false;
+    TerminalPresentation presentation;
+    if (!presentation.initialize(cellWidth, cellHeight, chromeHeight, options)) return false;
+    const auto& layout = presentation.layout;
+    const int rows = layout.rows;
+    const int cols = layout.cols;
+    modal.window = windowCreate(layout.x, layout.y, layout.width, layout.height,
+        _colorTable[0], WINDOW_MODAL | WINDOW_MOVE_ON_TOP);
     if (modal.window == -1) return false;
-    const char* closeTitle = "Close [F10]";
-    if (_win_register_text_button(modal.window, width - fontGetStringWidth(closeTitle) - 2 * kMargin - 16,
-            kMargin, -1, -1, -1, kCloseEvent, closeTitle, 0)
-        == -1) return false;
-    windowDrawText(modal.window, "nix-boy / Linux terminal", width / 2,
-        kMargin, kMargin, _colorTable[992]);
+    nixboyDrawTerminalFrame(modal.window, layout.width, layout.height,
+        layout.glassX, layout.glassY, layout.glassWidth, layout.glassHeight, layout.statusY);
+    unsigned char* windowBuffer = windowGetBuffer(modal.window);
+    const char* closeTitle = "CLOSE";
+    const bool closeArt = modal.closeUp.lock(buildFid(OBJ_TYPE_INTERFACE, 8, 0, 0, 0))
+        && modal.closeDown.lock(buildFid(OBJ_TYPE_INTERFACE, 9, 0, 0, 0));
+    const int closeWidth = closeArt ? modal.closeUp.getWidth() : 16;
+    const int closeHeight = closeArt ? modal.closeUp.getHeight() : 16;
+    const int closeX = layout.width - kMargin - fontGetStringWidth(closeTitle) - closeWidth - 6;
+    const int closeY = (layout.glassY - closeHeight) / 2;
+    const int closeLabelY = (layout.glassY - fontGetLineHeight()) / 2;
+    const int closeButton = buttonCreate(modal.window, closeX, closeY, closeWidth, closeHeight,
+        -1, -1, -1, kCloseEvent, closeArt ? modal.closeUp.getData() : nullptr,
+        closeArt ? modal.closeDown.getData() : nullptr, nullptr, BUTTON_FLAG_TRANSPARENT);
+    if (closeButton == -1) return false;
+    buttonSetCallbacks(closeButton, _gsound_red_butt_press, _gsound_red_butt_release);
+    fontDrawText(windowBuffer + closeLabelY * layout.width
+            + closeX + closeWidth + 6,
+        closeTitle, fontGetStringWidth(closeTitle), layout.width, _colorTable[992]);
 
     TerminalState state;
     state.training = training.enabled;
@@ -517,9 +736,13 @@ bool nixboyTerminalOpen(uint16_t port, const std::string& token,
     vterm_color_rgb(&background, 0, 0, 0);
     vterm_screen_set_default_colors(screen, &foreground, &background);
     vterm_screen_reset(screen, 1);
+    publishStatus(term, state);
+    const char* hints = state.training ? "F5 Check | F6 Hub | F7 Reset | F8 Abandon | F10 Close\r\n"
+                                       : "Esc / Ctrl+C: Linux | F10 Close\r\n";
+    vterm_input_write(term, hints, std::char_traits<char>::length(hints));
     TerminalInput input;
-    renderTerminal(modal.window, width, height, cellWidth, cellHeight, rows, cols, term, screen, state);
-    renderPresent();
+    renderTerminal(modal.window, presentation, cellWidth, cellHeight, term, screen, state);
+    renderPresent(TerminalPresentation::overlay, &presentation);
 
     std::string error;
     bool opening = state.client.connect(port, token, error)
@@ -531,6 +754,7 @@ bool nixboyTerminalOpen(uint16_t port, const std::string& token,
     } else {
         state.status = training.enabled ? "Opening training hub... (F10 closes)" : "Starting Linux container... (F10 cancels)";
     }
+    publishStatus(term, state);
     const unsigned int start = getTicks();
     bool close = false;
     while (!close && _game_user_wants_to_quit == 0) {
@@ -563,8 +787,10 @@ bool nixboyTerminalOpen(uint16_t port, const std::string& token,
                 opening = false;
                 state.status = training.enabled ? "Training connected. F5 checks your work; F6 returns to the hub."
                                                 : "Linux connected. Results apply through configured game bindings.";
+                publishStatus(term, state);
                 break;
             case nixboy::EventType::Output:
+                state.hasOutput = true;
                 vterm_input_write(term, event.text.data(), event.text.size());
                 break;
             case nixboy::EventType::Result:
@@ -639,12 +865,17 @@ bool nixboyTerminalOpen(uint16_t port, const std::string& token,
         }
         // Overflow may have discarded the release for a retained keydown.
         if (overflow) state.textInput.reset();
+        publishStatus(term, state);
+        if (!state.notice.empty() && getTicks() - state.noticeStarted >= 5000) {
+            state.notice.clear();
+            state.dirty = true;
+        }
         vterm_screen_flush_damage(screen);
         if (state.dirty) {
-            renderTerminal(modal.window, width, height, cellWidth, cellHeight, rows, cols, term, screen, state);
+            renderTerminal(modal.window, presentation, cellWidth, cellHeight, term, screen, state);
             state.dirty = false;
         }
-        renderPresent();
+        renderPresent(TerminalPresentation::overlay, &presentation);
         sharedFpsLimiter.throttle();
     }
     state.client.close();

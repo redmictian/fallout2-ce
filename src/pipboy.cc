@@ -28,6 +28,7 @@
 #include "message.h"
 #include "mouse.h"
 #include "nixboy.h"
+#include "nixboy_ui_art.h"
 #include "object.h"
 #include "party_member.h"
 #include "platform_compat.h"
@@ -398,8 +399,86 @@ unsigned char _stat_flag;
 static int gPipboyPrevTab;
 static bool pipboy_available_at_game_start = false;
 static bool gPipboyNixboyEnabled = false;
+static bool gPipboyWikiEnabled = false;
 
 static FrmImage _pipboyFrmImages[PIPBOY_FRM_COUNT];
+
+static void pipboyCreateWikiButton()
+{
+    // Turn the unused lower hardware plate beside Vault Boy into a pushbutton.
+    // Keep the plate's original rim, screw and weathering instead of attaching
+    // a new control to the monitor bezel. These buffers outlive the GNW button.
+    constexpr int x = 173;
+    constexpr int y = 112;
+    constexpr int width = 36;
+    constexpr int height = 57;
+    static unsigned char images[2][width * height];
+    const int oldFont = fontGetCurrent();
+    fontSetCurrent(101);
+
+    const unsigned char* background = _pipboyFrmImages[PIPBOY_FRM_BACKGROUND].getData();
+    for (int state = 0; state < 2; state++) {
+        unsigned char* image = images[state];
+        for (int row = 0; row < height; row++) {
+            memcpy(image + row * width,
+                background + (y + row) * PIPBOY_WINDOW_WIDTH + x, width);
+        }
+        if (state != 0) {
+            for (int row = 8; row < height - 4; row++) {
+                for (int col = 3; col < width - 4; col++) {
+                    image[row * width + col] = intensityColorTable[image[row * width + col]][106];
+                }
+            }
+        }
+
+        const int offset = state;
+        const int paint = _colorTable[(26 << 10) | (23 << 5) | 8];
+        const int shadow = _colorTable[(4 << 10) | (4 << 5) | 2];
+        const int labelX = (width - fontGetStringWidth("WIKI")) / 2 + offset;
+        fontDrawText(image + 21 * width + labelX + offset * width + width + 1,
+            "WIKI", width - labelX - 1, width, shadow);
+        fontDrawText(image + 21 * width + labelX + offset * width,
+            "WIKI", width - labelX, width, paint);
+
+        // A small painted open book makes the hardware's purpose apparent.
+        // Use the same palette as the label, with an inset shadow and worn ink.
+        for (int layer = 1; layer >= 0; layer--) {
+            const int left = 8 + offset + layer;
+            const int top = 35 + offset + layer;
+            const int color = layer != 0 ? shadow : paint;
+            bufferDrawLine(image, width, left, top, left + 8, top + 2, color);
+            bufferDrawLine(image, width, left + 8, top + 2, left + 16, top, color);
+            bufferDrawLine(image, width, left, top, left, top + 11, color);
+            bufferDrawLine(image, width, left + 16, top, left + 16, top + 11, color);
+            bufferDrawLine(image, width, left, top + 11, left + 8, top + 13, color);
+            bufferDrawLine(image, width, left + 8, top + 13, left + 16, top + 11, color);
+            bufferDrawLine(image, width, left + 8, top + 2, left + 8, top + 13, color);
+            bufferDrawLine(image, width, left + 3, top + 5, left + 5, top + 6, color);
+            bufferDrawLine(image, width, left + 11, top + 6, left + 13, top + 5, color);
+        }
+
+        // Let the plate's texture vary the painted strokes, with sparse chips
+        // showing the original metal. Keep the tiny book silhouette readable.
+        for (int row = 20; row < 52; row++) {
+            for (int col = 5; col < 30; col++) {
+                if (image[row * width + col] != paint) continue;
+                const unsigned char metal = background[(y + row) * PIPBOY_WINDOW_WIDTH + x + col];
+                if ((row * 7 + col * 13) % 41 == 0) {
+                    image[row * width + col] = state != 0 ? intensityColorTable[metal][106] : metal;
+                } else {
+                    image[row * width + col] = intensityColorTable[paint][112 + metal % 17];
+                }
+            }
+        }
+    }
+    fontSetCurrent(oldFont);
+
+    int button = buttonCreate(gPipboyWindow, x, y, width, height,
+        -1, -1, -1, 530, images[0], images[1], nullptr, 0);
+    if (button != -1) {
+        buttonSetCallbacks(button, _gsound_med_butt_press, _gsound_med_butt_release);
+    }
+}
 
 // 0x497004
 int pipboyOpen(int intent)
@@ -446,8 +525,14 @@ int pipboyOpen(int intent)
             }
         }
 
-        if (gPipboyNixboyEnabled && nixboyIsHotkey(keyCode)) {
-            nixboyOpen();
+        bool terminalRequested = gPipboyNixboyEnabled && nixboyIsHotkey(keyCode);
+        bool wikiRequested = gPipboyWikiEnabled && nixboyIsWikiHotkey(keyCode);
+        if (terminalRequested || wikiRequested) {
+            if (terminalRequested) {
+                nixboyOpen();
+            } else {
+                nixboyOpenWiki();
+            }
             gPipboyLastEventTimestamp = getTicks();
             mouseGetPositionInWindow(gPipboyWindow, &gPipboyPreviousMouseX, &gPipboyPreviousMouseY);
             windowRefresh(gPipboyWindow);
@@ -465,8 +550,12 @@ int pipboyOpen(int intent)
             break;
         }
 
-        if (gPipboyNixboyEnabled && keyCode == 529) {
-            nixboyOpen();
+        if ((gPipboyNixboyEnabled && keyCode == 529) || (gPipboyWikiEnabled && keyCode == 530)) {
+            if (keyCode == 529) {
+                nixboyOpen();
+            } else {
+                nixboyOpenWiki();
+            }
             gPipboyLastEventTimestamp = getTicks();
             mouseGetPositionInWindow(gPipboyWindow, &gPipboyPreviousMouseX, &gPipboyPreviousMouseY);
             windowRefresh(gPipboyWindow);
@@ -636,8 +725,16 @@ static int pipboyWindowInit(int intent)
         if (button != -1) {
             buttonSetCallbacks(button, _gsound_red_butt_press, _gsound_red_butt_release);
         }
-        fontDrawText(gPipboyWindowBuffer + PIPBOY_WINDOW_WIDTH * 367 + 80,
-            "nix-boy", 140, PIPBOY_WINDOW_WIDTH, _colorTable[992]);
+        nixboyDrawPipboyLabel(gPipboyWindowBuffer, PIPBOY_WINDOW_WIDTH, PIPBOY_WINDOW_HEIGHT,
+            _pipboyFrmImages[PIPBOY_FRM_BACKGROUND].getWidth() == PIPBOY_WINDOW_WIDTH
+                    && _pipboyFrmImages[PIPBOY_FRM_BACKGROUND].getHeight() == PIPBOY_WINDOW_HEIGHT
+                ? _pipboyFrmImages[PIPBOY_FRM_BACKGROUND].getData()
+                : nullptr);
+    }
+
+    gPipboyWikiEnabled = nixboyIsWikiEnabled();
+    if (gPipboyWikiEnabled) {
+        pipboyCreateWikiButton();
     }
 
     if (intent == PIPBOY_OPEN_INTENT_REST) {

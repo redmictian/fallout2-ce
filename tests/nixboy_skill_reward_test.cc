@@ -22,6 +22,7 @@ int protoGetProto(int, Proto** proto)
 }
 int critterGetStat(Object*, int) { return 5; }
 int perkGetRank(Object*, int) { return 0; }
+int perkGetBenefitRank(Object*, int) { return 0; }
 int traitGetSkillModifier(int) { return 0; }
 int perkGetSkillModifier(Object*, int) { return 0; }
 } // namespace fallout

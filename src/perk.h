@@ -17,6 +17,10 @@ int perkAddForce(Object* critter, int perk);
 int perkRemove(Object* critter, int perk);
 int perkGetAvailablePerks(Object* critter, int* perks);
 int perkGetRank(Object* critter, int perk);
+// Mechanical effects use benefit ranks; ownership/UI/save and removal use raw.
+int perkGetBenefitRank(Object* critter, int perk);
+bool perkCanSelect(Object* critter, int perk);
+int perkGetMaximumRank(Object* critter, int perk);
 char* perkGetName(int perk);
 char* perkGetDescription(int perk);
 int perkGetFrmId(int perk);
@@ -43,6 +47,11 @@ static inline bool perkIsValid(int perk)
 static inline bool perkHasRank(Object* critter, int perk)
 {
     return perkGetRank(critter, perk) != 0;
+}
+
+static inline bool perkHasBenefit(Object* critter, int perk)
+{
+    return perkGetBenefitRank(critter, perk) != 0;
 }
 
 } // namespace fallout

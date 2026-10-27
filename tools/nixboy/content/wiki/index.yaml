@@ -1,0 +1,17 @@
+schema: 1
+subjects:
+  - id: filesystem
+    title: Files and access
+    articles:
+      - id: linux.paths
+        title: Finding your way with paths
+        file: articles/paths.html
+      - id: linux.permissions
+        title: Understanding permissions
+        file: articles/permissions.html
+  - id: shell
+    title: Shell and text
+    articles:
+      - id: linux.pipelines
+        title: Connecting commands with pipelines
+        file: articles/pipelines.html

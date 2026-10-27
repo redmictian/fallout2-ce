@@ -1,0 +1,37 @@
+<p>A path names a file or directory. Before changing files, establish where you
+are and which path your command will use.</p>
+
+<h2>Three useful starting points</h2>
+<table>
+  <thead><tr><th>Form</th><th>Meaning</th><th>Example</th></tr></thead>
+  <tbody>
+    <tr><td>Starts with <code>/</code></td><td>Absolute path, starting at the filesystem root</td><td><code>/tmp/route.txt</code></td></tr>
+    <tr><td>No leading <code>/</code></td><td>Relative path, starting at your current directory</td><td><code>notes/route.txt</code></td></tr>
+    <tr><td>Starts with unquoted <code>~/</code></td><td>Bash expands <code>~</code> to your home directory</td><td><code>~/notes/route.txt</code></td></tr>
+  </tbody>
+</table>
+<p><code>.</code> refers to the current directory; <code>..</code> refers to
+its parent. Use <code>pwd</code> to display your current directory and
+<code>ls</code> to inspect names before choosing a command.</p>
+
+<h2>Try a small workspace</h2>
+<p>These commands create a separate example directory in your lab home. The
+redirection writes a short example file; running it again replaces that file.</p>
+<pre><code>mkdir -p ~/wiki-demo/notes
+cd ~/wiki-demo
+pwd
+printf 'Route checked\n' &gt; notes/route.txt
+ls notes
+cat ./notes/route.txt
+cd ..</code></pre>
+<p><code>mkdir -p</code> creates missing parent directories. After
+<code>cd ~/wiki-demo</code>, the relative path <code>notes/route.txt</code>
+names the same example file as <code>~/wiki-demo/notes/route.txt</code>.</p>
+
+<h2>Apply the idea</h2>
+<p>When reading a challenge, identify the starting path, destination, and whether
+the original must remain. You can practice this with
+<a href="challenge:unarmed.files.make-directory">Prepare a delivery directory</a>.
+The lab resolves its own filenames, so read its instructions before acting.</p>
+<p>Next, learn how <a href="wiki:linux.permissions">permissions control access</a>
+or how to <a href="wiki:linux.pipelines">send text between commands</a>.</p>

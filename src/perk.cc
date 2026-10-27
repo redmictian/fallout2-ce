@@ -3,6 +3,8 @@
 #include <stdio.h>
 
 #include "debug.h"
+#include "critter.h"
+#include "perk_training.h"
 #include "game.h"
 #include "memory.h"
 #include "message.h"
@@ -51,6 +53,21 @@ typedef struct PerkRankData {
 static PerkRankData* perkGetRankData(Object* critter);
 static bool perkCanAdd(Object* critter, int perk);
 static void perkResetRanks();
+
+// Passive acquisition rewards belong to the rank transition, including forced
+// upgrades. Tag/Mutate choices remain in the character editor's existing dialogs.
+static void perkAddTrainingImmediateEffect(Object* critter, int perk)
+{
+    if (critter == gDude && perkUsesTraining(perk)) {
+        if (perk == PERK_LIFEGIVER) {
+            int hp = critterGetBonusStat(critter, STAT_MAXIMUM_HIT_POINTS);
+            critterSetBonusStat(critter, STAT_MAXIMUM_HIT_POINTS, hp + 4);
+            critterAdjustHitPoints(critter, 4);
+        } else if (perk == PERK_EDUCATED) {
+            pcSetStat(PC_STAT_UNSPENT_SKILL_POINTS, pcGetStat(PC_STAT_UNSPENT_SKILL_POINTS) + 2);
+        }
+    }
+}
 
 // 0x519DCC
 static PerkDescription gPerkDescriptions[PERK_COUNT] = {
@@ -312,12 +329,12 @@ static bool perkCanAdd(Object* critter, int perk)
     }
 
     PerkRankData* ranksData = perkGetRankData(critter);
-    if (ranksData->ranks[perk] >= perkDescription->maxRank) {
+    if (ranksData->ranks[perk] >= (critter == gDude ? perkTrainingMaxRank(perk, perkDescription->maxRank) : perkDescription->maxRank)) {
         return false;
     }
 
     if (critter == gDude) {
-        if (pcGetStat(PC_STAT_LEVEL) < perkDescription->minLevel) {
+        if (pcGetStat(PC_STAT_LEVEL) < perkTrainingMinLevel(perk, ranksData->ranks[perk], perkDescription->minLevel)) {
             return false;
         }
     }
@@ -444,7 +461,10 @@ int perkAdd(Object* critter, int perk)
     PerkRankData* ranksData = perkGetRankData(critter);
     ranksData->ranks[perk] += 1;
 
-    perkAddEffect(critter, perk);
+    if (critter != gDude || !perkUsesTraining(perk) || ranksData->ranks[perk] > 1) {
+        perkAddEffect(critter, perk);
+        perkAddTrainingImmediateEffect(critter, perk);
+    }
 
     return 0;
 }
@@ -461,6 +481,9 @@ int perkAddForce(Object* critter, int perk)
     int value = ranksData->ranks[perk];
 
     int maxRank = gPerkDescriptions[perk].maxRank;
+    if (critter == gDude) {
+        maxRank = perkTrainingMaxRank(perk, maxRank);
+    }
 
     if (maxRank != -1 && value >= maxRank) {
         return -1;
@@ -468,7 +491,10 @@ int perkAddForce(Object* critter, int perk)
 
     ranksData->ranks[perk] += 1;
 
-    perkAddEffect(critter, perk);
+    if (critter != gDude || !perkUsesTraining(perk) || ranksData->ranks[perk] > 1) {
+        perkAddEffect(critter, perk);
+        perkAddTrainingImmediateEffect(critter, perk);
+    }
 
     return 0;
 }
@@ -490,9 +516,31 @@ int perkRemove(Object* critter, int perk)
 
     ranksData->ranks[perk] -= 1;
 
-    perkRemoveEffect(critter, perk);
+    if (critter != gDude || !perkUsesTraining(perk) || value > 1) {
+        perkRemoveEffect(critter, perk);
+    }
 
     return 0;
+}
+
+// Keep the picker check shared with confirmation; ordinary addition is also
+// used by old code, while rollback deliberately uses forced restoration.
+bool perkCanSelect(Object* critter, int perk)
+{
+    return perkCanAdd(critter, perk);
+}
+
+int perkGetBenefitRank(Object* critter, int perk)
+{
+    int rank = perkGetRank(critter, perk);
+    return critter == gDude ? perkBenefitRank(perk, rank) : rank;
+}
+
+int perkGetMaximumRank(Object* critter, int perk)
+{
+    if (!perkIsValid(perk)) return 0;
+    int maximum = gPerkDescriptions[perk].maxRank;
+    return critter == gDude ? perkTrainingMaxRank(perk, maximum) : maximum;
 }
 
 // Returns perks available to pick.
@@ -502,7 +550,7 @@ int perkGetAvailablePerks(Object* critter, int* perks)
 {
     int count = 0;
     for (int perk = 0; perk < PERK_COUNT; perk++) {
-        if (perkCanAdd(critter, perk)) {
+        if (perkCanSelect(critter, perk)) {
             perks[count] = perk;
             count++;
         }
@@ -536,6 +584,9 @@ char* perkGetDescription(int perk)
 {
     if (!perkIsValid(perk)) {
         return nullptr;
+    }
+    if (perkUsesTraining(perk)) {
+        return perkTrainingDescription(perk);
     }
     return gPerkDescriptions[perk].description;
 }
@@ -631,31 +682,31 @@ int perkGetSkillModifier(Object* critter, int skill)
 
     switch (skill) {
     case SKILL_FIRST_AID:
-        if (perkHasRank(critter, PERK_MEDIC)) {
+        if (perkHasBenefit(critter, PERK_MEDIC)) {
             modifier += 10;
         }
 
-        if (perkHasRank(critter, PERK_VAULT_CITY_TRAINING)) {
+        if (perkHasBenefit(critter, PERK_VAULT_CITY_TRAINING)) {
             modifier += 5;
         }
 
         break;
     case SKILL_DOCTOR:
-        if (perkHasRank(critter, PERK_MEDIC)) {
+        if (perkHasBenefit(critter, PERK_MEDIC)) {
             modifier += 10;
         }
 
-        if (perkHasRank(critter, PERK_LIVING_ANATOMY)) {
+        if (perkHasBenefit(critter, PERK_LIVING_ANATOMY)) {
             modifier += 10;
         }
 
-        if (perkHasRank(critter, PERK_VAULT_CITY_TRAINING)) {
+        if (perkHasBenefit(critter, PERK_VAULT_CITY_TRAINING)) {
             modifier += 5;
         }
 
         break;
     case SKILL_SNEAK:
-        if (perkHasRank(critter, PERK_GHOST)) {
+        if (perkHasBenefit(critter, PERK_GHOST)) {
             int lightIntensity = objectGetLightIntensity(gDude);
             if (lightIntensity > 45875) {
                 modifier += 20;
@@ -665,18 +716,18 @@ int perkGetSkillModifier(Object* critter, int skill)
     case SKILL_LOCKPICK:
     case SKILL_STEAL:
     case SKILL_TRAPS:
-        if (perkHasRank(critter, PERK_THIEF)) {
+        if (perkHasBenefit(critter, PERK_THIEF)) {
             modifier += 10;
         }
 
         if (skill == SKILL_LOCKPICK || skill == SKILL_STEAL) {
-            if (perkHasRank(critter, PERK_MASTER_THIEF)) {
+            if (perkHasBenefit(critter, PERK_MASTER_THIEF)) {
                 modifier += 15;
             }
         }
 
         if (skill == SKILL_STEAL) {
-            if (perkHasRank(critter, PERK_HARMLESS)) {
+            if (perkHasBenefit(critter, PERK_HARMLESS)) {
                 modifier += 20;
             }
         }
@@ -684,45 +735,45 @@ int perkGetSkillModifier(Object* critter, int skill)
         break;
     case SKILL_SCIENCE:
     case SKILL_REPAIR:
-        if (perkHasRank(critter, PERK_MR_FIXIT)) {
+        if (perkHasBenefit(critter, PERK_MR_FIXIT)) {
             modifier += 10;
         }
 
         break;
     case SKILL_SPEECH:
-        if (perkHasRank(critter, PERK_SPEAKER)) {
+        if (perkHasBenefit(critter, PERK_SPEAKER)) {
             modifier += 20;
         }
 
-        if (perkHasRank(critter, PERK_EXPERT_EXCREMENT_EXPEDITOR)) {
+        if (perkHasBenefit(critter, PERK_EXPERT_EXCREMENT_EXPEDITOR)) {
             modifier += 5;
         }
 
         // FALLTHROUGH
     case SKILL_BARTER:
-        if (perkHasRank(critter, PERK_NEGOTIATOR)) {
+        if (perkHasBenefit(critter, PERK_NEGOTIATOR)) {
             modifier += 10;
         }
 
         if (skill == SKILL_BARTER) {
-            if (perkHasRank(critter, PERK_SALESMAN)) {
+            if (perkHasBenefit(critter, PERK_SALESMAN)) {
                 modifier += 20;
             }
         }
 
         break;
     case SKILL_GAMBLING:
-        if (perkHasRank(critter, PERK_GAMBLER)) {
+        if (perkHasBenefit(critter, PERK_GAMBLER)) {
             modifier += 20;
         }
 
         break;
     case SKILL_OUTDOORSMAN:
-        if (perkHasRank(critter, PERK_RANGER)) {
+        if (perkHasBenefit(critter, PERK_RANGER)) {
             modifier += 15;
         }
 
-        if (perkHasRank(critter, PERK_SURVIVALIST)) {
+        if (perkHasBenefit(critter, PERK_SURVIVALIST)) {
             modifier += 25;
         }
 

@@ -34,6 +34,7 @@
 #include "object.h"
 #include "palette.h"
 #include "perk.h"
+#include "perk_training.h"
 #include "platform_compat.h"
 #include "proto.h"
 #include "scripts.h"
@@ -268,7 +269,7 @@ static void characterEditorToggleTaggedSkill(int skill);
 static void characterEditorDrawOptionalTraits();
 static void characterEditorToggleOptionalTrait(int trait);
 static void characterEditorDrawKarmaFolder();
-static int characterEditorUpdateLevel();
+static int characterEditorUpdateLevel(bool showPicker);
 static void perkDialogRefreshPerks();
 static int perkDialogShow();
 static int perkDialogHandleInput(int count, void (*refreshProc)());
@@ -790,7 +791,7 @@ static std::vector<CustomKarmaFolderDescription> gCustomKarmaFolderDescriptions;
 static std::vector<TownReputationEntry> gCustomTownReputationEntries;
 
 // 0x431DF8
-int characterEditorShow(bool isCreationMode)
+int characterEditorShow(bool isCreationMode, int reviewPerk)
 {
     ScopedGameMode gm(!isCreationMode ? GameMode::kEditor : 0);
 
@@ -809,13 +810,29 @@ int characterEditorShow(bool isCreationMode)
     }
 
     if (!gCharacterEditorIsCreationMode) {
-        if (characterEditorUpdateLevel()) {
+        if (characterEditorUpdateLevel(reviewPerk < 0)) {
             critterUpdateDerivedStats(gDude);
             characterEditorDrawOptionalTraits();
             characterEditorDrawSkills(0);
             characterEditorDrawPrimaryStat(RENDER_ALL_STATS, 0, 0);
             characterEditorDrawDerivedStats();
             characterEditorDrawCard();
+        }
+        if (perkIsValid(reviewPerk) && perkGetRank(gDude, reviewPerk) > 0) {
+            int row = 1; // PERKS heading.
+            if (gCharacterEditorTempTraits[0] != -1) {
+                row += 2; // TRAITS heading and first trait.
+                if (gCharacterEditorTempTraits[1] != -1) ++row;
+            }
+            for (int perk = 0; perk < reviewPerk; ++perk) {
+                if (perkGetRank(gDude, perk) > 0) ++row;
+            }
+            characterEditorWindowSelectedFolder = EDITOR_FOLDER_PERKS;
+            gCharacterEditorPerkFolderTopLine = row;
+            characterEditorSelectedItem = 10;
+            characterEditorDrawFolders();
+            characterEditorDrawCard();
+            windowRefresh(gCharacterEditorWindow);
         }
     }
 
@@ -2812,7 +2829,7 @@ static void characterEditorDrawDerivedStats()
     // SFALL: Display melee damage without "Bonus HtH Damage" bonus.
     int meleeDamage = critterGetStat(gDude, STAT_MELEE_DAMAGE);
     if (!damageModGetDisplayBonusDamage()) {
-        meleeDamage -= 2 * perkGetRank(gDude, PERK_BONUS_HTH_DAMAGE);
+        meleeDamage -= 2 * perkGetBenefitRank(gDude, PERK_BONUS_HTH_DAMAGE);
     }
 
     compat_itoa(meleeDamage, t, 10);
@@ -4437,7 +4454,7 @@ static int characterPrintToFile(const char* fileName)
     // SFALL: Display melee damage without "Bonus HtH Damage" bonus.
     int meleeDamage = critterGetStat(gDude, STAT_MELEE_DAMAGE);
     if (!damageModGetDisplayBonusDamage()) {
-        meleeDamage -= 2 * perkGetRank(gDude, PERK_BONUS_HTH_DAMAGE);
+        meleeDamage -= 2 * perkGetBenefitRank(gDude, PERK_BONUS_HTH_DAMAGE);
     }
 
     // Charisma / Melee Damage / Carry Weight
@@ -5678,7 +5695,7 @@ void characterEditorReset()
 // level up if needed
 //
 // 0x43C228
-static int characterEditorUpdateLevel()
+static int characterEditorUpdateLevel(bool showPicker)
 {
     int level = pcGetStat(PC_STAT_LEVEL);
     if (level != gCharacterEditorLastLevel && level <= PC_LEVEL_MAX) {
@@ -5686,7 +5703,7 @@ static int characterEditorUpdateLevel()
             int sp = pcGetStat(PC_STAT_UNSPENT_SKILL_POINTS);
             sp += 5;
             sp += critterGetBaseStatWithTraitModifier(gDude, STAT_INTELLIGENCE) * 2;
-            sp += perkGetRank(gDude, PERK_EDUCATED) * 2;
+            sp += perkGetBenefitRank(gDude, PERK_EDUCATED) * 2;
             sp += traitIsSelected(TRAIT_SKILLED) * 5;
             if (traitIsSelected(TRAIT_GIFTED)) {
                 sp -= 5;
@@ -5723,7 +5740,7 @@ static int characterEditorUpdateLevel()
         }
     }
 
-    if (gCharacterEditorHasFreePerk != 0) {
+    if (showPicker && gCharacterEditorHasFreePerk != 0) {
         characterEditorWindowSelectedFolder = 0;
         characterEditorDrawFolders();
         windowRefresh(gCharacterEditorWindow);
@@ -5756,7 +5773,10 @@ static void perkDialogRefreshPerks()
         gPerkDialogWindowBuffer + 280,
         PERK_WINDOW_WIDTH);
 
-    perkDialogDrawPerks();
+    if (perkDialogDrawPerks() == 0) {
+        windowRefresh(gPerkDialogWindow);
+        return;
+    }
 
     // NOTE: Original code is slightly different, but basically does the same thing.
     int perk = gPerkDialogOptionList[gPerkDialogTopLine + gPerkDialogCurrentLine].value;
@@ -5910,6 +5930,11 @@ static int perkDialogShow()
     fontDrawText(gPerkDialogWindowBuffer + PERK_WINDOW_WIDTH * 186 + 171, msg, PERK_WINDOW_WIDTH, PERK_WINDOW_WIDTH, _colorTable[18979]);
 
     int count = perkDialogDrawPerks();
+    if (count == 0) {
+        _perkDialogBackgroundFrmImage.unlock();
+        windowDestroy(gPerkDialogWindow);
+        return 0; // Preserve the pending perk opportunity.
+    }
 
     // NOTE: Original code is slightly different, but does the same thing.
     int perk = gPerkDialogOptionList[gPerkDialogTopLine + gPerkDialogCurrentLine].value;
@@ -5931,7 +5956,8 @@ static int perkDialogShow()
     int rc = perkDialogHandleInput(count, perkDialogRefreshPerks);
 
     if (rc == 1) {
-        if (perkAdd(gDude, gPerkDialogOptionList[gPerkDialogTopLine + gPerkDialogCurrentLine].value) == -1) {
+        int selectedPerk = gPerkDialogOptionList[gPerkDialogTopLine + gPerkDialogCurrentLine].value;
+        if (!perkCanSelect(gDude, selectedPerk) || perkAdd(gDude, selectedPerk) == -1) {
             debugPrint("\n*** Unable to add perk! ***\n");
             rc = 2;
         }
@@ -5940,19 +5966,19 @@ static int perkDialogShow()
     rc &= 1;
 
     if (rc != 0) {
-        if (perkGetRank(gDude, PERK_TAG) != 0 && gCharacterEditorPerksBackup[PERK_TAG] == 0) {
+        if (perkGetBenefitRank(gDude, PERK_TAG) > perkBenefitRank(PERK_TAG, gCharacterEditorPerksBackup[PERK_TAG])) {
             if (!perkDialogHandleTagPerk()) {
                 perkRemove(gDude, PERK_TAG);
             }
-        } else if (perkGetRank(gDude, PERK_MUTATE) != 0 && gCharacterEditorPerksBackup[PERK_MUTATE] == 0) {
+        } else if (perkGetBenefitRank(gDude, PERK_MUTATE) > perkBenefitRank(PERK_MUTATE, gCharacterEditorPerksBackup[PERK_MUTATE])) {
             if (!perkDialogHandleMutatePerk()) {
                 perkRemove(gDude, PERK_MUTATE);
             }
-        } else if (perkGetRank(gDude, PERK_LIFEGIVER) != gCharacterEditorPerksBackup[PERK_LIFEGIVER]) {
+        } else if (!perkUsesTraining(PERK_LIFEGIVER) && perkGetBenefitRank(gDude, PERK_LIFEGIVER) > perkBenefitRank(PERK_LIFEGIVER, gCharacterEditorPerksBackup[PERK_LIFEGIVER])) {
             int maxHp = critterGetBonusStat(gDude, STAT_MAXIMUM_HIT_POINTS);
             critterSetBonusStat(gDude, STAT_MAXIMUM_HIT_POINTS, maxHp + 4);
             critterAdjustHitPoints(gDude, 4);
-        } else if (perkGetRank(gDude, PERK_EDUCATED) != gCharacterEditorPerksBackup[PERK_EDUCATED]) {
+        } else if (!perkUsesTraining(PERK_EDUCATED) && perkGetBenefitRank(gDude, PERK_EDUCATED) > perkBenefitRank(PERK_EDUCATED, gCharacterEditorPerksBackup[PERK_EDUCATED])) {
             int sp = pcGetStat(PC_STAT_UNSPENT_SKILL_POINTS);
             pcSetStat(PC_STAT_UNSPENT_SKILL_POINTS, sp + 2);
         }
@@ -6730,7 +6756,10 @@ static void _pop_perks()
                 break;
             }
 
-            perkAdd(gDude, i);
+            if (perkAddForce(gDude, i) == -1) {
+                debugPrint("\n*** Unable to restore perk! ***\n");
+                break;
+            }
         }
     }
 }

@@ -15,6 +15,16 @@ is eligible; uncovered values offer no challenge. These are initial data choices
 not engine limits. Each challenge YAML is a concrete pool entry with bounded
 parameters for reproducible instances. Filenames never define challenge identity.
 
+Learning material lives separately in [wiki/](wiki/README.md). Its subjects and
+stable article IDs describe Linux topics independently of Fallout tracks. A
+challenge may add `wiki: [linux.paths, linux.permissions]`; the article's related
+challenges are derived from these references. This reading metadata does not
+change challenge selection, rewards or retained-attempt fingerprints. Run
+`python tools/nixboy/challenge_content.py` from the source root to check both
+catalogs, including duplicate IDs and unresolved references. The wiki's HTML
+export is a content-review prototype; the embedded game viewer awaits an
+architecture decision.
+
 ## Add a level or skill
 
 `tracks.yaml` uses schema 2. Each track supplies a stable `id`, Fallout-facing

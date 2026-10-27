@@ -40,6 +40,7 @@
 #include "object.h"
 #include "party_member.h"
 #include "perk.h"
+#include "perk_training.h"
 #include "pipboy.h"
 #include "platform_compat.h"
 #include "preferences.h"
@@ -1849,8 +1850,8 @@ static int lsgSaveHeaderInSlot(int slot)
         return -1;
     }
 
-    ptr->versionRelease = VERSION_RELEASE;
-    if (fileWriteUInt8(_flptr, VERSION_RELEASE) == -1) {
+    ptr->versionRelease = perkTrainingSaveRelease();
+    if (fileWriteUInt8(_flptr, perkTrainingSaveRelease()) == -1) {
         return -1;
     }
 
@@ -1966,7 +1967,7 @@ static int lsgLoadHeaderInSlot(int slot)
         return -1;
     }
 
-    if (ptr->versionMinor != 1 || ptr->versionMajor != 2 || ptr->versionRelease != 'R') {
+    if (ptr->versionMinor != 1 || ptr->versionMajor != 2 || ptr->versionRelease != perkTrainingSaveRelease()) {
         debugPrint("\nLOADSAVE: Load slot #%d Version: %d.%d%c\n", slot, ptr->versionMinor, ptr->versionMajor, ptr->versionRelease);
         _ls_error_code = 1;
         return -1;

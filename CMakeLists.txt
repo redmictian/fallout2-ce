@@ -21,6 +21,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED YES)
 set(CMAKE_CXX_EXTENSIONS NO)
 
 option(FALLOUT_VENDORED "Use vendored third-party libraries" ON)
+option(FALLOUT_NIXBOY_PERK_TRAINING "Use Nix-Boy training ranks for the 76 level-up perks (new saves only)" ON)
 option(FALLOUT_NIXBOY "Build the desktop Nix-Boy terminal (runtime opt-in)" ON)
 
 if(ANDROID OR IOS)
@@ -33,7 +34,15 @@ else()
     add_executable(${EXECUTABLE_NAME} WIN32 MACOSX_BUNDLE)
 endif()
 
+if(FALLOUT_NIXBOY_PERK_TRAINING)
+    target_compile_definitions(${EXECUTABLE_NAME} PRIVATE FALLOUT_NIXBOY_PERK_TRAINING)
+endif()
+
 target_sources(${EXECUTABLE_NAME} PUBLIC
+    "src/perk_training.cc"
+    "src/perk_training.h"
+    "src/debug_perks.cc"
+    "src/debug_perks.h"
     "src/actions.cc"
     "src/actions.h"
     "src/animation.cc"
@@ -257,7 +266,10 @@ target_sources(${EXECUTABLE_NAME} PUBLIC
 
 target_sources(${EXECUTABLE_NAME} PUBLIC
     "src/nixboy.cc"
+    "src/nixboy_ui_art.cc"
     "src/nixboy.h"
+    "src/nixboy_wiki.cc"
+    "src/nixboy_wiki.h"
     "src/nixboy_hotkey.cc"
     "src/nixboy_hotkey.h"
     "src/nixboy_training_state.cc"
@@ -379,11 +391,15 @@ if(FALLOUT_NIXBOY)
     target_sources(${EXECUTABLE_NAME} PRIVATE
         "src/nixboy_client.cc"
         "src/nixboy_terminal.cc"
+        "src/nixboy_terminal_view.cc"
     )
     target_compile_definitions(${EXECUTABLE_NAME} PRIVATE FALLOUT_NIXBOY)
     target_link_libraries(${EXECUTABLE_NAME} nixboy-vterm)
     if(WIN32)
-        target_link_libraries(${EXECUTABLE_NAME} ws2_32)
+        add_subdirectory("third_party/webview2")
+        target_link_libraries(${EXECUTABLE_NAME} ws2_32 nixboy-webview2 ole32 uuid)
+        add_custom_command(TARGET ${EXECUTABLE_NAME} POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different "${NIXBOY_WEBVIEW2_LOADER}" "$<TARGET_FILE_DIR:${EXECUTABLE_NAME}>/WebView2Loader.dll")
     endif()
 endif()
 

@@ -7,11 +7,41 @@ enabled=1
 ; The configured shortcut takes precedence over the game's action for that key.
 ; Use none to keep only the Pip-Boy nix-boy button. Invalid values disable it.
 hotkey=Ctrl+N
+; Terminal presentation, reloaded whenever nix-boy opens.
+; 0: centered window with the surrounding game UI visible; 1: full game screen.
+fullscreen=0
+; 1: curved green CRT, soft bloom and phosphor persistence; 0: flat original colors.
+retro_terminal=1
+; Independent CPU CRT effects. Strengths accept 0..100; 0 disables each effect.
+; Curvature, narrow phosphor glow and broad bloom are separate controls.
+crt_warp=35
+crt_glow=15
+crt_bloom=10
+crt_scanlines=8
+crt_noise=3
+crt_jitter=2
+crt_rgb_shift=0
+; Burn-in / phosphor history: fade time to one-tenth intensity, 0..2000 ms.
+; 0 clears old characters immediately; no permanent state is written.
+crt_persistence_ms=120
 ; nix-boy hub: two skill tracks, two current-skill bands each, five options per level.
 ; Set to 0 for the original ephemeral shell and explicit legacy bindings.
 training=1
 port=47821
 token_file=nixboy.token
+
+; Offline HTML reader, independent of the terminal/bridge/Docker. Requires the
+; WebView2 Runtime on Windows and the generated wiki shipped beside the game.
+; Omitted settings use these defaults when [nixboy] enabled=1.
+[wiki]
+enabled=1
+hotkey=Ctrl+W
+; Reloaded whenever the wiki opens, independently of terminal presentation.
+; 0: full-height panel with side margins; 1: fill the internal game screen.
+; Wiki-enabled Windows sessions use borderless fullscreen from game startup to
+; avoid display-mode blackouts when reading. Internal resolution is unchanged.
+fullscreen=0
+home=nixboy/wiki/index.html
 
 ; Legacy free-shell mode only: named results can write listed global indexes.
 ; No bindings are enabled by default. Choose indexes owned by YOUR mod;

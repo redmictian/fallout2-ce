@@ -1,7 +1,7 @@
 # nix-boy terminal and Docker bridge
 
 nix-boy is the mod and terminal name. The terminal and its skill-progression
-feature are released together, using the version in
+feature, offline wiki and perk-training module are released together, using the version in
 [`nixboy.version`](../../nixboy.version). The current game opens the **training
 hub** by default: Unarmed and Science, two levels each selected from the
 character's current skill percentage, with five authored options per level.
@@ -10,10 +10,95 @@ The shipped catalog maps Unarmed to **Filesystem** and Science to
 editable catalog, rather than a two-track engine limit.
 Each level can set `reward_points` (1–300, default 5); earned amounts stay fixed
 after completion even when the catalog changes.
+The [wiki content directory](content/wiki/README.md) holds separate HTML
+lessons organized by Linux subject, with stable reading references from challenge
+YAML. Validate both catalogs with `python tools/nixboy/challenge_content.py` and
+export offline pages with `python tools/nixboy/wiki_pages.py --output NEW-DIR`
+from the source root. Authoring tools need Python/PyYAML, without Docker.
+Deploy the export as `nixboy/wiki/`, separate from editable `nixboy/content/wiki/`.
+The Windows reader opens with Ctrl+W from gameplay or Pip-Boy, and Escape
+closes it. Reading uses WebView2 and requires no Python, Docker or bridge.
+The standard 0.7.0 perk policy uses new characters and 1.2T saves: level-up
+selection unlocks training without a bonus, and original benefits start at rank
+two. Further ordinary ranks require level 310; challenge grants are not wired
+yet. The [debug guide](DEBUGGING.md) documents direct-to-game, perk gallery,
+focused-rank and picker launches for disposable testing.
+Configure `[wiki]` with `enabled=1`, `hotkey=Ctrl+W` and
+`home=nixboy/wiki/index.html` in `nixboy.ini`. This section does not need the
+terminal authentication token. Ctrl+W inside the terminal retains shell editing.
 Read [training setup and controls](TRAINING.md) first. The original ephemeral
 shell and configured integer bindings remain available with `training=0` in
 `nixboy.ini`. The foundation description below applies to that legacy mode;
 training owns resumable attempts and uses trusted completion receipts instead.
+
+## Terminal appearance
+
+The default terminal is a centered metal-framed window, leaving the surrounding
+game visible. Set `fullscreen=1` in the `[nixboy]` section of `nixboy.ini` to fill
+the game's internal screen instead. This setting controls the in-game modal;
+the game's own operating-system display mode stays in its existing configuration.
+
+`retro_terminal=1` (the default) enables rounded curved green glass, broad bloom,
+phosphor persistence and subtle tube noise/flicker. Set `retro_terminal=0` for a flat terminal with its
+original ANSI colors. The flags are independent, accept `1`/`true` or `0`/`false`,
+and reload when the terminal opens. F10 and the unwarped Close button remain local.
+The CRT is an original software effect; it does not embed cool-retro-term or Qt.
+
+The independent effect controls also reload on opening:
+
+```ini
+crt_warp=35
+crt_glow=15
+crt_bloom=10
+crt_scanlines=8
+crt_noise=3
+crt_jitter=2
+crt_rgb_shift=0
+crt_persistence_ms=120
+```
+
+Strengths accept integers 0–100. Warp controls screen curvature, glow adds a
+narrow phosphor halo, bloom adds the broad light spill, scanlines modulate raster
+rows, noise adds static, jitter moves scan bands slightly, and RGB shift offsets
+red/blue edges. Persistence is the transient burn-in/history effect: 0–2000 ms
+for old light to fade to one-tenth intensity. Zero disables each effect. Defaults
+are restrained; RGB shift defaults off for the green preset. Invalid values
+report a configuration error. Flat mode ignores these effects.
+
+The frame loads the installed game's interface FRMs through its normal art
+cache: FRM 171 (`AUTOMAP.FRM`) supplies one coherent glass housing.
+Corner/bevel thickness remains native while long edge runs extend continuously,
+with no repeating panel tiles. Close uses the game's original
+red button resources. The Pip-Boy label borrows painted ochre strokes from
+FRM 127 (`PIP.FRM`); missing letter shapes are composed from those strokes. Modified or
+localized art falls back to a native game font. No original/extracted game
+graphics are embedded or packaged.
+
+Connection/error notices and control hints appear inside the terminal. The
+frame carries only a native red button and centered CLOSE label; no title or
+status/footer panel is reserved. The glass fills the frame opening.
+
+The terminal body uses the readable Departure Mono ASCII raster in fixed 8×16
+cells. It is independent of the native Fallout font 101 used for the CLOSE label
+and frame measurements. The pinned font source, attribution and regeneration
+instructions are in [the font notice](../../third_party/departure-mono/README.nixboy.md),
+with its [SIL OFL 1.1 license](../../third_party/departure-mono/OFL.txt).
+Pillow is needed only to regenerate the bitmap; no font library is needed at
+runtime. No Fallout font pixels are embedded.
+
+## Basic shell editing
+
+Ctrl+Left/Right or Alt+Left/Right moves by Readline words. Win+Alt+Left/Right
+uses the same mapping if the operating system delivers that chord to the game.
+Ctrl+W or Ctrl+Backspace deletes the previous whitespace-delimited word;
+Alt+Backspace uses Readline's backward-word deletion, and Alt+Delete or
+Ctrl+Delete deletes forward. Ctrl+A/E moves to the beginning/end, Ctrl+U/K kills
+to the beginning/end, Ctrl+Y restores killed text, and Ctrl+L clears the screen.
+Home/End, ordinary arrows, Backspace/Delete and Tab completion remain available.
+Ctrl+C interrupts and Ctrl+D sends EOF. These are Bash/Readline defaults; a running
+editor or a customized shell may assign its own bindings. AltGr composition and
+plain application-cursor keys retain their existing input path. F5–F8 training
+actions and F10 Close remain local as documented above.
 
 nix-boy adds an in-game terminal backed by Debian Linux containers.
 The host bridge uses the official Docker Python SDK, a real Bash PTY and a separate
