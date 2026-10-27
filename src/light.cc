@@ -47,7 +47,7 @@ int lightGetAmbientIntensity()
 // 0x47A908
 void lightSetAmbientIntensity(int intensity, bool shouldUpdateScreen)
 {
-    int adjustedIntensity = intensity + perkGetRank(gDude, PERK_NIGHT_VISION) * LIGHT_LEVEL_NIGHT_VISION_BONUS;
+    int adjustedIntensity = intensity + perkGetBenefitRank(gDude, PERK_NIGHT_VISION) * LIGHT_LEVEL_NIGHT_VISION_BONUS;
     int normalizedIntensity = std::clamp(adjustedIntensity, LIGHT_INTENSITY_MIN, LIGHT_INTENSITY_MAX);
 
     int oldAmbientIntensity = gAmbientIntensity;

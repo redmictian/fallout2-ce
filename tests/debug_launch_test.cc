@@ -43,6 +43,29 @@ int main()
         }
         require(parse({ "--debug-no-movies", "--debug-new-game=narg" }, options), "explicit combined switches rejected");
         require(parse({ "--debug-new-game=narg", "--debug-no-movies" }, options), "switch order mattered");
+        require(parse({ "--debug-new-game=narg", "--debug-new-game-level=3" }, options) && options.newGameLevel == 3, "review level rejected");
+        require(parse({ "--debug-new-game-level=99", "--debug-new-game=narg" }, options) && options.newGameLevel == 99, "maximum review level rejected");
+        for (const char* level : { "", "0", "100", "-1", "+3", "3x", "999999999999999999" }) {
+            std::string argument = std::string("--debug-new-game-level=") + level;
+            require(!parse({ "--debug-new-game=narg", argument.c_str() }, options), "invalid review level accepted");
+        }
+        require(!parse({ "--debug-new-game-level=3" }, options), "review level without a new character accepted");
+        require(!parse({ "--debug-new-game=narg", "--debug-new-game-level=3", "--debug-new-game-level=9" }, options), "duplicate review level accepted");
+        require(parse({ "--debug-perks=all" }, options) && options.reviewAllPerks && options.skipMovies
+                && std::strcmp(options.newGameCharacter, "narg") == 0,
+            "one-switch review must skip menus and create a disposable character");
+        require(parse({ "--debug-perk=12:4" }, options) && options.reviewPerk == 12 && options.reviewRank == 4 && options.skipMovies,
+            "specific perk review rejected");
+        require(parse({ "--debug-perk-picker" }, options) && options.reviewPerkPicker && options.newGameLevel == 3 && options.skipMovies,
+            "one-switch picker must create a level-three character");
+        require(parse({ "--debug-perks=all", "--debug-new-game=chitsa" }, options) && std::strcmp(options.newGameCharacter, "chitsa") == 0,
+            "explicit review character ignored");
+        for (const char* argument : { "--debug-perks=", "--debug-perks=other", "--debug-perk=", "--debug-perk=12", "--debug-perk=:2", "--debug-perk=12:0", "--debug-perk=12:5", "--debug-perk=119:1", "--debug-perk=27:1", "--debug-perk=53:1", "--debug-perk=-1:1", "--debug-perk=12:2:1" }) {
+            require(!parse({ argument }, options), "malformed, special or disabled perk review accepted");
+        }
+        require(!parse({ "--debug-perks=all", "--debug-perk=12:2" }, options), "conflicting review modes accepted");
+        require(!parse({ "--debug-perks=all", "--debug-perk-picker" }, options), "gallery/picker conflict accepted");
+        require(!parse({ "--debug-perks=all", "--debug-perks=all" }, options), "duplicate review mode accepted");
 
         for (const char* argument : { "--debug-new-game", "--debug-new-game=", "--debug-new-game=Narg", "--debug-new-game=../player", "--debug-new-game=narg-extra", "--debug-no-movies=0" }) {
             options.skipMovies = false;

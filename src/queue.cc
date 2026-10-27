@@ -477,7 +477,7 @@ static int _queue_do_explosion_(Object* explosive, bool animate)
     // FIXME: I guess this is a little bit wrong, dude can never be null, I
     // guess it needs to check if owner is dude.
     if (gDude != nullptr) {
-        if (perkHasRank(gDude, PERK_DEMOLITION_EXPERT)) {
+        if (perkHasBenefit(gDude, PERK_DEMOLITION_EXPERT)) {
             maxDamage += 10;
             minDamage += 10;
         }

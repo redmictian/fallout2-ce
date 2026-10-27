@@ -194,7 +194,7 @@ int _pick_death(Object* attacker, Object* defender, Object* weapon, int damage, 
         attackerAnimation = ANIM_FIRE_SINGLE;
     }
 
-    if (attacker == gDude && perkHasRank(attacker, PERK_PYROMANIAC) && damageType == DAMAGE_TYPE_FIRE) {
+    if (attacker == gDude && perkHasBenefit(attacker, PERK_PYROMANIAC) && damageType == DAMAGE_TYPE_FIRE) {
         normalViolenceLevelDamageThreshold = 1;
         maximumBloodViolenceLevelDamageThreshold = 1;
     }

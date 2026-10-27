@@ -2115,7 +2115,7 @@ void gameDialogOptionOnMouseEnter(int index)
     _optionRect.right = 388;
 
     int color = _colorTable[32747] | 0x2000000;
-    if (perkHasRank(gDude, PERK_EMPATHY)) {
+    if (perkHasBenefit(gDude, PERK_EMPATHY)) {
         color = _colorTable[32747] | 0x2000000;
         switch (dialogOptionEntry->reaction) {
         case GAME_DIALOG_REACTION_GOOD:
@@ -2159,7 +2159,7 @@ void gameDialogOptionOnMouseExit(int index)
     _gDialogRefreshOptionsRect(gGameDialogOptionsWindow, &_optionRect);
 
     int color = _colorTable[992] | 0x2000000;
-    if (perkGetRank(gDude, PERK_EMPATHY) != 0) {
+    if (perkGetBenefitRank(gDude, PERK_EMPATHY) != 0) {
         color = _colorTable[32747] | 0x2000000;
         switch (dialogOptionEntry->reaction) {
         case GAME_DIALOG_REACTION_GOOD:
@@ -2204,7 +2204,7 @@ void gameDialogRenderReply()
     _replyRect.bottom = 58;
 
     // NOTE: There is an unused if condition.
-    perkGetRank(gDude, PERK_EMPATHY);
+    perkGetBenefitRank(gDude, PERK_EMPATHY);
 
     _demo_copy_title(gGameDialogReplyWindow);
 
@@ -2250,7 +2250,7 @@ void _gdProcessUpdate()
 
     int color = _colorTable[992] | 0x2000000;
 
-    bool hasEmpathy = perkGetRank(gDude, PERK_EMPATHY) != 0;
+    bool hasEmpathy = perkGetBenefitRank(gDude, PERK_EMPATHY) != 0;
 
     int width = _optionRect.right - _optionRect.left - 4;
 

@@ -7,7 +7,9 @@ namespace fallout {
 
 extern int gCharacterEditorRemainingCharacterPoints;
 
-int characterEditorShow(bool isCreationMode);
+// reviewPerk is an explicit debug launch target: focus its card and defer the
+// pending level-up picker until a normal editor visit.
+int characterEditorShow(bool isCreationMode, int reviewPerk = -1);
 void characterEditorInit();
 bool _isdoschar(int ch);
 char* _strmfe(char* dest, const char* name, const char* ext);

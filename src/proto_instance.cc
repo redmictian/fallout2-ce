@@ -291,7 +291,7 @@ int _obj_examine_func(Object* critter, Object* target, void (*fn)(char* string))
 
     int type = PID_TYPE(target->pid);
     if (type == OBJ_TYPE_CRITTER) {
-        if (target != gDude && perkGetRank(gDude, PERK_AWARENESS) && !critterIsDead(target)) {
+        if (target != gDude && perkGetBenefitRank(gDude, PERK_AWARENESS) && !critterIsDead(target)) {
             MessageListItem hpMessageListItem;
 
             if (critterGetBodyType(target) != BODY_TYPE_BIPED) {
@@ -777,7 +777,7 @@ static int _obj_use_book(Object* book)
     if (increase <= 0) {
         messageId = 801;
     } else {
-        if (perkGetRank(gDude, PERK_COMPREHENSION)) {
+        if (perkGetBenefitRank(gDude, PERK_COMPREHENSION)) {
             increase = 150 * increase / 100;
         }
 
@@ -897,7 +897,7 @@ static int _obj_use_explosive(Object* explosive)
             int delay = 10 * seconds;
 
             int roll;
-            if (perkHasRank(gDude, PERK_DEMOLITION_EXPERT)) {
+            if (perkHasBenefit(gDude, PERK_DEMOLITION_EXPERT)) {
                 roll = ROLL_SUCCESS;
             } else {
                 roll = skillRoll(gDude, SKILL_TRAPS, 0, nullptr);
