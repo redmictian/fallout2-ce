@@ -4,6 +4,7 @@ skill: 3
 level: 1
 title: Prepare a delivery directory
 kind: make-directory
+wiki: [linux.paths]
 instructions: "Under ~/lab create the nested directory {name}/ready. Keep the briefing.txt file intact. Read ~/CHALLENGE.txt for your resolved task. Use Check when finished."
 parameters:
   name: [delivery, shipment, dispatch]

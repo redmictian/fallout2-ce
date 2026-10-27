@@ -10,12 +10,55 @@ This feature branch includes **nix-boy**, one mod combining a Pip-Boy Linux
 terminal, Docker-backed challenges and earned Fallout skill progression.
 Its release version is in [nixboy.version](nixboy.version). See the
 [nix-boy setup and protocol guide](tools/nixboy/README.md) and
-[development workspace pointer](MODLOG.md). It requires a separate local bridge.
+[development workspace pointer](MODLOG.md). The terminal and challenges require
+a separate local bridge. Its offline HTML wiki uses Windows WebView2 and opens
+without Python, Docker or a running bridge.
 Its [editable challenge catalog](tools/nixboy/content/README.md) maps Fallout
 skills to knowledge tracks, percentage bands and per-level reward amounts.
 Copying the executable alone does not start Docker. Runtime is disabled unless
 `nixboy.ini` enables it; [example configuration](nixboy.ini.example) has no game
 variable bindings enabled. CMake `-DFALLOUT_NIXBOY=OFF` excludes the terminal.
+
+The wiki opens with Ctrl+W during gameplay or from the Pip-Boy; Escape closes
+the reader. Home, subjects, article links and Back provide navigation. Its own
+section in `nixboy.ini` controls the entry point:
+
+```ini
+[wiki]
+enabled=1
+hotkey=Ctrl+W
+home=nixboy/wiki/index.html
+```
+
+The generated wiki is separate from the editable
+[HTML articles and YAML navigation](tools/nixboy/content/wiki/README.md).
+Regenerate after authoring with a Python environment containing PyYAML:
+
+```sh
+python tools/nixboy/wiki_pages.py --output ../out/wiki-export
+```
+
+Use a new output directory each time. For this workspace, the existing WSL
+environment can run the exporter with
+`/home/mictian/build/nixboy-venv/bin/python`; Windows Python is not required.
+Copy the export directory into a disposable installation as `nixboy/wiki/`
+after closing the reader and preserving any local edits. Reading those exported
+files needs the installed WebView2 runtime and the official x64 loader beside
+the executable. See [loader provenance](third_party/webview2/README.nixboy.md).
+
+Create a redistributable package from reviewed, committed source with explicit
+build and export inputs:
+
+```powershell
+./tools/package-nixboy.ps1 -Executable PATH/fallout2-ce.exe `
+  -Destination PATH/NEW-PACKAGE -WikiDirectory PATH/wiki-export `
+  -WebView2Loader PATH/WebView2Loader.dll
+```
+
+The packager verifies the export manifest against the current authored content,
+exporter sources and generated files, then includes both `nixboy/wiki/` and
+editable `nixboy/content/wiki/`. It rejects stale or modified exports. Package
+creation does not edit a game installation or install WebView2.
 
 For disposable test runs, `--debug-new-game=narg` bypasses the main menu and
 character selection and starts a fresh original premade with MVE playback off.

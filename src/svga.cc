@@ -10,6 +10,7 @@
 #include "interface.h"
 #include "memory.h"
 #include "mouse.h"
+#include "nixboy.h"
 #include "win32.h"
 #include "window_manager.h"
 #include "window_manager_private.h"
@@ -179,7 +180,14 @@ int _GNW95_init_window(int width, int height, bool fullscreen, int scale)
         Uint32 windowFlags = SDL_WINDOW_OPENGL | SDL_WINDOW_ALLOW_HIGHDPI;
 
         if (fullscreen) {
+            // The native HTML reader needs desktop composition. Select it at
+            // startup so opening/closing the wiki never changes monitor modes.
+            // Rendering still uses the configured internal game dimensions.
+#if defined(FALLOUT_NIXBOY) && defined(_WIN32)
+            windowFlags |= nixboyIsWikiEnabled() ? SDL_WINDOW_FULLSCREEN_DESKTOP : SDL_WINDOW_FULLSCREEN;
+#else
             windowFlags |= SDL_WINDOW_FULLSCREEN;
+#endif
         }
 
         gSdlWindow = SDL_CreateWindow(gProgramWindowTitle, SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, width * scale, height * scale, windowFlags);

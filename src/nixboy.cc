@@ -22,6 +22,7 @@
 #include "nixboy_client.h"
 #include "nixboy_hotkey.h"
 #include "nixboy_terminal.h"
+#include "nixboy_wiki.h"
 #include "obj_types.h"
 #include "object.h"
 #include "scripts.h"
@@ -41,6 +42,13 @@ namespace {
         std::string tokenFile = "nixboy.token";
         nixboy::Hotkey hotkey { nixboy::HotkeyKind::ControlLetter, 'N' };
         std::unordered_map<std::string, int> bindings;
+    };
+
+    struct WikiOptions {
+        bool enabled = false;
+        bool fullscreen = false;
+        nixboy::Hotkey hotkey { nixboy::HotkeyKind::ControlLetter, 'W' };
+        std::string home = "nixboy/wiki/index.html";
     };
 
     bool parseInteger(const char* text, int minimum, int maximum, int& result)
@@ -170,10 +178,94 @@ namespace {
         return true;
     }
 
+    bool readWikiOptions(WikiOptions& options, std::string& error)
+    {
+        Config config;
+        if (!configInit(&config)) {
+            error = "Cannot allocate wiki configuration.";
+            return false;
+        }
+        struct Cleanup {
+            Config* config;
+            ~Cleanup() { configFree(config); }
+        } cleanup { &config };
+        if (!configRead(&config, "nixboy.ini", false)) return true;
+        configGetBool(&config, "nixboy", "enabled", &options.enabled);
+        if (!options.enabled) return true;
+        char* value = nullptr;
+        if (configGetString(&config, "wiki", "enabled", &value)) {
+            if (std::string(value) == "1" || std::string(value) == "true") {
+                options.enabled = true;
+            } else if (std::string(value) == "0" || std::string(value) == "false") {
+                options.enabled = false;
+            } else {
+                error = "nixboy.ini: [wiki] enabled must be 1/true or 0/false.";
+                return false;
+            }
+        }
+        if (!options.enabled) return true;
+        if (configGetString(&config, "wiki", "fullscreen", &value)) {
+            if (std::string(value) == "1" || std::string(value) == "true") {
+                options.fullscreen = true;
+            } else if (std::string(value) == "0" || std::string(value) == "false") {
+                options.fullscreen = false;
+            } else {
+                error = "nixboy.ini: [wiki] fullscreen must be 1/true or 0/false.";
+                return false;
+            }
+        }
+        if (configGetString(&config, "wiki", "hotkey", &value)
+            && !nixboy::parseHotkey(value, options.hotkey)) {
+            error = "nixboy.ini: [wiki] hotkey must be Ctrl+A..Z (except H/I/M), Alt+A..Z, A..Z, F1..F12 or none.";
+            return false;
+        }
+        if (configGetString(&config, "wiki", "home", &value)) {
+            if (*value == '\0' || std::string(value).size() > 1024) {
+                error = "nixboy.ini: [wiki] home must name a local generated index.html.";
+                return false;
+            }
+            options.home = value;
+        }
+        return true;
+    }
+
+    bool matchesHotkey(const nixboy::Hotkey& hotkey, int eventCode)
+    {
+        static constexpr int altKeys[] = {
+            KEY_ALT_A, KEY_ALT_B, KEY_ALT_C, KEY_ALT_D, KEY_ALT_E, KEY_ALT_F,
+            KEY_ALT_G, KEY_ALT_H, KEY_ALT_I, KEY_ALT_J, KEY_ALT_K, KEY_ALT_L,
+            KEY_ALT_M, KEY_ALT_N, KEY_ALT_O, KEY_ALT_P, KEY_ALT_Q, KEY_ALT_R,
+            KEY_ALT_S, KEY_ALT_T, KEY_ALT_U, KEY_ALT_V, KEY_ALT_W, KEY_ALT_X,
+            KEY_ALT_Y, KEY_ALT_Z
+        };
+        switch (hotkey.kind) {
+        case nixboy::HotkeyKind::Letter:
+            return eventCode == hotkey.key || eventCode == hotkey.key - 'A' + 'a';
+        case nixboy::HotkeyKind::ControlLetter:
+            static_assert(KEY_CTRL_A == 1 && KEY_CTRL_N == 14 && KEY_CTRL_Z == 26,
+                "Control-letter logical keys must match ASCII control codes");
+            return eventCode == hotkey.key - 'A' + 1;
+        case nixboy::HotkeyKind::AltLetter:
+            return eventCode == altKeys[hotkey.key - 'A'];
+        case nixboy::HotkeyKind::Function:
+            return eventCode == (hotkey.key <= 10 ? KEY_F1 + hotkey.key - 1 : KEY_F11 + hotkey.key - 11);
+        case nixboy::HotkeyKind::None:
+            return false;
+        }
+        return false;
+    }
+
     void showError(const std::string& error)
     {
         debugPrint("Nix-Boy: %s\n", error.c_str());
         showDialogBox(error.c_str(), nullptr, 0, 192, 135, _colorTable[992], nullptr, _colorTable[992], DIALOG_BOX_LARGE);
+    }
+
+    void showWikiError(const std::string& error)
+    {
+        debugPrint("Nix-Boy wiki: %s\n", error.c_str());
+        const char* body[] = { error.c_str() };
+        showDialogBox("nix-boy wiki", body, 1, 192, 135, _colorTable[992], nullptr, _colorTable[992], DIALOG_BOX_LARGE);
     }
 
     nixboy::Context collectContext(const Options& options)
@@ -238,30 +330,56 @@ bool nixboyIsHotkey(int eventCode)
         }
         return options.enabled ? options.hotkey : nixboy::Hotkey {};
     }();
-    static constexpr int altKeys[] = {
-        KEY_ALT_A, KEY_ALT_B, KEY_ALT_C, KEY_ALT_D, KEY_ALT_E, KEY_ALT_F,
-        KEY_ALT_G, KEY_ALT_H, KEY_ALT_I, KEY_ALT_J, KEY_ALT_K, KEY_ALT_L,
-        KEY_ALT_M, KEY_ALT_N, KEY_ALT_O, KEY_ALT_P, KEY_ALT_Q, KEY_ALT_R,
-        KEY_ALT_S, KEY_ALT_T, KEY_ALT_U, KEY_ALT_V, KEY_ALT_W, KEY_ALT_X,
-        KEY_ALT_Y, KEY_ALT_Z
-    };
-    switch (hotkey.kind) {
-    case nixboy::HotkeyKind::Letter:
-        return eventCode == hotkey.key || eventCode == hotkey.key - 'A' + 'a';
-    case nixboy::HotkeyKind::ControlLetter:
-        static_assert(KEY_CTRL_A == 1 && KEY_CTRL_N == 14 && KEY_CTRL_Z == 26,
-            "Control-letter logical keys must match ASCII control codes");
-        return eventCode == hotkey.key - 'A' + 1;
-    case nixboy::HotkeyKind::AltLetter:
-        return eventCode == altKeys[hotkey.key - 'A'];
-    case nixboy::HotkeyKind::Function:
-        return eventCode == (hotkey.key <= 10 ? KEY_F1 + hotkey.key - 1 : KEY_F11 + hotkey.key - 11);
-    case nixboy::HotkeyKind::None:
-        return false;
-    }
-    return false;
+    return matchesHotkey(hotkey, eventCode);
 #else
     return false;
+#endif
+}
+
+bool nixboyIsWikiEnabled()
+{
+#ifdef FALLOUT_NIXBOY
+    WikiOptions options;
+    std::string error;
+    readWikiOptions(options, error);
+    return options.enabled;
+#else
+    return false;
+#endif
+}
+
+bool nixboyIsWikiHotkey(int eventCode)
+{
+#ifdef FALLOUT_NIXBOY
+    if (eventCode <= 0) return false;
+    static const nixboy::Hotkey hotkey = []() {
+        WikiOptions options;
+        std::string error;
+        if (!readWikiOptions(options, error)) {
+            debugPrint("nix-boy wiki shortcut disabled: %s\n", error.c_str());
+            return nixboy::Hotkey {};
+        }
+        return options.enabled ? options.hotkey : nixboy::Hotkey {};
+    }();
+    return matchesHotkey(hotkey, eventCode);
+#else
+    return false;
+#endif
+}
+
+void nixboyOpenWiki()
+{
+#ifdef FALLOUT_NIXBOY
+    WikiOptions options;
+    std::string error;
+    if (!readWikiOptions(options, error)) {
+        showWikiError(error);
+        return;
+    }
+    if (!options.enabled || gDude == nullptr) return;
+    if (!nixboyWikiWindowOpen(options.home, options.fullscreen, error)) {
+        showWikiError(error);
+    }
 #endif
 }
 

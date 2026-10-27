@@ -9,6 +9,11 @@ bool nixboyIsEnabled();
 bool nixboyIsHotkey(int eventCode);
 void nixboyOpen();
 
+// Independent local reading UI; no terminal token, Docker or training identity.
+bool nixboyIsWikiEnabled();
+bool nixboyIsWikiHotkey(int eventCode);
+void nixboyOpenWiki();
+
 } // namespace fallout
 
 #endif

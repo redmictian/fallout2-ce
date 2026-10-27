@@ -10,6 +10,17 @@ The shipped catalog maps Unarmed to **Filesystem** and Science to
 editable catalog, rather than a two-track engine limit.
 Each level can set `reward_points` (1–300, default 5); earned amounts stay fixed
 after completion even when the catalog changes.
+The [wiki content directory](content/wiki/README.md) holds separate HTML
+lessons organized by Linux subject, with stable reading references from challenge
+YAML. Validate both catalogs with `python tools/nixboy/challenge_content.py` and
+export offline pages with `python tools/nixboy/wiki_pages.py --output NEW-DIR`
+from the source root. Authoring tools need Python/PyYAML, without Docker.
+Deploy the export as `nixboy/wiki/`, separate from editable `nixboy/content/wiki/`.
+The Windows reader opens with Ctrl+W from gameplay or Pip-Boy, and Escape
+closes it. Reading uses WebView2 and requires no Python, Docker or bridge.
+Configure `[wiki]` with `enabled=1`, `hotkey=Ctrl+W` and
+`home=nixboy/wiki/index.html` in `nixboy.ini`. This section does not need the
+terminal authentication token. Ctrl+W inside the terminal retains shell editing.
 Read [training setup and controls](TRAINING.md) first. The original ephemeral
 shell and configured integer bindings remain available with `training=0` in
 `nixboy.ini`. The foundation description below applies to that legacy mode;

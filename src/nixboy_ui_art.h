@@ -3,6 +3,11 @@
 
 namespace fallout {
 
+// Draws the same native housing into an owned indexed-palette buffer. The buffer
+// contains width * height pixels; the caller owns and draws the inner opening.
+bool nixboyDrawFrame(unsigned char* buffer, int width, int height,
+    int glassX, int glassY, int glassWidth, int glassHeight);
+
 // Reuses the installed game's automap CRT surround through the normal art cache.
 // Normal margins preserve native corner/bevel thickness and one top-center latch;
 // long edge runs are extended continuously rather than repeating texture tiles.

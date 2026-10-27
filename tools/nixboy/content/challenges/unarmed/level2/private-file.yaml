@@ -4,6 +4,7 @@ skill: 3
 level: 2
 title: Protect a private report
 kind: private-file
+wiki: [linux.paths, linux.permissions]
 instructions: "Set ~/lab/{name}.txt so its owner may read and write; group and others have no permissions; nobody may execute. Preserve the contents and ownership."
 parameters:
   name: [medical, confidential, personnel]

@@ -127,6 +127,39 @@ class CatalogTests(unittest.TestCase):
             self.assertEqual(after.get(data["id"]).version, 2)
             self.assertNotEqual(before.digest(data["id"]), after.digest(data["id"]))
 
+    def test_wiki_references_are_optional_metadata_and_preserve_attempt_fingerprints(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = self.copy_content(directory)
+            path = root / "challenges/unarmed/level1/copy-file.yaml"
+            data = yaml.safe_load(path.read_text())
+            data.pop("wiki", None)
+            path.write_text(yaml.safe_dump(data))
+            before = Catalog(root)
+            self.assertEqual(before.get(data["id"]).wiki, ())
+            # This is the original fingerprint definition, before wiki existed.
+            from dataclasses import asdict
+            import hashlib
+            spec = before.get(data["id"])
+            track = before.tracks[spec.skill]
+            definition = asdict(spec)
+            definition.pop("wiki")
+            payload = {"challenge": definition,
+                       "track": {key: value for key, value in track.items() if key != "levels"},
+                       "band": track["levels"][spec.level]}
+            legacy = hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode())
+            legacy.update((root / "compose/single.yaml").read_bytes())
+            self.assertEqual(before.digest(spec.id), legacy.hexdigest())
+            data["wiki"] = ["linux.paths", "linux.permissions"]
+            path.write_text(yaml.safe_dump(data))
+            after = Catalog(root)
+            self.assertEqual(after.get(spec.id).wiki, ("linux.paths", "linux.permissions"))
+            self.assertEqual(before.digest(spec.id), after.digest(spec.id))
+            for invalid in (None, "linux.paths", ["bad id"], ["linux.paths", "linux.paths"], [True]):
+                data["wiki"] = invalid
+                path.write_text(yaml.safe_dump(data))
+                with self.subTest(value=invalid), self.assertRaisesRegex(ValueError, "wiki"):
+                    Catalog(root)
+
     def test_parameters_and_instruction_placeholders_fail_before_docker(self):
         with tempfile.TemporaryDirectory() as directory:
             root = self.copy_content(directory)

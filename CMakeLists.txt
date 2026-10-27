@@ -259,6 +259,8 @@ target_sources(${EXECUTABLE_NAME} PUBLIC
     "src/nixboy.cc"
     "src/nixboy_ui_art.cc"
     "src/nixboy.h"
+    "src/nixboy_wiki.cc"
+    "src/nixboy_wiki.h"
     "src/nixboy_hotkey.cc"
     "src/nixboy_hotkey.h"
     "src/nixboy_training_state.cc"
@@ -385,7 +387,10 @@ if(FALLOUT_NIXBOY)
     target_compile_definitions(${EXECUTABLE_NAME} PRIVATE FALLOUT_NIXBOY)
     target_link_libraries(${EXECUTABLE_NAME} nixboy-vterm)
     if(WIN32)
-        target_link_libraries(${EXECUTABLE_NAME} ws2_32)
+        add_subdirectory("third_party/webview2")
+        target_link_libraries(${EXECUTABLE_NAME} ws2_32 nixboy-webview2 ole32 uuid)
+        add_custom_command(TARGET ${EXECUTABLE_NAME} POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different "${NIXBOY_WEBVIEW2_LOADER}" "$<TARGET_FILE_DIR:${EXECUTABLE_NAME}>/WebView2Loader.dll")
     endif()
 endif()
 
