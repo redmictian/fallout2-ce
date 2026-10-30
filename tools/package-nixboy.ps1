@@ -3,7 +3,8 @@ param(
     [Parameter(Mandatory = $true)][string]$Destination,
     [Parameter(Mandatory = $true)][string]$WikiDirectory,
     [Parameter(Mandatory = $true)][string]$WebView2Loader,
-    [string]$LiveProbe
+    [string]$LiveProbe,
+    [switch]$QemuPilot
 )
 $ErrorActionPreference = 'Stop'
 
@@ -103,9 +104,11 @@ $files = @(
     'LICENSE.md', 'nixboy.ini.example', 'nixboy.version',
     'third_party/departure-mono/README.nixboy.md', 'third_party/departure-mono/OFL.txt',
     'tools/nixboy/README.md', 'tools/nixboy/DEBUGGING.md', 'tools/nixboy/TRAINING.md', 'tools/nixboy/protocol.md', 'tools/nixboy/.dockerignore',
-    'tools/nixboy/requirements.txt', 'tools/nixboy/bridge.py',
+    'tools/nixboy/requirements.txt', 'tools/nixboy/bridge.py', 'tools/nixboy/QEMU.md',
     'tools/nixboy/protocol.py', 'tools/nixboy/training.py',
     'tools/nixboy/challenge_content.py', 'tools/nixboy/challenge_env.py',
+    'tools/nixboy/qemu_env.py', 'tools/nixboy/qemu_probe.py', 'tools/nixboy/qemu_artifacts.py', 'tools/nixboy/wsl_provider.py',
+    'tools/start-nixboy-wsl.ps1',
     'tools/nixboy/wiki_content.py', 'tools/nixboy/wiki_pages.py',
     'tools/nixboy/smoke_docker.py',
     'tools/nixboy/smoke_windows_wsl.py',
@@ -118,6 +121,17 @@ $files = @(
     'third_party/webview2/README.nixboy.md', 'third_party/webview2/loader.sha256',
     'third_party/fpattern/LICENSE', 'third_party/sdl2/LICENSE', 'third_party/zlib/LICENSE'
 )
+foreach ($qemuName in @('Dockerfile','bt05-manifest.json','supervisor.py','control.py','serial_history.py')) {
+    $relative = 'tools/nixboy/container/qemu/' + $qemuName
+    $null = Get-RelativeFile $sourceDir $relative
+    $files += $relative
+}
+if ($QemuPilot) {
+    foreach ($pilotFile in Get-PackageFiles (Join-Path $runtimeRoot 'content-qemu-pilot')) {
+        if ($pilotFile.Extension -notin @('.yaml', '.yml', '.md', '.json')) { throw 'Unexpected pilot catalog file.' }
+        $files += $pilotFile.FullName.Substring($sourceDir.Length + 1).Replace('\', '/')
+    }
+}
 # Content is authored data only; runtime attempts, credentials and test solvers
 # are not in this directory or part of the redistributable package.
 $contentRoot = Join-Path $sourceDir 'tools/nixboy/content'
@@ -131,6 +145,8 @@ foreach ($relativePath in $files) {
     # Runtime files sit beside the game, without the source tools/ prefix.
     $packageRelativePath = if ($relativePath.StartsWith('tools/nixboy/')) {
         'nixboy/' + $relativePath.Substring('tools/nixboy/'.Length)
+    } elseif ($relativePath -eq 'tools/start-nixboy-wsl.ps1') {
+        'start-nixboy-wsl.ps1'
     } else { $relativePath }
     $targetPath = Join-Path $destinationPath $packageRelativePath
     New-Item -ItemType Directory -Force -Path (Split-Path -Parent $targetPath) | Out-Null

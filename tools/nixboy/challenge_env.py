@@ -360,4 +360,16 @@ print(json.dumps(result))
             self.client.close()
 
 
-Environment = ComposeEnvironment
+def Environment(client, spec, *args, **kwargs):
+    """Keep ordinary tasks on their established container implementation."""
+    from challenge_content import QEMU_KIND
+    if spec.kind == QEMU_KIND:
+        from qemu_env import QemuEnvironment
+        return QemuEnvironment(client, spec, *args, **kwargs)
+    return ComposeEnvironment(client, spec, *args, **kwargs)
+
+
+def cleanup_environments(client, state_dir):
+    cleanup_owned(client, state_dir)
+    from qemu_env import cleanup_qemu_owned
+    cleanup_qemu_owned(client, state_dir)

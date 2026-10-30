@@ -18,11 +18,16 @@ from protocol import (
     ERROR, OUTPUT, READY, TRAIN_REWARD, TRAIN_CHECK, TRAIN_HUB, TRAIN_RESET, TRAIN_ABANDON,
     MAX_CLAIMS, SKILL_NAMES, ProtocolError, encode_training_reward, training_context, validate_claims,
 )
+from challenge_content import QEMU_KIND
 
 LOG = logging.getLogger("nixboy.training")
 TRACKS = dict(enumerate(SKILL_NAMES))
 STATE_VERSION = 4
 IDLE_SECONDS = 24 * 60 * 60
+
+
+class OperationCancelled(RuntimeError):
+    """A facility operation ended without producing an assessment result."""
 
 
 def default_state_dir():
@@ -40,9 +45,9 @@ class AttemptManager:
             from challenge_content import Catalog
             catalog = Catalog()
         if environment_factory is None:
-            from challenge_env import ComposeEnvironment, cleanup_owned
-            environment_factory = ComposeEnvironment
-            cleanup = cleanup_owned
+            from challenge_env import Environment, cleanup_environments
+            environment_factory = Environment
+            cleanup = cleanup_environments
         self.catalog = catalog
         self.environment_factory = environment_factory
         self.client_factory = client_factory
@@ -52,6 +57,7 @@ class AttemptManager:
         self.path = self.state_dir / "training.json"
         self.lock = threading.RLock()
         self.operations = {}
+        self.cancel_events = {}
         self.environments = {}
         self.contexts = {}
         self.attached = set()
@@ -68,8 +74,39 @@ class AttemptManager:
         for profile in self.data["profiles"].values():
             attempt = profile.get("attempt")
             if attempt:
-                attempt["status"] = "needs_reset"
+                self._provider_stopped(attempt)
         self._save()
+
+    def _is_guest(self, attempt):
+        if not attempt:
+            return False
+        if "environment_kind" in attempt:
+            return attempt["environment_kind"] == QEMU_KIND
+        try:
+            return self.catalog.get(attempt["challenge"]).kind == QEMU_KIND
+        except (KeyError, ValueError):
+            return False
+
+    def _provider_stopped(self, attempt):
+        if self._is_guest(attempt):
+            attempt["status"] = "provider_lost"
+            attempt["facility_error"] = "Guest provider interrupted. No learner failure or reward was recorded. Use F7 to reissue the canonical attempt."
+        else:
+            attempt["status"] = "needs_reset"
+
+    def cancel(self, identity):
+        """Signal the current bounded operation without taking its operation lock."""
+        with self.lock:
+            event = self.cancel_events.get(identity)
+            if event:
+                event.set()
+
+    def attachment(self, identity, rows=None, cols=None, cancel=None):
+        with self.lock:
+            environment = self.environments.get(identity)
+        if environment and rows is not None and hasattr(environment, "set_console_size"):
+            environment.set_console_size(rows, cols, cancel=cancel)
+        return environment.attachment() if environment and hasattr(environment, "attachment") else None
 
     def _migrate_state(self):
         if not isinstance(self.data, dict) or self.data.get("version") not in (1, 2, 3):
@@ -245,6 +282,7 @@ class AttemptManager:
             seed = secrets.randbits(63)
             attempt = {"id": secrets.token_hex(16), "skill": skill, "level": level,
                        "challenge": challenge, "seed": seed, "generation": 0,
+                       "environment_kind": spec.kind,
                        "challenge_version": getattr(spec, "version", 1),
                        "content_digest": self.catalog.digest(challenge),
                        "reward_points": self.catalog.tracks[skill]["levels"][level].get("reward_points", 5),
@@ -268,7 +306,7 @@ class AttemptManager:
                     client.close()
             self.reconciled = True
 
-    def prepare(self, identity):
+    def prepare(self, identity, cancel=None, progress=None):
         with self._operation(identity):
             self.reconcile_resources()
             with self.lock:
@@ -279,8 +317,18 @@ class AttemptManager:
                 if not attempt:
                     raise ValueError("No active exercise")
                 self._check_content(attempt)
+                if self._is_guest(attempt) and attempt["status"] == "provider_lost":
+                    raise RuntimeError(attempt.get("facility_error", "Guest provider interrupted; use F7 to reissue."))
                 if identity in self.environments:
-                    return self.environments[identity].container_id
+                    environment = self.environments[identity]
+                    if self._is_guest(attempt):
+                        observed = environment.status()
+                        attempt["machine_state"] = observed.get("state", "unknown")
+                        if observed.get("state") == "failure":
+                            self._provider_stopped(attempt)
+                            self._save()
+                            raise RuntimeError(attempt["facility_error"] + " " + str(observed.get("feedback", "")))
+                    return environment.container_id
                 if attempt["status"] == "needs_reset":
                     attempt["generation"] += 1
                 attempt["status"] = "provisioning"
@@ -289,6 +337,8 @@ class AttemptManager:
                 if getattr(spec, "version", 1) != attempt.get("challenge_version", 1):
                     raise ValueError("Exercise content changed; abandon this attempt and select a new one")
                 parameters = dict(attempt)
+                cancel = cancel if cancel is not None else threading.Event()
+                self.cancel_events[identity] = cancel
             client = self.client_factory()
             environment = None
             try:
@@ -296,16 +346,24 @@ class AttemptManager:
                     client, spec, parameters["id"], parameters["seed"], parameters["generation"],
                     self.state_dir, params=parameters["params"], content_root=self.catalog.root,
                     training_label=self._training_label(parameters))
-                container_id = environment.start()
+                if cancel.is_set():
+                    raise OperationCancelled("Preparation cancelled; no learner result recorded.")
+                container_id = (environment.start(cancel=cancel, progress=progress)
+                                if self._is_guest(parameters) else environment.start())
                 with self.lock:
                     if self.closed:
                         raise RuntimeError("Training service is stopping")
+                    if cancel.is_set():
+                        raise OperationCancelled("Preparation cancelled; provisional resources removed.")
                     self.environments[identity] = environment
                     attempt["status"] = "active"
+                    attempt.pop("facility_error", None)
+                    if self._is_guest(attempt):
+                        attempt["machine_state"] = environment.status().get("state", "recovery")
                     attempt["updated"] = time.time()
                     self._save()
                 return container_id
-            except Exception:
+            except Exception as exc:
                 if environment:
                     try:
                         environment.close()
@@ -315,9 +373,19 @@ class AttemptManager:
                     client.close()
                 with self.lock:
                     self.environments.pop(identity, None)
-                    attempt["status"] = "needs_reset"
+                    if self._is_guest(attempt) and not cancel.is_set():
+                        self._provider_stopped(attempt)
+                        attempt["facility_error"] = "Guest facility startup failed; use F7 to reissue. " + str(exc)[:500]
+                    else:
+                        attempt["status"] = "needs_reset"
                     self._save()
+                if cancel.is_set():
+                    raise OperationCancelled("Preparation cancelled; owned provisional resources removed.") from exc
                 raise
+            finally:
+                with self.lock:
+                    if self.cancel_events.get(identity) is cancel:
+                        self.cancel_events.pop(identity, None)
 
     def _training_label(self, attempt):
         track = self.catalog.tracks[attempt["skill"]]
@@ -351,7 +419,7 @@ class AttemptManager:
             pool.remove(challenge)
             pool.append(challenge)
 
-    def check(self, identity):
+    def check(self, identity, cancel=None, progress=None):
         with self._operation(identity):
             with self.lock:
                 profile = self._profile(identity)
@@ -359,6 +427,8 @@ class AttemptManager:
                 environment = self.environments.get(identity)
                 if not attempt or not environment:
                     return {"status": "error", "feedback": "Resume the exercise before checking."}
+                if self._is_guest(attempt) and attempt["status"] == "provider_lost":
+                    return {"status": "error", "feedback": attempt.get("facility_error", "Guest provider interrupted; use F7 to reissue.")}
                 try:
                     self._check_content(attempt)
                 except ValueError as exc:
@@ -366,23 +436,45 @@ class AttemptManager:
                 if self.current_level(identity, attempt["skill"]) != attempt["level"]:
                     return {"status": "error", "feedback": "Your skill value changed bands. Files are preserved; abandon and select your current band."}
                 attempt["status"] = "checking"
+                cancel = cancel if cancel is not None else threading.Event()
+                self.cancel_events[identity] = cancel
                 self._save()
             try:
-                result = environment.check()
+                result = (environment.check(cancel=cancel, progress=progress)
+                          if self._is_guest(attempt) else environment.check())
                 if not isinstance(result, dict) or result.get("status") not in ("passed", "incomplete", "error"):
                     raise ValueError("Validator returned an invalid result")
             except Exception:
                 LOG.exception("Training validator failed for %s", attempt["id"])
                 result = {"status": "error", "feedback": "Validator/environment error; your attempt is preserved."}
+            finally:
+                with self.lock:
+                    if self.cancel_events.get(identity) is cancel:
+                        self.cancel_events.pop(identity, None)
+            evidence = None
+            if result["status"] == "passed" and "evidence" in result:
+                try:
+                    encoded = json.dumps(result["evidence"], sort_keys=True, allow_nan=False)
+                    if len(encoded.encode("utf-8")) > 65536:
+                        raise ValueError("evidence exceeds 64 KiB")
+                    evidence = json.loads(encoded)
+                except (TypeError, ValueError):
+                    result = {"status": "error", "feedback": "Trusted validation evidence is invalid or exceeds its persistence bound; attempt preserved."}
             with self.lock:
                 if self.closed:
-                    attempt["status"] = "needs_reset"
+                    self._provider_stopped(attempt)
                     self._save()
                     self._remove_environment(identity)
                     return {"status": "error", "feedback": "Training service is stopping; attempt preserved."}
                 attempt["status"] = "active"
                 attempt["updated"] = time.time()
+                if cancel.is_set():
+                    result = {"status": "error", "feedback": "Check cancelled. No reward or learner failure was recorded; attempt preserved."}
                 if result["status"] == "error":
+                    if self._is_guest(attempt):
+                        attempt["last_facility_feedback"] = str(result.get("feedback", ""))[:1000]
+                        if result.get("facility_failure") or result.get("state") == "failure":
+                            self._provider_stopped(attempt)
                     self._save()
                     return result
                 try:
@@ -409,6 +501,8 @@ class AttemptManager:
                         "seed": attempt["seed"], "generation": attempt["generation"],
                         "reward_points": attempt["reward_points"],
                     }
+                    if evidence is not None:
+                        profile["passes"][key]["evidence"] = evidence
                 self._rotate(profile, attempt)
                 profile["attempt"] = None
                 profile["updated"] = time.time()
@@ -423,7 +517,7 @@ class AttemptManager:
                 result["reward_points"] = attempt["reward_points"]
             return result
 
-    def reset(self, identity):
+    def reset(self, identity, cancel=None, progress=None):
         with self._operation(identity):
             with self.lock:
                 attempt = self._profile(identity).get("attempt")
@@ -432,8 +526,9 @@ class AttemptManager:
             self._remove_environment(identity)
             with self.lock:
                 attempt["status"] = "needs_reset"
+                attempt.pop("facility_error", None)
                 self._save()
-        return self.prepare(identity)
+        return self.prepare(identity, cancel=cancel, progress=progress)
 
     def abandon(self, identity):
         with self._operation(identity):
@@ -475,6 +570,7 @@ class AttemptManager:
         with self.lock:
             identities = [identity for identity in self.environments
                           if identity not in self.attached
+                          and not self._is_guest(self._profile(identity).get("attempt"))
                           and now - self._profile(identity)["updated"] > IDLE_SECONDS]
         for identity in identities:
             operation = self._operation(identity)
@@ -495,12 +591,14 @@ class AttemptManager:
     def close(self):
         with self.lock:
             self.closed = True
+            for event in self.cancel_events.values():
+                event.set()
             # Provisioning/checking may hold an operation before an environment
             # has been registered. Wait for those workers before process exit.
             identities = list(set(self.environments) | set(self.operations))
             for profile in self.data["profiles"].values():
                 if profile.get("attempt"):
-                    profile["attempt"]["status"] = "needs_reset"
+                    self._provider_stopped(profile["attempt"])
             self._save()
         deadline = time.monotonic() + 70
         for identity in identities:
@@ -527,6 +625,8 @@ class TrainingSession:
         self.shell = None
         self.shell_token = None
         self.job = None
+        self.job_cancel = None
+        self.cancel_next = None
         self.mode = "hub"
         self.line = bytearray()
         self.selected = None
@@ -586,6 +686,8 @@ class TrainingSession:
         if state.get("attempt"):
             attempt = state["attempt"]
             lines.append(f"[R] Resume {SKILL_NAMES[attempt['skill']]} level {attempt['level']} ({attempt['mode']})"[:width])
+            if attempt.get("facility_error"):
+                lines.extend(textwrap.wrap(attempt["facility_error"], width)[:2])
         lines.extend(["F5 Check | F6 Hub | F7 Reset | F8 Abandon", "F10 Close (keeps an active exercise for later)"])
         if self.notice:
             lines.extend(textwrap.wrap(self.notice, width)[:3])
@@ -673,10 +775,10 @@ class TrainingSession:
 
     def _launch(self, operation):
         self._detach()
-        self.output("Preparing exercise; F10 can close this screen.\n", clear=True)
+        self.output("Preparing exercise; F8 cancels/abandons, F7 restarts, F10 closes.\n", clear=True)
 
         def work():
-            container_id = operation(self.identity)
+            container_id = operation(self.identity, cancel=self.job_cancel, progress=self._progress)
             if self.closed.is_set():
                 return None
             state = self.manager.snapshot(self.identity)
@@ -689,10 +791,14 @@ class TrainingSession:
             visible = "\n".join(lines[:max(1, self.rows - 8)])
             track = self.manager.catalog.tracks[attempt["skill"]]
             band = track["levels"][attempt["level"]]
-            self.output(f"{self.manager._training_label(attempt)}\n{spec.title}\n{visible}\nFull task: cat ~/CHALLENGE.txt\n\nF5 Check | F6 Hub | F7 Reset | F8 Abandon\n")
+            attachment = self.manager.attachment(self.identity, self.rows, self.cols, cancel=self.job_cancel)
+            task_path = "/root/CHALLENGE.txt" if attachment else "~/CHALLENGE.txt"
+            machine = ("Guest state: " + attempt.get("machine_state", "unknown") + ".\n") if attachment else ""
+            self.output(f"{self.manager._training_label(attempt)}\n{spec.title}\n{visible}\nFull task: cat {task_path}\n{machine}\nF5 Check | F6 Hub | F7 Reset | F8 Abandon\n")
             token = object()
+            options = {"attachment": attachment} if attachment else {}
             shell = self.shell_factory(container_id, self.send,
-                                       lambda: self._event("shell_exit", token))
+                                       lambda: self._event("shell_exit", token), **options)
             with self.lock:
                 if self.closed.is_set():
                     shell.close()
@@ -713,16 +819,22 @@ class TrainingSession:
         if self.job and self.job.is_alive():
             self.output("\nPlease wait for the current operation.\n")
             return
+        self.job_cancel = threading.Event()
 
         def run():
             try:
                 self._event(name, work())
+            except OperationCancelled as exc:
+                self._event("cancelled", str(exc))
             except Exception as exc:
                 LOG.exception("Training %s failed", name)
                 self._event("failure", f"{type(exc).__name__}: {str(exc)[:180]}")
 
         self.job = threading.Thread(target=run, daemon=True)
         self.job.start()
+
+    def _progress(self, message):
+        self._event("progress", str(message)[:1000])
 
     def _event(self, name, value):
         if not self.closed.is_set():
@@ -734,7 +846,13 @@ class TrainingSession:
 
     def action(self, action):
         if self.job and self.job.is_alive():
-            self.output("\nPlease wait for the current operation. F10 can detach.\n")
+            if action in (TRAIN_ABANDON, TRAIN_RESET):
+                self.cancel_next = action
+                self.job_cancel.set()
+                self.manager.cancel(self.identity)
+                self.output("\nCancelling the current operation; owned provisional resources will be cleaned.\n")
+            else:
+                self.output("\nOperation in progress. F8 cancels/abandons; F7 cancels/resets; F10 closes.\n")
             return
         if action == TRAIN_HUB:
             self._detach()
@@ -746,7 +864,7 @@ class TrainingSession:
             # Stop accepting terminal mutations while assessment runs.
             self._detach()
             self.output("Checking actual exercise state...\n")
-            self._job(lambda: self.manager.check(self.identity), "checked")
+            self._job(lambda: self.manager.check(self.identity, cancel=self.job_cancel, progress=self._progress), "checked")
         elif action == TRAIN_RESET:
             self._launch(self.manager.reset)
         elif action == TRAIN_ABANDON:
@@ -763,8 +881,19 @@ class TrainingSession:
                 break
             if self.closed.is_set():
                 continue
+            if event == "progress":
+                self.output("\n" + value + "\n")
+                continue
             if event != "shell_exit":
                 self.job = None
+                if self.cancel_next is not None:
+                    action, self.cancel_next = self.cancel_next, None
+                    if action == TRAIN_RESET:
+                        self._launch(self.manager.reset)
+                    else:
+                        self._detach()
+                        self._job(lambda: self.manager.abandon(self.identity), "abandoned")
+                    continue
             if event == "shell_exit":
                 if value is self.shell_token:
                     self._detach()
@@ -776,6 +905,14 @@ class TrainingSession:
                     text = "Passed. " + (f"Skill reward earned. +{value['reward_points']} skill points. " if value.get("rewarded") else "Practice completed; no reward. ")
                 elif status == "incomplete":
                     text = "Incomplete. The next selection offers another challenge. "
+                elif value.get("facility_state") == "recovery":
+                    text = "Expected recovery; no learner result recorded. R returns to the guest console. "
+                elif value.get("facility_state") in ("booting", "runner-ready"):
+                    text = "Guest startup is still in progress; no learner result recorded. Wait, then R resumes. "
+                elif value.get("facility_state") == "off":
+                    text = "Guest powered off; no learner result recorded. F7 reissues the canonical attempt. "
+                elif value.get("facility_failure"):
+                    text = "Guest facility failure; no reward or learner failure recorded. F7 reissues the attempt. "
                 else:
                     text = "Environment/validator error. Attempt preserved; R resumes, F7 resets. "
                 self.hub(text + feedback)
@@ -785,6 +922,9 @@ class TrainingSession:
             elif event == "failure":
                 self._detach()
                 self.hub("Exercise unavailable; attempt preserved for reset/resume. " + value)
+            elif event == "cancelled":
+                self._detach()
+                self.hub("Operation cancelled; no learner result recorded. " + value)
         if time.monotonic() - self.last_reward > 3:
             self.rewards()
 
@@ -819,6 +959,9 @@ class TrainingSession:
         if self.closed.is_set():
             return
         self.closed.set()
+        if self.job_cancel and self.job and self.job.is_alive():
+            self.job_cancel.set()
+            self.manager.cancel(self.identity)
         self._detach()
         if hasattr(self, "identity"):
             self.manager.detach_frontend(self.identity)

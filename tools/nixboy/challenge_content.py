@@ -15,10 +15,11 @@ from protocol import MAX_LEVEL, SKILL_NAMES
 
 CONTENT_ROOT = Path(__file__).resolve().parent / "content"
 IDENTIFIER = re.compile(r"^[a-z][a-z0-9_.-]{0,63}$")
+QEMU_KIND = "qemu-bt05"
 KINDS = {"make-directory", "copy-file", "move-file", "rename-directory", "remove-empty",
          "filter-lines", "sort-unique", "extract-field", "count-matches", "replace-text",
          "ssh-upload", "ssh-download", "ssh-remote-move", "ssh-key-login", "ssh-alias",
-         "private-file", "public-read", "executable", "shared-directory", "group-readable"}
+         "private-file", "public-read", "executable", "shared-directory", "group-readable", QEMU_KIND}
 
 
 class ContentLoader(yaml.SafeLoader):
@@ -164,7 +165,8 @@ class Catalog:
             for level in track["levels"]:
                 if not self.pool(skill, level):
                     raise ValueError(f"authored skill {skill} level {level} has no challenges")
-        for topology in {"network" if item.kind.startswith("ssh-") else "single" for item in self.challenges.values()}:
+        for topology in {"network" if item.kind.startswith("ssh-") else "single"
+                         for item in self.challenges.values() if item.kind != QEMU_KIND}:
             path = self.root / "compose" / (topology + ".yaml")
             if not path.is_file():
                 raise ValueError(f"missing content topology: {path}")
@@ -208,9 +210,13 @@ class Catalog:
         definition.pop("wiki")
         data = {"challenge": definition, "track": {key: value for key, value in track.items() if key != "levels"},
                 "band": track["levels"][spec.level]}
-        topology = "network" if spec.kind.startswith("ssh-") else "single"
         digest = hashlib.sha256(json.dumps(data, sort_keys=True, separators=(",", ":")).encode("utf-8"))
-        digest.update((self.root / "compose" / (topology + ".yaml")).read_bytes())
+        if spec.kind == QEMU_KIND:
+            from qemu_env import digest_artifacts
+            digest.update(digest_artifacts().encode("utf-8"))
+        else:
+            topology = "network" if spec.kind.startswith("ssh-") else "single"
+            digest.update((self.root / "compose" / (topology + ".yaml")).read_bytes())
         return digest.hexdigest()
 
 

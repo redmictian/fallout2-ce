@@ -119,6 +119,13 @@ except OSError:
     pass
 '''
 
+# The outer Docker PTY carries raw serial bytes, not an outer shell. The relay
+# has its own identity and attachment token; stopping it never owns QEMU.
+QEMU_TRAINING_LAUNCH = TRAINING_LAUNCH.replace('/tmp/nixboy', '/tmp/nixboy-console').replace(
+    "os.execv(sys.executable,[sys.executable,'/opt/nixboy/shell.py',rows,cols])",
+    "import tty; tty.setraw(0); os.execv(sys.executable,[sys.executable,'/opt/nixboy-qemu/control.py','console'])")
+QEMU_TRAINING_STOP = TRAINING_STOP.replace('/tmp/nixboy', '/tmp/nixboy-console')
+
 
 def load_token(path):
     """Create a private token once; never log or accept whitespace around it."""
@@ -477,7 +484,13 @@ class TrainingShell:
     by the host validator, not commands executed by the learner.
     """
 
-    def __init__(self, client, container_id, send, finished):
+    def __init__(self, client, container_id, send, finished, attachment=None):
+        if attachment is not None and attachment != {
+                "kind": "qemu-serial", "user": "1001:1001",
+                "argv": ["python3", "/opt/nixboy-qemu/control.py", "console"]}:
+            raise ValueError("unsupported trusted terminal attachment")
+        self.qemu_console = attachment is not None
+        self.attachment_user = "1001:1001" if self.qemu_console else "1000:1000"
         self.client, self.container_id = client, container_id
         self.send, self.finished = send, finished
         self.closed = threading.Event()
@@ -494,9 +507,9 @@ class TrainingShell:
                 return
             self.started = True
         self.exec_id = self.client.api.exec_create(
-            self.container_id, ["python3", "-I", "-c", TRAINING_LAUNCH,
+            self.container_id, ["python3", "-I", "-c", QEMU_TRAINING_LAUNCH if self.qemu_console else TRAINING_LAUNCH,
                                 str(rows), str(cols), self.attachment_token],
-            stdin=True, stdout=True, stderr=True, tty=True, user="1000:1000",
+            stdin=True, stdout=True, stderr=True, tty=True, user=self.attachment_user,
             environment={"NIXBOY_CONTEXT_JSON": json.dumps(context, separators=(",", ":")),
                          "NIXBOY_ATTACHMENT_TOKEN": self.attachment_token,
                          "PS1": "challenge:\\w$ "},
@@ -567,8 +580,8 @@ class TrainingShell:
         try:
             if self.started:
                 stop = self.client.api.exec_create(
-                    self.container_id, ["python3", "-I", "-c", TRAINING_STOP, self.attachment_token],
-                    stdin=False, stdout=True, stderr=True, tty=False, user="1000:1000",
+                    self.container_id, ["python3", "-I", "-c", QEMU_TRAINING_STOP if self.qemu_console else TRAINING_STOP, self.attachment_token],
+                    stdin=False, stdout=True, stderr=True, tty=False, user=self.attachment_user,
                 )["Id"]
                 result = self.client.api.exec_start(stop, tty=False)
                 # Fake transports use a stream; real non-streaming exec returns bytes.
@@ -614,8 +627,8 @@ class BridgeHandler(socketserver.BaseRequestHandler):
                 from training import TrainingSession
                 self.session = TrainingSession(
                     self.server.get_training(), self.send,
-                    lambda container_id, send, finished: TrainingShell(
-                        self.server.client_factory(), container_id, send, finished),
+                    lambda container_id, send, finished, attachment=None: TrainingShell(
+                        self.server.client_factory(), container_id, send, finished, attachment=attachment),
                 )
             else:
                 self.session = DockerSession(

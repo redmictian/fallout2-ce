@@ -31,6 +31,10 @@ shell and configured integer bindings remain available with `training=0` in
 `nixboy.ini`. The foundation description below applies to that legacy mode;
 training owns resumable attempts and uses trusted completion receipts instead.
 
+An optional [BT05-A QEMU pilot](QEMU.md) adds one genuine boot-recovery guest
+through the same training/reward path. Its separate catalog uses an explicit
+test-only mapping; the standard curriculum and ordinary container path are unchanged.
+
 ## Terminal appearance
 
 The default terminal is a centered metal-framed window, leaving the surrounding

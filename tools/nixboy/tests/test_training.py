@@ -9,11 +9,12 @@ import threading
 import time
 import types
 import unittest
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import bridge
 import protocol as wire
-from training import AttemptManager, TrainingSession
+from training import AttemptManager, TrainingSession, OperationCancelled, IDLE_SECONDS
 from challenge_content import Catalog, Challenge
 from test_bridge import FakeClient, TOKEN, eventually
 
@@ -518,6 +519,320 @@ class AttemptTests(unittest.TestCase):
         self.assertTrue(self.environments[-1].closed)
         self.assertFalse(self.manager.environments)
         self.assertEqual(self.manager.snapshot(self.profile)["attempt"]["status"], "needs_reset")
+
+    def test_ordinary_container_keeps_its_existing_detached_expiry(self):
+        self.manager.select(self.profile, 3, 1)
+        self.manager.prepare(self.profile)
+        self.manager.data["profiles"][self.profile]["updated"] = time.time() - IDLE_SECONDS * 2
+        self.manager.expire()
+        self.assertTrue(self.environments[-1].closed)
+        self.assertEqual(self.manager.snapshot(self.profile)["attempt"]["status"], "needs_reset")
+
+
+class GuestCatalog(FakeCatalog):
+    def get(self, identifier):
+        return replace(super().get(identifier), kind="qemu-bt05")
+
+    def digest(self, identifier):
+        return "unit-guest-artifacts-v1"
+
+
+class FakeGuestEnvironment(FakeEnvironment):
+    persistent = True
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.machine_state = "recovery"
+        self.starts = 0
+
+    def start(self, cancel=None, progress=None):
+        self.starts += 1
+        if progress:
+            progress("Runner ready; waiting for genuine guest recovery.")
+        if cancel is not None and cancel.is_set():
+            raise OperationCancelled("unit preparation cancelled")
+        return self.container_id
+
+    def status(self):
+        return {"state": self.machine_state}
+
+    def check(self, cancel=None, progress=None):
+        return self.outcome
+
+    def attachment(self):
+        return {"kind": "qemu-serial", "user": "1001:1001", "argv": ["fixed-console"]}
+
+
+class GuestAttemptTests(unittest.TestCase):
+    """Manager policy boundaries; real guest behavior has a separate live smoke."""
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.environments = []
+        self.manager = self.make_manager()
+        self.profile, _ = wire.training_context(context())
+        self.manager.observe(self.profile, {}, context())
+
+    def make_manager(self):
+        def create(*args, **kwargs):
+            environment = FakeGuestEnvironment(*args, **kwargs)
+            self.environments.append(environment)
+            return environment
+        catalog = GuestCatalog()
+        catalog.tracks[3]["levels"][1]["reward_points"] = 1
+        return AttemptManager(self.directory.name, FakeClient, catalog, create)
+
+    def tearDown(self):
+        self.manager.close()
+        self.directory.cleanup()
+
+    def select(self):
+        return self.manager.select(self.profile, 3, 1)
+
+    def test_guest_detach_reopen_and_long_break_keep_same_environment(self):
+        self.select()
+        first = self.manager.prepare(self.profile)
+        self.manager.attach_frontend(self.profile)
+        self.manager.detach_frontend(self.profile)
+        with self.manager.lock:
+            self.manager._profile(self.profile)["updated"] = time.time() - IDLE_SECONDS * 2
+        self.manager.expire()
+        self.assertFalse(self.environments[-1].closed)
+        self.assertEqual(self.manager.prepare(self.profile), first)
+        self.assertEqual(self.environments[-1].starts, 1)
+        self.assertEqual(self.manager.attachment(self.profile)["kind"], "qemu-serial")
+
+    def test_provider_restart_requires_explicit_reissue_and_preserves_queue(self):
+        attempt = self.select()
+        self.manager.prepare(self.profile)
+        before = self.manager.snapshot(self.profile)["queues"]
+        self.manager.close()
+        self.manager = self.make_manager()
+        self.manager.observe(self.profile, {}, context())
+        state = self.manager.snapshot(self.profile)
+        self.assertEqual(state["attempt"]["status"], "provider_lost")
+        with self.assertRaisesRegex(RuntimeError, "provider interrupted"):
+            self.manager.prepare(self.profile)
+        self.assertEqual(self.manager.snapshot(self.profile)["queues"], before)
+        self.assertEqual(self.manager.pending_rewards(self.profile, {}), [])
+        self.manager.reset(self.profile)
+        reissued = self.manager.snapshot(self.profile)["attempt"]
+        self.assertEqual((reissued["id"], reissued["seed"], reissued["generation"]),
+                         (attempt["id"], attempt["seed"], 1))
+        self.assertNotIn("facility_error", reissued)
+
+    def test_running_machine_with_guest_failure_requires_reset_without_reward(self):
+        self.select()
+        self.manager.prepare(self.profile)
+        self.environments[-1].machine_state = "failure"
+        with self.assertRaisesRegex(RuntimeError, "provider interrupted"):
+            self.manager.prepare(self.profile)
+        self.assertEqual(self.manager.snapshot(self.profile)["attempt"]["status"], "provider_lost")
+        self.assertEqual(self.manager.pending_rewards(self.profile, {}), [])
+        self.environments[-1].machine_state = "normal"
+        with self.assertRaisesRegex(RuntimeError, "provider interrupted"):
+            self.manager.prepare(self.profile)
+
+    def test_explicit_facility_failure_is_persistent_until_reset(self):
+        self.select()
+        self.manager.prepare(self.profile)
+        before = self.manager.snapshot(self.profile)["queues"]
+        self.environments[-1].outcome = {"status": "error", "state": "failure", "feedback": "Guest kernel panic"}
+        self.assertEqual(self.manager.check(self.profile)["status"], "error")
+        self.environments[-1].outcome = {"status": "passed", "feedback": "Stale environment must not regain authority"}
+        self.assertEqual(self.manager.check(self.profile)["status"], "error")
+        self.assertEqual(self.manager.snapshot(self.profile)["queues"], before)
+        self.assertEqual(self.manager.pending_rewards(self.profile, {}), [])
+
+    def test_recovery_agent_absence_is_not_learner_failure_and_proof_is_durable(self):
+        self.select()
+        self.manager.prepare(self.profile)
+        before = self.manager.snapshot(self.profile)["queues"]
+        self.environments[-1].outcome = {"status": "error", "feedback": "Expected recovery: guest agent unavailable; continue using serial."}
+        self.assertEqual(self.manager.check(self.profile)["status"], "error")
+        self.assertEqual(self.manager.snapshot(self.profile)["queues"], before)
+        self.assertEqual(self.manager.pending_rewards(self.profile, {}), [])
+        proof = {"initial_boot_id": "old", "boot_id": "new", "guest_reset": True,
+                 "correct_uuid": True, "outside_http_status": 200}
+        self.environments[-1].outcome = {"status": "passed", "feedback": "real probes passed", "evidence": proof}
+        self.assertEqual(self.manager.check(self.profile)["reward_points"], 1)
+        pending = self.manager.pending_rewards(self.profile, {})
+        self.assertEqual(pending[0][:3], (3, 1, 1))
+        saved = json.loads(self.manager.path.read_text())["profiles"][self.profile]
+        self.assertEqual(saved["passes"]["3:1"]["evidence"], proof)
+        self.manager.acknowledge(self.profile, *pending[0], True)
+        # Reopening an older same-profile game ledger replays this same receipt,
+        # while a ledger already containing it suppresses delivery.
+        self.assertEqual(self.manager.pending_rewards(self.profile, {}), pending)
+        self.assertEqual(self.manager.pending_rewards(self.profile, {"3:1": claim(pending[0][3], 1)}), [])
+        self.assertFalse(self.manager.check(self.profile).get("rewarded", False))
+
+    def test_invalid_or_oversize_proof_cannot_leave_a_pending_reward(self):
+        self.select()
+        self.manager.prepare(self.profile)
+        for proof in ({"bad": object()}, {"huge": "x" * 65537}):
+            self.environments[-1].outcome = {"status": "passed", "feedback": "unusable proof", "evidence": proof}
+            self.assertEqual(self.manager.check(self.profile)["status"], "error")
+            self.assertEqual(self.manager.pending_rewards(self.profile, {}), [])
+            self.assertIsNotNone(self.manager.snapshot(self.profile)["attempt"])
+
+    def test_cancelled_preparation_cleans_partial_environment(self):
+        self.select()
+        entered, cancelled = threading.Event(), threading.Event()
+        original = self.manager.environment_factory
+        def create(*args, **kwargs):
+            environment = original(*args, **kwargs)
+            def start(cancel=None, progress=None):
+                entered.set()
+                if not cancel.wait(2):
+                    raise RuntimeError("unit cancellation was not delivered")
+                cancelled.set()
+                raise OperationCancelled("unit cancelled")
+            environment.start = start
+            return environment
+        self.manager.environment_factory = create
+        errors = []
+        def prepare():
+            try:
+                self.manager.prepare(self.profile)
+            except OperationCancelled as exc:
+                errors.append(exc)
+        worker = threading.Thread(target=prepare)
+        worker.start()
+        self.assertTrue(entered.wait(2))
+        self.manager.cancel(self.profile)
+        worker.join(3)
+        self.assertFalse(worker.is_alive())
+        self.assertTrue(cancelled.is_set() and errors)
+        self.assertTrue(self.environments[-1].closed)
+        self.assertNotIn(self.profile, self.manager.environments)
+        self.assertEqual(self.manager.snapshot(self.profile)["attempt"]["status"], "needs_reset")
+        self.assertEqual(self.manager.pending_rewards(self.profile, {}), [])
+
+    def test_cancelled_check_discards_late_success_without_rotating_or_destroying_guest(self):
+        self.select()
+        self.manager.prepare(self.profile)
+        entered = threading.Event()
+        before = self.manager.snapshot(self.profile)["queues"]
+        def check(cancel=None, progress=None):
+            entered.set()
+            cancel.wait(2)
+            return {"status": "passed", "feedback": "Late success must be ignored"}
+        self.environments[-1].check = check
+        results = []
+        worker = threading.Thread(target=lambda: results.append(self.manager.check(self.profile)))
+        worker.start()
+        self.assertTrue(entered.wait(2))
+        self.manager.cancel(self.profile)
+        worker.join(3)
+        self.assertEqual(results[0]["status"], "error")
+        self.assertEqual(self.manager.snapshot(self.profile)["queues"], before)
+        self.assertFalse(self.environments[-1].closed)
+        self.assertEqual(self.manager.pending_rewards(self.profile, {}), [])
+
+    def test_progress_does_not_clear_busy_job_and_f8_cancels_then_abandons(self):
+        self.select()
+        original = self.manager.environment_factory
+        entered = threading.Event()
+        def create(*args, **kwargs):
+            environment = original(*args, **kwargs)
+            def start(cancel=None, progress=None):
+                progress("Guest kernel booting; serial recovery is next.")
+                entered.set()
+                cancel.wait(2)
+                raise OperationCancelled("unit cancelled")
+            environment.start = start
+            return environment
+        self.manager.environment_factory = create
+        output = []
+        session = TrainingSession(self.manager, lambda kind, payload=b"": output.append((kind, payload)), None)
+        try:
+            session.start(36, 139, context(), {})
+            session._launch(self.manager.prepare)
+            self.assertTrue(entered.wait(2))
+            session.poll()
+            self.assertTrue(session.job and session.job.is_alive())
+            self.assertIn(b"Guest kernel booting", b"".join(x[1] for x in output))
+            session.action(wire.TRAIN_ABANDON)
+            eventually(lambda: not session.job.is_alive())
+            session.poll()
+            eventually(lambda: session.job is not None and not session.job.is_alive())
+            session.poll()
+            self.assertIsNone(self.manager.snapshot(self.profile)["attempt"])
+            self.assertTrue(self.environments[-1].closed)
+        finally:
+            session.close()
+
+    def test_f10_during_preparation_cancels_but_retains_seed_for_explicit_resume(self):
+        self.select()
+        original = self.manager.environment_factory
+        entered = threading.Event()
+        def create(*args, **kwargs):
+            environment = original(*args, **kwargs)
+            def start(cancel=None, progress=None):
+                entered.set()
+                cancel.wait(2)
+                raise OperationCancelled("unit closed during preparation")
+            environment.start = start
+            return environment
+        self.manager.environment_factory = create
+        session = TrainingSession(self.manager, lambda *args: None, None)
+        session.start(36, 139, context(), {})
+        session._launch(self.manager.prepare)
+        self.assertTrue(entered.wait(2))
+        worker = session.job
+        session.close()
+        worker.join(3)
+        self.assertFalse(worker.is_alive())
+        self.assertTrue(self.environments[-1].closed)
+        self.assertIsNotNone(self.manager.snapshot(self.profile)["attempt"])
+        self.assertEqual(self.manager.snapshot(self.profile)["attempt"]["status"], "needs_reset")
+
+    def test_f10_after_attachment_only_detaches_serial_and_same_guest_reopens(self):
+        self.select()
+        shells, attachments = [], []
+        class Shell:
+            def __init__(self):
+                self.closed = False
+            def start(self, *args):
+                pass
+            def close(self):
+                self.closed = True
+        def factory(container, send, finished, attachment=None):
+            attachments.append(attachment)
+            shell = Shell()
+            shells.append(shell)
+            return shell
+        for _ in range(2):
+            session = TrainingSession(self.manager, lambda *args: None, factory)
+            session.start(36, 139, context(), {})
+            session._launch(self.manager.prepare)
+            session.job.join(3)
+            self.assertFalse(session.job.is_alive())
+            session.poll()
+            session.close()
+        self.assertTrue(all(shell.closed for shell in shells))
+        self.assertEqual(len(self.environments), 1)
+        self.assertFalse(self.environments[0].closed)
+        self.assertEqual(self.environments[0].starts, 1)
+        self.assertTrue(all(item["kind"] == "qemu-serial" for item in attachments))
+
+    def test_expected_recovery_is_displayed_as_recovery_not_facility_failure(self):
+        self.select()
+        self.manager.prepare(self.profile)
+        self.environments[-1].outcome = {"status": "error", "facility_state": "recovery",
+            "feedback": "The serial recovery console remains available."}
+        output = []
+        session = TrainingSession(self.manager, lambda kind, payload=b"": output.append(payload), None)
+        try:
+            session.start(36, 139, context(), {})
+            session.action(wire.TRAIN_CHECK)
+            session.job.join(3)
+            session.poll()
+            self.assertIn(b"Expected recovery", output[-1])
+            self.assertNotIn(b"Environment/validator error", output[-1])
+            self.assertIsNotNone(self.manager.snapshot(self.profile)["attempt"])
+        finally:
+            session.close()
 
 
 class TrainingMenuTests(unittest.TestCase):
