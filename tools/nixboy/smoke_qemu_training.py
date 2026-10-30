@@ -129,7 +129,7 @@ def main():
         # Expected emergency/agent absence is not a learner-failure submission.
         before = manager.snapshot(probe.identity)
         probe.action(TRAIN_CHECK)
-        probe.until_output(b"Environment/validator error", seconds=90)
+        probe.until_output(b"Expected recovery;", seconds=90)
         after = manager.snapshot(probe.identity)
         assert after["attempt"]["id"] == before["attempt"]["id"]
         assert after["queues"] == before["queues"] and not after["receipts"]
@@ -174,7 +174,7 @@ def main():
         finally:
             inspector.close()
         probe.action(TRAIN_CHECK)
-        probe.until_output(b"Environment/validator error", seconds=90)
+        probe.until_output(b"Guest facility failure;", seconds=90)
         fault = manager.snapshot(probe.identity)
         assert fault["attempt"]["id"] == snap["attempt"]["id"]
         assert fault["queues"] == snap["queues"] and not fault["receipts"]
