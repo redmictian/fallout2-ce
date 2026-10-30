@@ -13,12 +13,14 @@ import secrets
 import threading
 import time
 import textwrap
+import inspect
 
 from protocol import (
     ERROR, OUTPUT, READY, TRAIN_REWARD, TRAIN_CHECK, TRAIN_HUB, TRAIN_RESET, TRAIN_ABANDON,
     MAX_CLAIMS, SKILL_NAMES, ProtocolError, encode_training_reward, training_context, validate_claims,
 )
 from challenge_content import QEMU_KIND
+from course_progress import CourseProgress
 
 LOG = logging.getLogger("nixboy.training")
 TRACKS = dict(enumerate(SKILL_NAMES))
@@ -36,7 +38,7 @@ def default_state_dir():
     return Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local/state")) / "nixboy/training"
 
 
-class AttemptManager:
+class AttemptManager(CourseProgress):
     """One durable attempt per profile; environments outlive frontend sockets."""
 
     def __init__(self, state_dir, client_factory, catalog=None, environment_factory=None,
@@ -88,9 +90,13 @@ class AttemptManager:
             return False
 
     def _provider_stopped(self, attempt):
-        if self._is_guest(attempt):
+        if attempt.get("environment_kind") == "theory":
+            return  # No execution provider is involved in a questionnaire.
+        if self._is_guest(attempt) or attempt.get("status") in ("active", "checking", "provisioning", "provider_lost"):
             attempt["status"] = "provider_lost"
-            attempt["facility_error"] = "Guest provider interrupted. No learner failure or reward was recorded. Use F7 to reissue the canonical attempt."
+            attempt["facility_error"] = "Execution provider interrupted. No learner failure or reward was recorded. Use F7 to reissue the canonical attempt."
+            if attempt.get("course_gate") and attempt.get("conceptual"):
+                attempt["facility_error"] = "Execution provider interrupted; no learner failure. Questions were committed: use T for a fresh equivalent reassessment."
         else:
             attempt["status"] = "needs_reset"
 
@@ -159,6 +165,12 @@ class AttemptManager:
             validate_claims(profile.get("receipts", {}))
             if not isinstance(profile.get("queues", {}), dict):
                 raise ValueError("invalid challenge queue")
+            education = profile.get("education")
+            if education is not None:
+                if not isinstance(education, dict) or education.get("version") != 1 \
+                        or any(not isinstance(education.get(key), dict) for key in ("completions", "queues", "seen")) \
+                        or not isinstance(education.get("history"), list):
+                    raise ValueError("unsupported educational state; preserve it for recovery")
 
     def _save(self):
         """Replace one fsynced snapshot; a pass is committed before transmission."""
@@ -243,6 +255,9 @@ class AttemptManager:
     def _pool(self, profile, skill, level):
         key = f"{skill}:{level}"
         authored = self.catalog.pool(skill, level)
+        return self._ordered_pool(profile, key, authored)
+
+    def _ordered_pool(self, profile, key, authored):
         if not authored:
             raise ValueError("No authored challenge at this level")
         stored = profile["queues"].get(key)
@@ -307,6 +322,11 @@ class AttemptManager:
             self.reconciled = True
 
     def prepare(self, identity, cancel=None, progress=None):
+        with self.lock:
+            attempt = self._profile(identity).get("attempt")
+            if attempt and attempt.get("environment_kind") == "theory":
+                self._check_content(attempt)
+                return None  # Entering pure theory never even reconciles Docker.
         with self._operation(identity):
             self.reconcile_resources()
             with self.lock:
@@ -317,7 +337,7 @@ class AttemptManager:
                 if not attempt:
                     raise ValueError("No active exercise")
                 self._check_content(attempt)
-                if self._is_guest(attempt) and attempt["status"] == "provider_lost":
+                if attempt["status"] == "provider_lost":
                     raise RuntimeError(attempt.get("facility_error", "Guest provider interrupted; use F7 to reissue."))
                 if identity in self.environments:
                     environment = self.environments[identity]
@@ -325,6 +345,12 @@ class AttemptManager:
                         observed = environment.status()
                         attempt["machine_state"] = observed.get("state", "unknown")
                         if observed.get("state") == "failure":
+                            self._provider_stopped(attempt)
+                            self._save()
+                            raise RuntimeError(attempt["facility_error"] + " " + str(observed.get("feedback", "")))
+                    elif hasattr(environment, "health"):
+                        observed = environment.health()
+                        if observed.get("status") != "ready":
                             self._provider_stopped(attempt)
                             self._save()
                             raise RuntimeError(attempt["facility_error"] + " " + str(observed.get("feedback", "")))
@@ -348,8 +374,9 @@ class AttemptManager:
                     training_label=self._training_label(parameters))
                 if cancel.is_set():
                     raise OperationCancelled("Preparation cancelled; no learner result recorded.")
+                supports_cancel = "cancel" in inspect.signature(environment.start).parameters
                 container_id = (environment.start(cancel=cancel, progress=progress)
-                                if self._is_guest(parameters) else environment.start())
+                                if supports_cancel else environment.start())
                 with self.lock:
                     if self.closed:
                         raise RuntimeError("Training service is stopping")
@@ -373,9 +400,9 @@ class AttemptManager:
                     client.close()
                 with self.lock:
                     self.environments.pop(identity, None)
-                    if self._is_guest(attempt) and not cancel.is_set():
+                    if not cancel.is_set():
                         self._provider_stopped(attempt)
-                        attempt["facility_error"] = "Guest facility startup failed; use F7 to reissue. " + str(exc)[:500]
+                        attempt["facility_error"] = "Facility startup failed; use F7 to reissue. " + str(exc)[:500]
                     else:
                         attempt["status"] = "needs_reset"
                     self._save()
@@ -388,12 +415,21 @@ class AttemptManager:
                         self.cancel_events.pop(identity, None)
 
     def _training_label(self, attempt):
+        if attempt.get("course_gate"):
+            return f"Educational integration fixture / {attempt['course_gate']} ({attempt['alternative']}); no game reward"
         track = self.catalog.tracks[attempt["skill"]]
         band = track["levels"][attempt["level"]]
         reward = attempt["reward_points"]
         return f"{track['knowledge_title']} / {band['title']} - level {attempt['level']} ({track['title']}); assessment reward +{reward}"
 
     def _check_content(self, attempt):
+        if attempt.get("course_gate"):
+            if attempt.get("course_digest") != self._course().digest(attempt["course_gate"], attempt["alternative"]):
+                raise ValueError("Educational content changed; abandon and reselect. Earned completion is preserved")
+            return
+        course = getattr(self.catalog, "course", None)
+        if course and attempt.get("challenge") in course.challenge_ids:
+            raise ValueError("This challenge is course-exclusive; abandon and select its educational gate")
         if not attempt.get("content_digest") or "reward_points" not in attempt:
             raise ValueError("This older attempt has no content fingerprint; abandon and reselect. Earned progress is preserved")
         try:
@@ -420,6 +456,11 @@ class AttemptManager:
             pool.append(challenge)
 
     def check(self, identity, cancel=None, progress=None):
+        with self.lock:
+            attempt = self._profile(identity).get("attempt")
+            is_course = bool(attempt and attempt.get("course_gate"))
+        if is_course:
+            return self._course_check(identity, cancel=cancel, progress=progress)
         with self._operation(identity):
             with self.lock:
                 profile = self._profile(identity)
@@ -427,7 +468,7 @@ class AttemptManager:
                 environment = self.environments.get(identity)
                 if not attempt or not environment:
                     return {"status": "error", "feedback": "Resume the exercise before checking."}
-                if self._is_guest(attempt) and attempt["status"] == "provider_lost":
+                if attempt["status"] == "provider_lost":
                     return {"status": "error", "feedback": attempt.get("facility_error", "Guest provider interrupted; use F7 to reissue.")}
                 try:
                     self._check_content(attempt)
@@ -471,6 +512,8 @@ class AttemptManager:
                 if cancel.is_set():
                     result = {"status": "error", "feedback": "Check cancelled. No reward or learner failure was recorded; attempt preserved."}
                 if result["status"] == "error":
+                    if result.get("facility_failure"):
+                        self._provider_stopped(attempt)
                     if self._is_guest(attempt):
                         attempt["last_facility_feedback"] = str(result.get("feedback", ""))[:1000]
                         if result.get("facility_failure") or result.get("state") == "failure":
@@ -523,10 +566,16 @@ class AttemptManager:
                 attempt = self._profile(identity).get("attempt")
                 if not attempt:
                     raise ValueError("No active exercise to reset")
+                if attempt.get("course_gate") and attempt.get("conceptual"):
+                    raise ValueError("Questions were committed; use T for explicit reassessment with a fresh equivalent alternative")
             self._remove_environment(identity)
             with self.lock:
                 attempt["status"] = "needs_reset"
                 attempt.pop("facility_error", None)
+                if attempt.get("course_gate"):
+                    attempt.update(answers={}, conceptual=None, practical=None, checkpoints=[])
+                    if attempt.get("environment_kind") == "theory":
+                        attempt["generation"] += 1
                 self._save()
         return self.prepare(identity, cancel=cancel, progress=progress)
 
@@ -565,28 +614,8 @@ class AttemptManager:
                 self._save()
 
     def expire(self):
-        """Expire detached environments; preserve their seeded exercise and progress."""
-        now = time.time()
-        with self.lock:
-            identities = [identity for identity in self.environments
-                          if identity not in self.attached
-                          and not self._is_guest(self._profile(identity).get("attempt"))
-                          and now - self._profile(identity)["updated"] > IDLE_SECONDS]
-        for identity in identities:
-            operation = self._operation(identity)
-            if not operation.acquire(blocking=False):
-                continue
-            try:
-                self._remove_environment(identity)
-                with self.lock:
-                    attempt = self._profile(identity).get("attempt")
-                    if attempt:
-                        attempt["status"] = "needs_reset"
-                    self._save()
-            except Exception:
-                LOG.exception("Expired training cleanup failed")
-            finally:
-                operation.release()
+        """Issued assignments have no silent idle deadline; explicit cleanup owns them."""
+        return
 
     def close(self):
         with self.lock:
@@ -685,14 +714,70 @@ class TrainingSession:
             lines.append(f"Page {self.hub_page + 1}/{pages} | [N] Next | [B] Back")
         if state.get("attempt"):
             attempt = state["attempt"]
-            lines.append(f"[R] Resume {SKILL_NAMES[attempt['skill']]} level {attempt['level']} ({attempt['mode']})"[:width])
+            label = attempt.get("course_gate") or f"{SKILL_NAMES[attempt['skill']]} level {attempt['level']}"
+            lines.append(f"[R] Resume {label} ({attempt['mode']})"[:width])
             if attempt.get("facility_error"):
                 lines.extend(textwrap.wrap(attempt["facility_error"], width)[:2])
+        if getattr(self.manager.catalog, "course", None):
+            lines.append("[C] Educational fixtures | [Q] Questions | [T] Explicit retry | X <checkpoint>")
         lines.extend(["F5 Check | F6 Hub | F7 Reset | F8 Abandon", "F10 Close (keeps an active exercise for later)"])
         if self.notice:
             lines.extend(textwrap.wrap(self.notice, width)[:3])
         lines.append("Choose a number or R, then Enter: ")
         self.output("\n".join(lines), clear=True)
+
+    def course_menu(self, notice=""):
+        self.mode = "course"
+        self.line.clear()
+        self.course_choices = self.manager.course_status(self.identity)
+        lines = ["Educational integration fixtures / no game rewards", ""]
+        for index, gate in enumerate(self.course_choices, 1):
+            status = "complete" if gate["complete"] else "available" if gate["eligible"] else "prerequisites missing"
+            lines.extend(textwrap.wrap(f"[{index}] {gate['id']} ({gate['format']}, {status}) - {gate['title']}", max(20, self.cols - 2)))
+        lines.extend(["", str(notice), "Choose a gate number, T to retry, or H for hub: "])
+        self.output("\n".join(lines), clear=True)
+
+    def question_menu(self, notice=""):
+        state = self.manager.questions(self.identity)
+        self.mode = "questions"
+        self.line.clear()
+        lines = ["Educational questions / whole-set commitment", ""]
+        if self.manager.snapshot(self.identity)["attempt"].get("exposed_retry"):
+            lines.append("Previously exposed alternative: remediation retry, not unseen retention evidence.")
+        questions = state["questions"]
+        page = min(getattr(self, "question_page", 0), max(0, len(questions) - 1))
+        self.question_page = page
+        if questions:
+            question = questions[page]
+            lines.extend(textwrap.wrap(f"{question['id']}: {question['prompt']}", max(20, self.cols - 2)))
+            for index, value in enumerate(question.get("choices", []), 1):
+                lines.extend(textwrap.wrap(f"  {index}. {value}", max(20, self.cols - 2)))
+            lines.append("Draft: " + str(state["answers"].get(question["id"], "(none)")))
+        if state["committed"]:
+            feedback = self.manager.course_feedback(self.identity)
+            lines.append("Committed / " + ("conceptual passed" if feedback["passed"] else "review needed"))
+            lines.extend(textwrap.wrap(str(feedback.get("feedback", "")), max(20, self.cols - 2)))
+            for item in feedback.get("items", []):
+                lines.extend(textwrap.wrap(f"{item['id']}: {item.get('feedback', '')}", max(20, self.cols - 2)))
+            lines.append("F5 final submission | T explicit reassessment | H hub")
+        else:
+            lines.extend([f"Question {page + 1}/{len(questions)}; drafts {len(state['answers'])}/{len(questions)}",
+                          "Enter <question-id> <answer> | N next | B back", "COMMIT grades the complete set. H returns to hub."])
+        if notice:
+            lines.extend(textwrap.wrap(str(notice), max(20, self.cols - 2))[:3])
+        self.output("\n".join(lines) + "\n> ", clear=True)
+
+    def _resume(self):
+        attempt = self.manager.snapshot(self.identity).get("attempt")
+        if attempt and attempt.get("environment_kind") == "theory":
+            self.question_menu()
+        else:
+            self._launch(self.manager.prepare)
+
+    def _course_retry(self):
+        self.manager.retry_course(self.identity)
+        self.question_page = 0
+        self._resume()
 
     def track_menu(self, skill):
         state = self.manager.snapshot(self.identity)
@@ -728,26 +813,81 @@ class TrainingSession:
             if char in (10, 13):
                 if not self.line:
                     continue
-                value = self.line.decode("ascii").strip().lower()
+                value = self.line.decode("ascii")
+                if self.mode != "questions":
+                    value = value.strip()
                 self.line.clear()
                 self._choice(value)
             elif char in (8, 127):
                 if self.line:
                     self.line.pop()
                     self.output("\b \b")
-            elif 32 <= char <= 126 and len(self.line) < 32:
+            elif 32 <= char <= 126 and len(self.line) < (512 if self.mode == "questions" else 64):
                 self.line.append(char)
                 self.output(chr(char))
 
     def _choice(self, choice):
+        raw_choice, choice = choice, choice.strip().lower()
+        if self.mode == "questions":
+            try:
+                if choice == "h":
+                    self.hub()
+                elif choice == "t":
+                    self._course_retry()
+                elif choice in ("n", "b"):
+                    self.question_page = max(0, self.question_page + (1 if choice == "n" else -1))
+                    self.question_menu()
+                elif choice == "commit":
+                    self.manager.commit_answers(self.identity)
+                    self.question_menu("Committed; practical completion is separately required for mixed assessments.")
+                else:
+                    question, answer = raw_choice.split(" ", 1)
+                    self.manager.draft_answer(self.identity, question, answer)
+                    self.question_menu("Draft saved. No grading before COMMIT.")
+            except ValueError as exc:
+                self.output("\n" + str(exc) + "\n> ")
+            return
+        if self.mode == "course":
+            try:
+                if choice == "h":
+                    self.hub()
+                elif choice == "t":
+                    self._course_retry()
+                elif choice.isdigit() and 1 <= int(choice) <= len(self.course_choices):
+                    gate = self.course_choices[int(choice) - 1]
+                    attempt = self.manager.select_course(self.identity, gate["id"])
+                    self.question_page = 0
+                    if attempt.get("exposed_retry"):
+                        self.output("All alternatives have been exposed; this is a fresh remediation retry, not unseen retention evidence.\n")
+                    self._resume()
+                else:
+                    self.course_menu("Choose a listed gate or H.")
+            except ValueError as exc:
+                self.course_menu(str(exc))
+            return
         if self.mode == "hub":
-            if choice.isdigit() and 1 <= int(choice) <= len(self.manager.catalog.tracks):
+            if choice in ("c", "q", "t") or choice.startswith("x "):
+                try:
+                    if choice == "c":
+                        self.course_menu()
+                    elif choice == "q":
+                        self.question_menu()
+                    elif choice == "t":
+                        self._course_retry()
+                    else:
+                        self._job(lambda: self.manager.checkpoint(self.identity, choice[2:].strip()), "checkpoint")
+                except ValueError as exc:
+                    self.hub(str(exc))
+            elif choice.isdigit() and 1 <= int(choice) <= len(self.manager.catalog.tracks):
                 self.track_menu(list(self.manager.catalog.tracks)[int(choice) - 1])
             elif choice in ("n", "b"):
                 self.hub_page = max(0, self.hub_page + (1 if choice == "n" else -1))
                 self.hub()
             elif choice == "r":
-                self._launch(self.manager.prepare)
+                try:
+                    self._resume()
+                except ValueError as exc:
+                    self.hub(str(exc))
             else:
                 self.hub("Choose an authored track number, or R to resume an active exercise.")
         elif self.mode == "track":
@@ -785,12 +925,12 @@ class TrainingSession:
             attempt = state.get("attempt")
             if not attempt:
                 return None
+            if attempt.get("environment_kind") == "theory":
+                return "questions"
             spec = self.manager.catalog.get(attempt["challenge"])
             instructions = spec.instructions.format(**attempt['params'])
             lines = textwrap.wrap(instructions, max(20, self.cols - 2))
             visible = "\n".join(lines[:max(1, self.rows - 8)])
-            track = self.manager.catalog.tracks[attempt["skill"]]
-            band = track["levels"][attempt["level"]]
             attachment = self.manager.attachment(self.identity, self.rows, self.cols, cancel=self.job_cancel)
             task_path = "/root/CHALLENGE.txt" if attachment else "~/CHALLENGE.txt"
             machine = ("Guest state: " + attempt.get("machine_state", "unknown") + ".\n") if attachment else ""
@@ -898,11 +1038,15 @@ class TrainingSession:
                 if value is self.shell_token:
                     self._detach()
                     self.hub("Shell closed. Exercise state remains available; choose R to resume.")
+            elif event == "launch" and value == "questions":
+                self.question_menu()
             elif event == "checked":
                 status = value["status"]
                 feedback = str(value.get("feedback", ""))
                 if status == "passed":
-                    text = "Passed. " + (f"Skill reward earned. +{value['reward_points']} skill points. " if value.get("rewarded") else "Practice completed; no reward. ")
+                    text = "Passed. " + (f"Skill reward earned. +{value['reward_points']} skill points. " if value.get("rewarded") else "Educational completion; no game reward. " if value.get("educational") else "Practice completed; no reward. ")
+                elif status == "pending":
+                    text = "Intermediate progress only. "
                 elif status == "incomplete":
                     text = "Incomplete. The next selection offers another challenge. "
                 elif value.get("facility_state") == "recovery":
@@ -917,6 +1061,8 @@ class TrainingSession:
                     text = "Environment/validator error. Attempt preserved; R resumes, F7 resets. "
                 self.hub(text + feedback)
                 self.rewards()
+            elif event == "checkpoint":
+                self.hub("Checkpoint " + value["status"] + ": " + str(value.get("feedback", "")))
             elif event == "abandoned":
                 self.hub("Exercise abandoned. Earned progress is retained.")
             elif event == "failure":

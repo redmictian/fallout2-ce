@@ -123,10 +123,17 @@ be assessed for a reward. Previously earned learning remains additive.
 Closing the terminal keeps the active environment while the bridge is running.
 Reset uses the same seed; it does not remove earned levels. If the skill changed
 bands, checking preserves the exercise but asks you to abandon and select from
-the current band. A bridge shutdown or detached expiry removes exercise resources
-but retains the attempt definition,
-queue and receipts. Resume then recreates the seeded starting exercise; unsaved
-Linux edits do not survive that recreation.
+the current band. Issued assignments have no silent detached idle deadline.
+Provider shutdown/loss removes or invalidates execution resources but retains
+the attempt definition, queue and receipts. It is a facility interruption, not a
+learner failure; explicit F7 reissue recreates the seeded starting exercise.
+Unsaved Linux edits do not survive that reissue. Prepared attempt-owned workers
+survive normal terminal detach; attachment-owned shell commands may stop.
+
+An optional `course.yaml` adds educational gates independently of skill bands.
+See [COURSE.md](COURSE.md) for prerequisites, committed questions, mixed completion,
+ordered checkpoints, explicit retries and private educational-record recovery.
+Existing game wire/save v4 and skill receipt reconciliation are unchanged.
 
 The bridge owns all orchestration. One-service exercises have no network;
 network exercises use workstation/server services on an internal Docker network,

@@ -1,0 +1,13 @@
+id: test.mixed-directory
+version: 1
+skill: 12
+level: 61000
+title: Integration fixture - create a directory
+kind: make-directory
+parameters:
+  name: [assessment-dir-b]
+instructions: >-
+  INTEGRATION TEST ONLY, not a certified course lesson. Create
+  ~/lab/{name}/ready as a directory while preserving ~/lab/briefing.txt.
+  Return to the hub to submit practical evidence and answer the complete
+  conceptual set. Course completion grants no game reward.

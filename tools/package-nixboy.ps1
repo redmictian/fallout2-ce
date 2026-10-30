@@ -4,7 +4,8 @@ param(
     [Parameter(Mandatory = $true)][string]$WikiDirectory,
     [Parameter(Mandatory = $true)][string]$WebView2Loader,
     [string]$LiveProbe,
-    [switch]$QemuPilot
+    [switch]$QemuPilot,
+    [switch]$AssessmentPilot
 )
 $ErrorActionPreference = 'Stop'
 
@@ -106,6 +107,7 @@ $files = @(
     'tools/nixboy/README.md', 'tools/nixboy/DEBUGGING.md', 'tools/nixboy/TRAINING.md', 'tools/nixboy/protocol.md', 'tools/nixboy/.dockerignore',
     'tools/nixboy/requirements.txt', 'tools/nixboy/bridge.py', 'tools/nixboy/QEMU.md',
     'tools/nixboy/protocol.py', 'tools/nixboy/training.py',
+    'tools/nixboy/course_content.py', 'tools/nixboy/course_progress.py', 'tools/nixboy/education_records.py', 'tools/nixboy/COURSE.md',
     'tools/nixboy/challenge_content.py', 'tools/nixboy/challenge_env.py',
     'tools/nixboy/qemu_env.py', 'tools/nixboy/qemu_probe.py', 'tools/nixboy/qemu_artifacts.py', 'tools/nixboy/wsl_provider.py',
     'tools/start-nixboy-wsl.ps1',
@@ -129,6 +131,12 @@ foreach ($qemuName in @('Dockerfile','bt05-manifest.json','supervisor.py','contr
 if ($QemuPilot) {
     foreach ($pilotFile in Get-PackageFiles (Join-Path $runtimeRoot 'content-qemu-pilot')) {
         if ($pilotFile.Extension -notin @('.yaml', '.yml', '.md', '.json')) { throw 'Unexpected pilot catalog file.' }
+        $files += $pilotFile.FullName.Substring($sourceDir.Length + 1).Replace('\', '/')
+    }
+}
+if ($AssessmentPilot) {
+    foreach ($pilotFile in Get-PackageFiles (Join-Path $runtimeRoot 'content-assessment-test')) {
+        if ($pilotFile.Extension -notin @('.yaml', '.yml', '.md', '.json')) { throw 'Unexpected assessment catalog file.' }
         $files += $pilotFile.FullName.Substring($sourceDir.Length + 1).Replace('\', '/')
     }
 }

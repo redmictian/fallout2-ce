@@ -160,8 +160,13 @@ CONTEXT remain available. A profile cannot change within a session. F5-F8 send
 TRAIN_ACTION; F10/CLOSE or a socket disconnect detach the frontend and stop its
 specific shell attachment, preserving exercise files while the bridge runs.
 A fresh attachment starts a fresh shell. EOF from that shell returns to the hub
-and never generates EXIT as a training reward. Reset, abandon, expiry and bridge
-shutdown have separate environment lifecycle handling.
+and never generates EXIT as a training reward. Issued assignments have no silent
+idle expiry. Reset, abandonment and provider interruption have distinct handling;
+provider loss requires explicit reissue and is not learner failure.
+
+The optional educational hub uses these same INPUT/OUTPUT/TRAIN_ACTION frames.
+Its versioned educational ledger remains bridge-owned, separate from game-save
+skill claims. No wire or game-save change is introduced; see COURSE.md.
 
 Legacy RESULT events are never forwarded by the training bridge, and the C++
 client rejects RESULT in training mode. Legacy OPEN retains its original

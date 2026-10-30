@@ -10,6 +10,12 @@ The shipped catalog maps Unarmed to **Filesystem** and Science to
 editable catalog, rather than a two-track engine limit.
 Each level can set `reward_points` (1–300, default 5); earned amounts stay fixed
 after completion even when the catalog changes.
+
+The optional [educational catalog](COURSE.md) adds independent gate/prerequisite
+records, committed questions, mixed completion and trusted ordered checkpoints.
+`content-assessment-test/` is an infrastructure demonstration with no course
+rewards, separate from the default skill-band catalog. The game wire/save and
+skill-reward contract are unchanged.
 The [wiki content directory](content/wiki/README.md) holds separate HTML
 lessons organized by Linux subject, with stable reading references from challenge
 YAML. Validate both catalogs with `python tools/nixboy/challenge_content.py` and

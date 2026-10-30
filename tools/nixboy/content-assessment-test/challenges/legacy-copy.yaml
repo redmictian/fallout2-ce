@@ -1,0 +1,13 @@
+id: test.legacy-copy
+version: 1
+skill: 12
+level: 61000
+title: Test-only legacy regression - file copy
+kind: copy-file
+parameters:
+  name: [legacy-copy]
+instructions: >-
+  LEGACY REGRESSION ONLY. Copy ~/lab/incoming/{name}.txt to
+  ~/lab/delivery/manifest.txt while preserving the source. This legacy
+  test band awards one Science point at level61000. It is not a
+  permanent educational mapping and is separate from course fixtures.

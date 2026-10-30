@@ -469,15 +469,17 @@ class AttemptTests(unittest.TestCase):
         self.assertEqual(state["acknowledged"]["3:1"], claim("01" * 16, 5))
         self.assertEqual(json.loads(self.manager.path.read_text())["version"], 4)
 
-    def test_shutdown_recreates_same_attempt_after_restart(self):
+    def test_shutdown_requires_explicit_facility_reissue_after_restart(self):
         self.manager.observe(self.profile, self.completed, context(science=15))
         attempt = self.manager.select(self.profile, 12, 2, "practice")
         self.manager.prepare(self.profile)
         self.manager.close()
         self.assertTrue(self.environments[-1].closed)
         self.manager = self.make_manager()
-        self.assertEqual(self.manager.snapshot(self.profile)["attempt"]["status"], "needs_reset")
-        self.manager.prepare(self.profile)
+        self.assertEqual(self.manager.snapshot(self.profile)["attempt"]["status"], "provider_lost")
+        with self.assertRaises(RuntimeError):
+            self.manager.prepare(self.profile)
+        self.manager.reset(self.profile)
         restored = self.manager.snapshot(self.profile)["attempt"]
         self.assertEqual(restored["id"], attempt["id"])
         self.assertEqual(restored["seed"], attempt["seed"])
@@ -520,13 +522,13 @@ class AttemptTests(unittest.TestCase):
         self.assertFalse(self.manager.environments)
         self.assertEqual(self.manager.snapshot(self.profile)["attempt"]["status"], "needs_reset")
 
-    def test_ordinary_container_keeps_its_existing_detached_expiry(self):
+    def test_ordinary_container_survives_ordinary_break_without_expiry(self):
         self.manager.select(self.profile, 3, 1)
         self.manager.prepare(self.profile)
         self.manager.data["profiles"][self.profile]["updated"] = time.time() - IDLE_SECONDS * 2
         self.manager.expire()
-        self.assertTrue(self.environments[-1].closed)
-        self.assertEqual(self.manager.snapshot(self.profile)["attempt"]["status"], "needs_reset")
+        self.assertFalse(self.environments[-1].closed)
+        self.assertEqual(self.manager.snapshot(self.profile)["attempt"]["status"], "active")
 
 
 class GuestCatalog(FakeCatalog):
