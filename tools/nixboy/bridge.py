@@ -662,7 +662,7 @@ class BridgeHandler(socketserver.BaseRequestHandler):
                     self.session.action(payload[0])
                 elif training and kind == TRAIN_ACK:
                     self.session.acknowledge(*decode_training_ack(payload))
-                elif training and kind == TRAIN_PERK_ACK:
+                elif training and kind == TRAIN_PERK_ACK and self.session.values.get("training.version") == 5:
                     self.session.acknowledge_perk(*decode_training_perk_ack(payload))
                 elif kind == CLOSE and not payload:
                     break

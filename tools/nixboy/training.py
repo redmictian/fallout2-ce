@@ -1125,6 +1125,8 @@ class TrainingSession:
         identity, skills = training_context(values)
         if identity != self.identity:
             raise ProtocolError("training profile cannot change inside a session")
+        if values.get("training.version") != self.values.get("training.version"):
+            raise ProtocolError("training protocol version cannot change inside a session; reopen")
         self._observe(identity, self.claimed, values)
         self.values, self.skills = dict(values), skills
         if self.mode == "hub" and not (self.job and self.job.is_alive()):

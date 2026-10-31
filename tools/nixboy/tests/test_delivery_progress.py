@@ -372,5 +372,16 @@ class DeliveryProgressTests(unittest.TestCase):
         path.write_text(json.dumps(original))
 
 
+    def test_live_context_cannot_change_negotiated_protocol_version(self):
+        from training import TrainingSession
+        session = TrainingSession(self.manager, lambda *args: None, lambda *args: None)
+        session.start(40, 153, self.values, {}, {})
+        try:
+            with self.assertRaisesRegex(ProtocolError, "version"):
+                session.context(delivery_context(**{"training.version": 4}))
+        finally:
+            session.close()
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -166,7 +166,15 @@ provider loss requires explicit reissue and is not learner failure.
 
 The optional educational hub uses these same INPUT/OUTPUT/TRAIN_ACTION frames.
 Its versioned educational ledger remains bridge-owned, separate from game-save
-skill claims. No wire or game-save change is introduced; see COURSE.md.
+skill claims. That educational subtree introduces no game-save fields; see COURSE.md.
+
+The optional typed passive-perk adapter negotiates `training.version=5`, appends
+a separate opening perk ledger and uses profile-bound TRAIN_PERK_REWARD22 /
+TRAIN_PERK_ACK10 frames. Version4 remains skill-only; a live session cannot
+change its negotiated version. Existing skill payloads are unchanged. The game
+writes trailer-v5 only when perk claims exist and reads earlier trailer versions;
+older binaries cannot read perk-bearing saves. See PERK_REWARDS.md for exact
+fields, maximums, duplicate/new application and reconciliation semantics.
 
 Legacy RESULT events are never forwarded by the training bridge, and the C++
 client rejects RESULT in training mode. Legacy OPEN retains its original
