@@ -83,10 +83,11 @@ void testGenericProgression()
     require(bytes.size() == TrainingState::kMinTrailerSize + 21 * 19 && bytes[11] == 4, "variable v4 trailer length");
     TrainingState restored;
     require(restored.decode(bytes.data(), bytes.size()) && restored.encode() == bytes, "ledger round trip");
-    require(restored.accept(fallout::SKILL_REPAIR, UINT16_MAX, receipt(30)) && restored.bonus(fallout::SKILL_REPAIR) == 10,
+    require(restored.ensureProfile() && restored.accept(fallout::SKILL_REPAIR, UINT16_MAX, receipt(30)) && restored.bonus(fallout::SKILL_REPAIR) == 10,
         "sparse receipt retry after reload");
-    require(restored.decode(earned.data(), earned.size()) && restored.accept(fallout::SKILL_REPAIR, UINT16_MAX, receipt(30)),
-        "earlier timeline can receive trusted replay once");
+    require(restored.decode(earned.data(), earned.size()) && restored.ensureProfile()
+            && restored.accept(fallout::SKILL_REPAIR, UINT16_MAX, receipt(31)),
+        "earlier save can earn a fresh completion reward");
     restored.reset();
     require(restored.claims().empty() && restored.profileWord(0) == 0, "new game clears progress and identity");
 }
@@ -106,7 +107,7 @@ void testLegacyMigration()
         require(migrated[11] == 4 && migrated.size() == 101, "legacy next save records fixed five-point historical awards");
         for (const auto& claim : state.claims())
             require(claim.points == 5, "v1/v2 historical points migrate as five");
-        require(state.accept(fallout::SKILL_UNARMED, 2, receipt(2)) && state.bonus(fallout::SKILL_UNARMED) == 10,
+        require(state.ensureProfile() && state.accept(fallout::SKILL_UNARMED, 2, receipt(2)) && state.bonus(fallout::SKILL_UNARMED) == 10,
             "legacy retry remains idempotent");
     }
     auto sparse = legacy(2, 2, 0);
@@ -162,7 +163,7 @@ void testRecordedPoints()
     require(state.claims()[0].points == 5 && state.claims()[1].points == 5
             && state.receipt(13, 3) == receipt(1) && state.receipt(12, 300) == receipt(2),
         "v3 migration retains claim identity");
-    require(!state.accept(13, 3, receipt(1), 7) && state.accept(13, 3, receipt(1), 5), "migration never retroactively rebalances old awards");
+    require(state.ensureProfile() && !state.accept(13, 3, receipt(1), 7) && state.accept(13, 3, receipt(1), 5), "migration never retroactively rebalances old awards");
 }
 
 void testCapacityAndCorruption()
@@ -174,7 +175,7 @@ void testCapacityAndCorruption()
     auto full = state.encode();
     require(full.size() == TrainingState::kMaxSkillTrailerSize && state.decode(full.data(), full.size()), "maximum skill ledger round trip");
     require(!state.accept(fallout::SKILL_REPAIR, 2049, receipt(2049)), "overflow claim rejected");
-    require(state.accept(fallout::SKILL_REPAIR, 1, receipt(1)), "full ledger still accepts duplicate delivery");
+    require(state.ensureProfile() && state.accept(fallout::SKILL_REPAIR, 1, receipt(1)), "full ledger still accepts duplicate delivery");
     state.reset();
     auto empty = state.encode();
     require(state.decode(empty.data(), empty.size()), "uninitialized empty v3 save valid");
@@ -270,6 +271,71 @@ void testTypedPerkClaims()
     seal(corrupt);
     require(!loaded.decode(corrupt.data(), corrupt.size()), "v5 cross-kind duplicate rejected despite CRC");
 }
+
+void testLoadedAssessmentScope()
+{
+    using fallout::nixboy::PerkClaimResult;
+    TrainingState state;
+    require(state.ensureProfile(), "new assessment scope");
+    auto profileA = state.profile();
+    auto a = state.encode();
+    require(state.accept(12, 62000, receipt(101), 1), "skill completion after A");
+    require(state.acceptPerk(state.profile(), 12, 2, receipt(102), 1, 4) == PerkClaimResult::New,
+        "passive completion after A");
+    auto b = state.encode();
+
+    require(state.decode(a.data(), a.size()) && state.bonus(12) == 0 && state.perkClaims().empty(),
+        "A restores its character bonuses and claims only");
+    require(state.encode() == a && state.profile() == profileA,
+        "ordinary save after load preserves bytes without opening bridge or RNG scope");
+    require(!state.accept(12, 62000, receipt(101), 1)
+        && state.acceptPerk(profileA, 12, 2, receipt(102), 1, 4) == PerkClaimResult::Rejected,
+        "loaded save cannot receive rewards until a live assessment scope is opened");
+    require(state.ensureProfile() && state.profile() != profileA, "next terminal open renews existing profile identity");
+    auto live = state.profile();
+    require(state.ensureProfile() && state.profile() == live, "ordinary reopen keeps assessment scope");
+    require(state.accept(12, 62000, receipt(103), 1)
+        && state.acceptPerk(live, 12, 2, receipt(104), 1, 4) == PerkClaimResult::New,
+        "rolled-back advancement is earnable by fresh completions");
+
+    require(state.decode(b.data(), b.size()) && state.bonus(12) == 1
+        && state.receipt(12, 62000) == receipt(101) && state.perkClaims()[0].receipt == receipt(102),
+        "B restores B's native claim/bonus ledger without external history");
+    require(state.ensureProfile() && state.profile() != live && state.profile() != profileA,
+        "a second load opens another fresh assessment scope");
+    require(state.accept(12, 62000, receipt(101), 1)
+        && state.acceptPerk(state.profile(), 12, 2, receipt(102), 2, 4) == PerkClaimResult::Duplicate
+        && state.bonus(12) == 1,
+        "saved claims remain minimal duplicate protection without another effect");
+    require(state.acceptPerk(profileA, 12, 2, receipt(102), 2, 4) == PerkClaimResult::Rejected,
+        "prior external scope cannot grant into loaded character");
+}
+
+void testObsoleteV6ReferenceIsIgnored()
+{
+    using fallout::nixboy::PerkClaimResult;
+    for (bool perks : { false, true }) {
+        TrainingState state;
+        require(state.ensureProfile() && state.accept(12, 62000, receipt(111), 1), "v6 compatibility fixture");
+        if (perks)
+            require(state.acceptPerk(state.profile(), 12, 2, receipt(112), 1, 4) == PerkClaimResult::New, "v6 typed fixture");
+        auto ordinary = state.encode();
+        auto obsolete = ordinary;
+        if (!perks) obsolete.insert(obsolete.end() - 4, { 0, 0 });
+        obsolete.insert(obsolete.end() - 4, 32, 0x55); // No associated file exists or is consulted.
+        obsolete[11] = 6;
+        uint32_t payload = static_cast<uint32_t>(obsolete.size() - 20);
+        for (int i = 0; i < 4; ++i) obsolete[12 + i] = static_cast<uint8_t>(payload >> (24 - i * 8));
+        seal(obsolete);
+        TrainingState loaded;
+        require(loaded.decode(obsolete.data(), obsolete.size()) && loaded.bonus(12) == 1
+            && loaded.perkClaims().size() == (perks ? 1u : 0u), "v6 reads only native saved rewards");
+        require(loaded.encode() == ordinary, "next ordinary save drops obsolete v6 reference and uses v4/v5");
+        require(loaded.ensureProfile() && loaded.profile() != state.profile(), "v6 import also renews live assessment scope lazily");
+        obsolete.pop_back();
+        require(!loaded.decode(obsolete.data(), obsolete.size()), "truncated v6 still rejected");
+    }
+}
 } // namespace
 
 int main()
@@ -280,6 +346,8 @@ int main()
         testRecordedPoints();
         testCapacityAndCorruption();
         testTypedPerkClaims();
+        testLoadedAssessmentScope();
+        testObsoleteV6ReferenceIsIgnored();
         std::cout << "nix-boy training state: all tests passed\n";
         return EXIT_SUCCESS;
     } catch (const std::exception& error) {

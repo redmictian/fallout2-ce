@@ -26,8 +26,9 @@ namespace nixboy {
 
     enum class PerkClaimResult { Rejected, New, Duplicate };
 
-    // Save-owned learning progress. These are engine skill IDs, not menu indexes.
-    // Each claim records its awarded percentage points after tag modifiers.
+    // Game-owned reward bonuses and duplicate receipts. These are engine skill
+    // IDs, not menu indexes. The opaque profile scopes live assessments, not
+    // durable external achievements; a game load renews it lazily on next open.
     class TrainingState {
     public:
         static constexpr size_t kMaxClaims = 2048;
@@ -35,7 +36,9 @@ namespace nixboy {
         static constexpr size_t kMinTrailerSize = 38;
         static constexpr size_t kMaxPerkClaims = 64;
         static constexpr size_t kMaxSkillTrailerSize = kMinTrailerSize + 21 * kMaxClaims;
-        static constexpr size_t kMaxTrailerSize = kMaxSkillTrailerSize + 2 + 19 * kMaxPerkClaims;
+        // Read bound includes the obsolete v6 reference. New writes remain v4/v5
+        // and never require an external file or service.
+        static constexpr size_t kMaxTrailerSize = kMaxSkillTrailerSize + 2 + 19 * kMaxPerkClaims + 32;
         void reset();
         bool ensureProfile();
         int32_t profileWord(size_t index) const;
@@ -59,6 +62,7 @@ namespace nixboy {
 
     private:
         TrainingReceipt profile_ {};
+        bool renewProfileOnOpen_ = false;
         std::vector<TrainingClaim> claims_;
         std::vector<PerkTrainingClaim> perkClaims_;
     };

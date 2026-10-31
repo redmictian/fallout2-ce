@@ -124,6 +124,7 @@ int main()
         require(learning.ensureProfile(), "reward profile");
         nixboy::TrainingReceipt perkReceipt {}; perkReceipt.back() = 19;
         auto olderLearning = learning;
+        auto olderSave = learning.encode();
         if (perkUsesTraining(PERK_TOUGHNESS)) {
             auto wrongProfile = learning.profile(); wrongProfile[0] ^= 1;
             require(nixboy::applyPerkTrainingReward(learning, wrongProfile, PERK_TOUGHNESS, 2, perkReceipt)
@@ -137,9 +138,16 @@ int main()
                 == nixboy::PerkClaimResult::Rejected, "missing ledger at already upgraded rank does not add another rank");
             require(perkRemove(gDude, PERK_TOUGHNESS) == 0 && perkGetRank(gDude, PERK_TOUGHNESS) == 1
                 && bonus[0][STAT_DAMAGE_RESISTANCE] == 0, "older-save native rank/effect state restored");
-            require(nixboy::applyPerkTrainingReward(olderLearning, olderLearning.profile(), PERK_TOUGHNESS, 2, perkReceipt)
+            auto oldProfile = olderLearning.profile();
+            require(olderLearning.decode(olderSave.data(), olderSave.size()) && olderLearning.ensureProfile()
+                && olderLearning.profile() != oldProfile, "older save opens a fresh external assessment scope");
+            require(nixboy::applyPerkTrainingReward(olderLearning, oldProfile, PERK_TOUGHNESS, 2, perkReceipt)
+                == nixboy::PerkClaimResult::Rejected && perkGetRank(gDude, PERK_TOUGHNESS) == 1,
+                "old scope cannot restore later perk reward");
+            nixboy::TrainingReceipt freshCompletion {}; freshCompletion.back() = 20;
+            require(nixboy::applyPerkTrainingReward(olderLearning, olderLearning.profile(), PERK_TOUGHNESS, 2, freshCompletion)
                 == nixboy::PerkClaimResult::New && perkGetRank(gDude, PERK_TOUGHNESS) == 2
-                && bonus[0][STAT_DAMAGE_RESISTANCE] == 10, "same-profile older ledger reapplies earned rank exactly once");
+                && bonus[0][STAT_DAMAGE_RESISTANCE] == 10, "a fresh completion can earn the rolled-back perk once");
         } else {
             require(nixboy::applyPerkTrainingReward(learning, learning.profile(), PERK_TOUGHNESS, 2, perkReceipt)
                 == nixboy::PerkClaimResult::Rejected, "feature disabled rejects perk rewards");

@@ -46,20 +46,26 @@ namespace nixboy {
     void TrainingState::reset()
     {
         *this = TrainingState();
+        renewProfileOnOpen_ = true;
     }
 
     bool TrainingState::ensureProfile()
     {
-        if (!empty(profile_)) return true;
+        if (!renewProfileOnOpen_ && !empty(profile_)) return true;
+        TrainingReceipt next {};
         try {
             std::random_device random;
-            for (auto& byte : profile_)
+            for (auto& byte : next)
                 byte = static_cast<uint8_t>(random());
         } catch (...) {
-            profile_.fill(0);
             return false;
         }
-        return !empty(profile_);
+        // Keep the loaded game ledger unchanged if a new live scope cannot be
+        // obtained. Saving/loading itself does not generate randomness.
+        if (empty(next) || next == profile_) return false;
+        profile_ = next;
+        renewProfileOnOpen_ = false;
+        return true;
     }
 
     int32_t TrainingState::profileWord(size_t index) const
@@ -94,7 +100,7 @@ namespace nixboy {
 
     bool TrainingState::accept(int skill, int level, const TrainingReceipt& receipt, int points)
     {
-        if (skill < 0 || skill >= SKILL_COUNT || level < 1 || level > UINT16_MAX || points < 1 || points > 300 || empty(profile_) || empty(receipt)) return false;
+        if (skill < 0 || skill >= SKILL_COUNT || level < 1 || level > UINT16_MAX || points < 1 || points > 300 || renewProfileOnOpen_ || empty(profile_) || empty(receipt)) return false;
         for (const auto& claim : claims_) {
             if (claim.skill == skill && claim.level == level) return claim.receipt == receipt && claim.points == points;
             if (claim.receipt == receipt) return false;
@@ -110,7 +116,7 @@ namespace nixboy {
     PerkClaimResult TrainingState::acceptPerk(const TrainingReceipt& profile, int perk, int targetRank,
         const TrainingReceipt& receipt, int currentRank, int maximumRank)
     {
-        if (empty(profile_) || profile != profile_ || empty(receipt)
+        if (renewProfileOnOpen_ || empty(profile_) || profile != profile_ || empty(receipt)
             || perk != PERK_TOUGHNESS || targetRank != 2 || maximumRank < targetRank
             || currentRank < 1 || currentRank > maximumRank) return PerkClaimResult::Rejected;
         for (const auto& claim : claims_) {
@@ -189,12 +195,14 @@ namespace nixboy {
                     if (claimed && !candidate.accept(track == 0 ? SKILL_UNARMED : SKILL_SCIENCE, level + 1, receipt)) return false;
                 }
             }
-        } else if (version == 3 || version == kVersion || version == 5) {
+        } else if (version == 3 || version == kVersion || version == 5 || version == 6) {
             size_t recordSize = version == 3 ? 19 : 21;
             size_t count = (size_t(bytes[32]) << 8) | bytes[33];
             size_t skillEnd = kMinTrailerSize + count * recordSize;
-            if (count > kMaxClaims || (version != 5 && size != skillEnd)
-                || (version == 5 && size < skillEnd + 2)) return false;
+            bool hasPerks = version >= 5;
+            size_t ignoredReferenceBytes = version == 6 ? 32 : 0;
+            if (count > kMaxClaims || (!hasPerks && size != skillEnd)
+                || (hasPerks && size < skillEnd + 2 + ignoredReferenceBytes)) return false;
             for (size_t index = 0; index < count; index++) {
                 int skill = bytes[offset];
                 int level = (int(bytes[offset + 1]) << 8) | bytes[offset + 2];
@@ -205,10 +213,11 @@ namespace nixboy {
                 if (!empty(candidate.receipt(skill, level)) || !candidate.accept(skill, level, receipt, points)) return false;
                 offset += recordSize;
             }
-            if (version == 5) {
+            if (hasPerks) {
                 size_t perkCount = (size_t(bytes[offset]) << 8) | bytes[offset + 1];
                 offset += 2;
-                if (perkCount == 0 || perkCount > kMaxPerkClaims || offset + perkCount * 19 + 4 != size) return false;
+                if ((version == 5 && perkCount == 0) || perkCount > kMaxPerkClaims
+                    || offset + perkCount * 19 + ignoredReferenceBytes + 4 != size) return false;
                 for (size_t index = 0; index < perkCount; index++) {
                     int perk = (int(bytes[offset]) << 8) | bytes[offset + 1];
                     int rank = bytes[offset + 2];
@@ -220,6 +229,10 @@ namespace nixboy {
             }
         } else
             return false;
+        // A loaded save supplies character rewards only. The next terminal
+        // opening starts a fresh external assessment scope instead of importing
+        // another save's bridge history. Ordinary reopen keeps that live scope.
+        candidate.renewProfileOnOpen_ = true;
         *this = candidate;
         return true;
     }
