@@ -1,4 +1,4 @@
-"""Optional educational catalog and bounded trusted grading, independent of skills.
+"""Bounded assessment questions and fixed canonical project definitions.
 
 Only ``public_questions`` is learner-facing. Keys and feedback stay in the
 operator-owned catalog; the manager decides when a committed set may be graded.
@@ -64,7 +64,6 @@ class Gate:
     format: str
     prerequisites: tuple[str, ...]
     alternatives: tuple[Alternative, ...]
-    components: tuple[str, ...] = ()
     version: int = 1
     project: dict | None = None
     reward: dict | None = None
@@ -135,23 +134,19 @@ class CourseCatalog:
 
     def _gate(self, data):
         required = {"id", "title", "format", "prerequisites"}
-        optional = {"version", "components", "alternatives", "project", "reward"}
+        optional = {"version", "alternatives", "project", "reward"}
         if not isinstance(data, dict) or not required <= set(data) or set(data) - required - optional \
                 or not _identifier(data["id"]) or not _text(data["title"], 200) \
                 or not isinstance(data["format"], str) \
-                or data["format"] not in {"practical", "theory", "mixed", "all"} \
+                or data["format"] not in {"practical", "theory", "mixed"} \
                 or not _identifiers(data["prerequisites"]) \
                 or type(data.get("version", 1)) is not int or not 1 <= data.get("version", 1) <= 2**31 - 1:
             raise ValueError("invalid educational gate fields")
-        components = data.get("components", [])
         alternatives = data.get("alternatives", [])
-        if not _identifiers(components) or not isinstance(alternatives, list) or len(alternatives) > 32:
-            raise ValueError("invalid gate components or alternatives")
-        if data["format"] == "all":
-            if not components or alternatives:
-                raise ValueError("all gate needs components and no alternatives")
-        elif components or not alternatives:
-            raise ValueError("assessable gate needs alternatives and no components")
+        if not isinstance(alternatives, list) or len(alternatives) > 32:
+            raise ValueError("invalid assessment alternatives")
+        if not alternatives:
+            raise ValueError("assessable task needs alternatives; independent ALL progression is not supported")
         parsed = tuple(self._alternative(item, data["format"]) for item in alternatives)
         if len({item.id for item in parsed}) != len(parsed):
             raise ValueError("duplicate alternative id within gate")
@@ -159,7 +154,7 @@ class CourseCatalog:
         if project is not None:
             if not isinstance(project, dict) or set(project) != {"id", "stage", "preparation"} \
                     or not _identifier(project["id"]) or not _identifier(project["preparation"]) \
-                    or type(project["stage"]) is not int or not 1 <= project["stage"] <= 8 or data["format"] == "all":
+                    or type(project["stage"]) is not int or not 1 <= project["stage"] <= 8:
                 raise ValueError("invalid canonical project stage")
             for alternative in parsed:
                 if alternative.challenge is None or self.challenges.get(alternative.challenge).parameters.get("preparation") != [project["preparation"]]:
@@ -167,10 +162,10 @@ class CourseCatalog:
         reward = data.get("reward")
         if reward is not None and (not isinstance(reward, dict) or
                 reward != {"type": "perk", "perk": 12, "target_rank": 2, "test_only": True} or
-                type(reward.get("perk")) is not int or type(reward.get("target_rank")) is not int or reward.get("test_only") is not True or data["format"] == "all"):
+                type(reward.get("perk")) is not int or type(reward.get("target_rank")) is not int or reward.get("test_only") is not True):
             raise ValueError("only the explicit test-only passive Toughness rank-2 reward is supported")
         return Gate(data["id"], data["title"], data["format"], tuple(data["prerequisites"]),
-                    parsed, tuple(components), data.get("version", 1), project, reward)
+                    parsed, data.get("version", 1), project, reward)
 
     def _alternative(self, data, gate_format):
         required = {"id", "title", "instructions"}
@@ -254,37 +249,25 @@ class CourseCatalog:
                         question.choices, question.normalization, question.option_feedback)
 
     def _validate_graph(self):
-        visited, active = set(), set()
-
-        def visit(identifier):
-            if identifier not in self.gates:
-                raise ValueError("unknown prerequisite or component: " + identifier)
-            if identifier in active:
-                raise ValueError("educational prerequisite/component cycle")
-            if identifier in visited:
-                return
-            active.add(identifier)
-            gate = self.gates[identifier]
-            for target in gate.prerequisites + gate.components:
-                visit(target)
-            active.remove(identifier)
-            visited.add(identifier)
-
-        for identifier in self.gates:
-            visit(identifier)
+        # Only a current project's canonical stage order is needed. There is no
+        # independent educational prerequisite/completion graph.
         projects = {}
         for gate in self.gates.values():
-            if gate.project:
-                stages = projects.setdefault(gate.project["id"], {})
-                if gate.project["stage"] in stages:
-                    raise ValueError("duplicate project stage number")
-                stages[gate.project["stage"]] = gate
+            if not gate.project:
+                if gate.prerequisites:
+                    raise ValueError("Independent educational prerequisites are deferred; use current game eligibility")
+                continue
+            stages = projects.setdefault(gate.project["id"], {})
+            if gate.project["stage"] in stages:
+                raise ValueError("duplicate project stage number")
+            stages[gate.project["stage"]] = gate
         for stages in projects.values():
             if sorted(stages) != list(range(1, len(stages) + 1)):
                 raise ValueError("project stages must be contiguous from one")
             for number, gate in stages.items():
-                if number > 1 and stages[number-1].id not in gate.prerequisites:
-                    raise ValueError("project stages require explicit previous-stage completion")
+                expected = () if number == 1 else (stages[number-1].id,)
+                if gate.prerequisites != expected:
+                    raise ValueError("project stage may depend only on its canonical previous stage")
 
     def get(self, identifier):
         try:
@@ -298,40 +281,12 @@ class CourseCatalog:
                 return alternative
         raise ValueError("unknown course alternative")
 
-    def is_complete(self, identifier, completed):
-        gate = self.get(identifier)
-        if gate.format == "all":
-            return all(self.is_complete(component, completed) for component in gate.components)
-        return identifier in completed
-
-    def missing_prerequisites(self, identifier, completed):
-        return tuple(item for item in self.get(identifier).prerequisites
-                     if not self.is_complete(item, completed))
-
-    def eligible(self, identifier, completed):
-        return not self.missing_prerequisites(identifier, completed)
-
     def digest(self, gate, alternative):
+        item = self.get(gate)
         selected = self.alternative(gate, alternative)
-        related = {}
-
-        def include(identifier):
-            if identifier in related:
-                return
-            item = self.get(identifier)
-            # Bind graph structure but avoid unrelated alternatives invalidating
-            # this selected assessment when the retained pool grows.
-            related[identifier] = {"id": item.id, "version": item.version, "format": item.format,
-                                   "prerequisites": item.prerequisites, "components": item.components}
-            if item.project is not None:
-                related[identifier]["project"] = item.project
-            if item.reward is not None:
-                related[identifier]["reward"] = item.reward
-            for target in item.prerequisites + item.components:
-                include(target)
-
-        include(gate)
-        payload = {"gate": related, "alternative": asdict(selected)}
+        payload = {"task": {"id": item.id, "version": item.version, "format": item.format,
+                            "project": item.project, "reward": item.reward},
+                   "alternative": asdict(selected)}
         if selected.challenge is not None:
             payload["challenge"] = self.challenges.digest(selected.challenge)
         return hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":"))

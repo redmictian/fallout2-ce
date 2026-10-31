@@ -64,7 +64,7 @@ gates:
     version: 1
     title: Integration fixture - practical AND conceptual completion
     format: mixed
-    prerequisites: [test.intro]
+    prerequisites: []
     alternatives:
       - id: a
         title: Mixed copy fixture
@@ -110,7 +110,7 @@ gates:
     version: 1
     title: Integration fixture - trusted ordered checkpoints
     format: practical
-    prerequisites: [test.intro]
+    prerequisites: []
     alternatives:
       - id: a
         title: Ordered file-state fixture
@@ -121,9 +121,3 @@ gates:
           its trusted checkpoint, reapply, request its trusted checkpoint,
           then submit. Final state alone is insufficient. This grants no
           game reward and demonstrates no real service policy.
-  - id: test.foundation
-    version: 1
-    title: Integration fixture - ALL component completion
-    format: all
-    prerequisites: []
-    components: [test.intro, test.mixed]

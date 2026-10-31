@@ -1,7 +1,7 @@
-"""Durable learning attempts and a bridge-owned, shell-free terminal menu.
+"""Current-run assignments and a shell-free terminal menu.
 
-The game owns skills. This module owns exercise state and trusted completion
-receipts. Learner output and legacy helper events never enter this reward path.
+The character owns progression. This cache holds active work, alternatives,
+a current project cursor and one completion delivery, never achievement history.
 """
 
 import json
@@ -20,13 +20,14 @@ from protocol import (
     MAX_CLAIMS, SKILL_NAMES, ProtocolError, encode_training_reward, training_context, validate_claims,
     TRAIN_PERK_REWARD, encode_training_perk_reward, validate_perk_claims,
 )
-from challenge_content import QEMU_KIND, GUEST_KINDS
+from challenge_content import QEMU_KIND, GUEST_KINDS, IDENTIFIER
 from course_progress import CourseProgress
 from perk_rewards import PerkRewards
 
 LOG = logging.getLogger("nixboy.training")
 TRACKS = dict(enumerate(SKILL_NAMES))
-STATE_VERSION = 4
+STATE_VERSION = 1
+STATE_SCOPE = "nixboy-runtime"
 IDLE_SECONDS = 24 * 60 * 60
 
 
@@ -36,8 +37,8 @@ class OperationCancelled(RuntimeError):
 
 def default_state_dir():
     if os.name == "nt":
-        return Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData/Local")) / "NixBoy/training"
-    return Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local/state")) / "nixboy/training"
+        return Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData/Local")) / "NixBoy/active-assessments"
+    return Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local/state")) / "nixboy/active-assessments"
 
 
 class AttemptManager(CourseProgress, PerkRewards):
@@ -58,22 +59,23 @@ class AttemptManager(CourseProgress, PerkRewards):
         self.cleanup = cleanup
         self.state_dir = Path(state_dir).resolve()
         self.state_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
-        self.path = self.state_dir / "training.json"
+        self.path = self.state_dir / "runtime.json"
         self.lock = threading.RLock()
         self.operations = {}
         self.cancel_events = {}
         self.environments = {}
         self.contexts = {}
+        self.game_claims = {}
+        self.game_perk_claims = {}
         self.attached = set()
         self.closed = False
         self.reconciled = False
         self.reconcile_lock = threading.Lock()
-        self.data = {"version": STATE_VERSION, "profiles": {}}
+        self.data = {"scope": STATE_SCOPE, "version": STATE_VERSION, "profiles": {}}
         if self.path.exists():
             if self.path.stat().st_size > 8 * 1024 * 1024:
                 raise ValueError("training state exceeds size limit")
             self.data = json.loads(self.path.read_text(encoding="utf-8"))
-            self._migrate_state()
             self._validate_state()
         for profile in self.data["profiles"].values():
             attempt = profile.get("attempt")
@@ -116,74 +118,54 @@ class AttemptManager(CourseProgress, PerkRewards):
             environment.set_console_size(rows, cols, cancel=cancel)
         return environment.attachment() if environment and hasattr(environment, "attachment") else None
 
-    def _migrate_state(self):
-        if not isinstance(self.data, dict) or self.data.get("version") not in (1, 2, 3):
-            return
-        version = self.data["version"]
-        profiles = self.data.get("profiles")
-        if not isinstance(profiles, dict):
-            raise ValueError("invalid legacy training profiles")
-        for profile in profiles.values():
-            if not isinstance(profile, dict):
-                raise ValueError("invalid legacy training profile")
-            receipts = profile.get("receipts", {})
-            if not isinstance(receipts, dict):
-                raise ValueError("invalid legacy completion receipts")
-            # Historical rewards were always five. Never consult today's catalog.
-            upgraded = {key: {"receipt": receipt, "points": 5} for key, receipt in receipts.items()}
-            validate_claims(upgraded)
-            if version in (1, 2):
-                progress = profile.get("earned" if version == 1 else "claimed", {})
-                if not isinstance(progress, dict):
-                    raise ValueError("invalid legacy training progress")
-                expected = set()
-                for skill in (3, 12):
-                    value = progress.get(str(skill), 0)
-                    if type(value) is not int or not 0 <= value <= (2 if version == 1 else 3):
-                        raise ValueError("invalid legacy training progress")
-                    mask = (1 << value) - 1 if version == 1 else value
-                    for level in (1, 2):
-                        if mask & (1 << (level - 1)):
-                            expected.add(f"{skill}:{level}")
-                if set(receipts) != expected:
-                    raise ValueError("legacy completion receipts do not match its recorded progress")
-            profile["receipts"] = upgraded
-            acknowledged = profile.get("acknowledged")
-            if isinstance(acknowledged, dict):
-                profile["acknowledged"] = {key: {"receipt": receipt, "points": 5}
-                                            for key, receipt in acknowledged.items()}
-            profile.pop("earned", None)
-            profile.pop("claimed", None)
-        self.data["version"] = STATE_VERSION
-
     def _validate_state(self):
-        if not isinstance(self.data, dict) or self.data.get("version") != STATE_VERSION \
-                or not isinstance(self.data.get("profiles"), dict):
-            raise ValueError("unsupported training state; preserve it for recovery")
-        for key, profile in self.data["profiles"].items():
-            if len(key) != 32 or any(ch not in "0123456789abcdef" for ch in key) \
-                    or not isinstance(profile, dict):
-                raise ValueError("invalid training profile state")
-            validate_claims(profile.get("receipts", {}))
-            perk_records = profile.get("perk_receipts", {})
-            if not isinstance(perk_records, dict) or any(not isinstance(entry, dict) for entry in perk_records.values()):
-                raise ValueError("invalid perk receipt state")
-            validate_perk_claims({name: entry.get("receipt") for name, entry in perk_records.items()})
-            if any(entry.get("profile") != key for entry in perk_records.values()):
-                raise ValueError("perk receipt profile mismatch")
-            if {entry["receipt"] for entry in perk_records.values()} & {entry["receipt"] for entry in profile.get("receipts", {}).values()}:
-                raise ValueError("receipt reused across reward types")
-            if not isinstance(profile.get("queues", {}), dict):
-                raise ValueError("invalid challenge queue")
-            education = profile.get("education")
-            if education is not None:
-                if not isinstance(education, dict) or education.get("version") != 1 \
-                        or any(not isinstance(education.get(key), dict) for key in ("completions", "queues", "seen")) \
-                        or not isinstance(education.get("history"), list):
-                    raise ValueError("unsupported educational state; preserve it for recovery")
+        if not isinstance(self.data, dict) or self.data.get("scope") != STATE_SCOPE \
+                or self.data.get("version") != STATE_VERSION or not isinstance(self.data.get("profiles"), dict) \
+                or len(self.data["profiles"]) > 1:
+            raise ValueError("Expected minimal runtime state; old progression snapshots are not imported")
+        for identity, profile in self.data["profiles"].items():
+            required = {"queues", "assessment_queues", "attempt", "project", "last_assessment", "pending"}
+            if not isinstance(identity, str) or len(identity) != 32 or any(ch not in "0123456789abcdef" for ch in identity) \
+                    or not isinstance(profile, dict) or not required <= set(profile) or set(profile) - required - {"updated"}:
+                raise ValueError("invalid runtime attempt state")
+            if any(not isinstance(profile.get(key, {}), dict) for key in ("queues", "assessment_queues")):
+                raise ValueError("invalid runtime alternative queue")
+            if profile.get("attempt") is not None and not isinstance(profile["attempt"], dict):
+                raise ValueError("invalid active assessment")
+            project = profile.get("project")
+            if project is not None and (not isinstance(project, dict) or set(project) != {"id", "next_stage"}
+                    or not isinstance(project["id"], str) or not IDENTIFIER.fullmatch(project["id"])
+                    or type(project["next_stage"]) is not int or not 1 <= project["next_stage"] <= 9):
+                raise ValueError("invalid current project cursor")
+            for queue in profile.get("assessment_queues", {}).values():
+                if not isinstance(queue, dict) or set(queue) != {"authored", "pending", "exposed"}:
+                    raise ValueError("invalid assessment alternative accounting")
+                for key in ("authored", "pending", "exposed"):
+                    values = queue[key]
+                    if not isinstance(values, list) or len(values) > 32 or any(
+                            not isinstance(value, str) or not IDENTIFIER.fullmatch(value) for value in values) \
+                            or len(set(values)) != len(values):
+                        raise ValueError("invalid assessment alternative queue")
+                if not set(queue["pending"]) <= set(queue["authored"]) or not set(queue["exposed"]) <= set(queue["authored"]):
+                    raise ValueError("assessment queue refers to an unauthored alternative")
+            pending = profile.get("pending")
+            if pending is not None:
+                self._validate_pending(identity, pending)
+
+    def _validate_pending(self, identity, pending):
+        if not isinstance(pending, dict) or pending.get("kind") not in ("skill", "perk") \
+                or type(pending.get("accepted")) is not bool:
+            raise ValueError("invalid current completion delivery")
+        if pending["kind"] == "skill":
+            validate_claims({f"{pending['skill']}:{pending['level']}":
+                {"receipt": pending["receipt"], "points": pending["points"]}})
+        else:
+            validate_perk_claims({f"{pending['perk']}:{pending['rank']}": pending["receipt"]})
+            if pending.get("profile") != identity:
+                raise ValueError("current perk delivery belongs to another runtime")
 
     def _save(self):
-        """Replace one fsynced snapshot; a pass is committed before transmission."""
+        """Atomically replace the current runtime cache, not a game-save snapshot."""
         temporary = self.path.with_suffix(".tmp")
         encoded = json.dumps(self.data, sort_keys=True, separators=(",", ":"))
         with open(temporary, "w", encoding="utf-8", newline="\n") as stream:
@@ -201,10 +183,25 @@ class AttemptManager(CourseProgress, PerkRewards):
                 os.close(directory)
 
     def _profile(self, identity):
-        return self.data["profiles"].setdefault(identity, {
-            "receipts": {},
-            "queues": {}, "attempt": None, "updated": time.time(),
-        })
+        try:
+            return self.data["profiles"][identity]
+        except KeyError as exc:
+            raise ProtocolError("Runtime changed; stale attempt or delivery discarded") from exc
+
+    def _new_receipt(self, identity):
+        used = {item["receipt"] for item in self.game_claims.get(identity, {}).values()}
+        used.update(self.game_perk_claims.get(identity, {}).values())
+        pending = self._profile(identity).get("pending")
+        if pending:
+            used.add(pending["receipt"])
+        receipt = secrets.token_hex(16)
+        while receipt in used:
+            receipt = secrets.token_hex(16)
+        return receipt
+
+    def _pending_guard(self, profile):
+        if profile.get("pending") and not profile["pending"]["accepted"]:
+            raise ValueError("The current completion is awaiting game acknowledgment; reopen nix-boy to finish delivery")
 
     def snapshot(self, identity):
         with self.lock:
@@ -214,7 +211,7 @@ class AttemptManager(CourseProgress, PerkRewards):
 
     def _operation(self, identity):
         with self.lock:
-            return self.operations.setdefault(identity, threading.Lock())
+            return self.operations.setdefault(identity, threading.RLock())
 
     def current_level(self, identity, skill):
         with self.lock:
@@ -224,9 +221,9 @@ class AttemptManager(CourseProgress, PerkRewards):
     def _eligible(self, identity, skill, level, mode):
         if self.current_level(identity, skill) != level:
             raise ValueError("The current skill value has no matching exercise at this level; abandon and reselect")
-        if mode == "assessment" and f"{skill}:{level}" in self._profile(identity)["receipts"]:
+        if mode == "assessment" and f"{skill}:{level}" in self.game_claims.get(identity, {}):
             raise ValueError("This skill band's reward is already claimed; practice remains available")
-        if mode == "assessment" and len(self._profile(identity)["receipts"]) >= MAX_CLAIMS:
+        if mode == "assessment" and len(self.game_claims.get(identity, {})) >= MAX_CLAIMS:
             raise ValueError("This character has reached the supported training receipt limit")
 
     def attach_frontend(self, identity):
@@ -237,30 +234,42 @@ class AttemptManager(CourseProgress, PerkRewards):
     def detach_frontend(self, identity):
         with self.lock:
             self.attached.discard(identity)
-            self._profile(identity)["updated"] = time.time()
-            self._save()
+            if identity in self.data["profiles"]:
+                self._profile(identity)["updated"] = time.time()
+                self._save()
 
     def observe(self, identity, claimed, values):
-        """Import exact game receipts; the receipt map is the completion ledger."""
+        """Observe current character state; never import externally earned history."""
         validate_claims(claimed)
         with self.lock:
+            previous = [key for key in self.data["profiles"] if key != identity]
+        # The game renews its existing runtime identity on load/new game. This
+        # provider serves one game; replacing a run cancels only its owned work.
+        for old in previous:
+            self.cancel(old)
+            with self._operation(old):
+                self._remove_environment(old)
+                with self.lock:
+                    self.data["profiles"].pop(old, None)
+                    self.contexts.pop(old, None)
+                    self.game_claims.pop(old, None)
+                    self.game_perk_claims.pop(old, None)
+        with self.lock:
+            if identity not in self.data["profiles"]:
+                self.data["profiles"][identity] = {"queues": {}, "assessment_queues": {},
+                    "attempt": None, "project": None, "last_assessment": None, "pending": None}
             profile = self._profile(identity)
-            receipts = dict(profile["receipts"])
-            recovered = list(profile.get("recovered_from_game", []))
-            for key, receipt in claimed.items():
-                if receipt["receipt"] in {entry["receipt"] for entry in profile.get("perk_receipts", {}).values()}:
-                    raise ProtocolError("receipt reused across skill and perk rewards")
-                existing = receipts.get(key)
-                if existing and existing != receipt:
-                    raise ProtocolError("saved reward receipt conflicts with training state")
-                if not existing:
-                    receipts[key] = dict(receipt)
-                    recovered.append(key)
-            validate_claims(receipts)
-            profile["receipts"] = receipts
+            if {item["receipt"] for item in claimed.values()} & set(self.game_perk_claims.get(identity, {}).values()):
+                raise ProtocolError("receipt reused across character reward types")
+            self.game_claims[identity] = dict(claimed)
             self.contexts[identity] = dict(values)
-            if recovered:
-                profile["recovered_from_game"] = recovered
+            pending = profile.get("pending")
+            if pending and pending["kind"] == "skill":
+                key = f"{pending['skill']}:{pending['level']}"
+                if key in claimed:
+                    if claimed[key] != {"receipt": pending["receipt"], "points": pending["points"]}:
+                        raise ProtocolError("current completion conflicts with character reward")
+                    pending["accepted"] = True
             profile["updated"] = time.time()
             self._save()
 
@@ -303,6 +312,7 @@ class AttemptManager(CourseProgress, PerkRewards):
             profile = self._profile(identity)
             if profile.get("attempt"):
                 raise ValueError("Resume or abandon the active exercise first")
+            self._pending_guard(profile)
             self._eligible(identity, skill, level, mode)
             challenge = self._pool(profile, skill, level)[0]
             spec = self.catalog.get(challenge)
@@ -545,28 +555,26 @@ class AttemptManager(CourseProgress, PerkRewards):
                 if self.current_level(identity, attempt["skill"]) != attempt["level"]:
                     self._save()
                     return {"status": "error", "feedback": "Your skill value changed bands during assessment. Files are preserved; abandon and reselect."}
+                before_completion = json.loads(json.dumps(profile))
                 receipt = None
                 if result["status"] == "passed" and attempt["mode"] == "assessment":
                     skill, level = attempt["skill"], attempt["level"]
                     key = f"{skill}:{level}"
-                    if key in profile["receipts"] or len(profile["receipts"]) >= MAX_CLAIMS:
-                        self._save()
-                        return {"status": "error", "feedback": "This band's reward was already claimed. Attempt preserved; abandon to continue."}
-                    receipt = secrets.token_hex(16)
-                    profile["receipts"][key] = {"receipt": receipt, "points": attempt["reward_points"]}
-                    # Preserve evidence even after the disposable environment is removed.
-                    profile.setdefault("passes", {})[key] = {
-                        "attempt": attempt["id"], "challenge": attempt["challenge"],
-                        "challenge_version": attempt.get("challenge_version", 1),
-                        "seed": attempt["seed"], "generation": attempt["generation"],
-                        "reward_points": attempt["reward_points"],
-                    }
-                    if evidence is not None:
-                        profile["passes"][key]["evidence"] = evidence
+                    if key in self.game_claims.get(identity, {}) or len(self.game_claims.get(identity, {})) >= MAX_CLAIMS:
+                        return {"status": "error", "feedback": "This character already has the band's reward."}
+                    self._pending_guard(profile)
+                    receipt = self._new_receipt(identity)
+                    profile["pending"] = {"kind": "skill", "skill": skill, "level": level,
+                        "points": attempt["reward_points"], "receipt": receipt, "accepted": False}
                 self._rotate(profile, attempt)
                 profile["attempt"] = None
                 profile["updated"] = time.time()
-                self._save()  # Receipt durable before the caller can emit TRAIN_REWARD.
+                try:
+                    self._save()  # Current completion durable before delivery.
+                except Exception:
+                    profile.clear()
+                    profile.update(before_completion)
+                    raise
             try:
                 self._remove_environment(identity)
             except Exception:
@@ -608,26 +616,29 @@ class AttemptManager(CourseProgress, PerkRewards):
     def pending_rewards(self, identity, claimed):
         validate_claims(claimed)
         with self.lock:
-            profile = self._profile(identity)
-            result = []
-            for key, receipt in sorted(profile["receipts"].items(), key=lambda item: tuple(map(int, item[0].split(":")))):
-                if key in claimed:
-                    if claimed[key] != receipt:
-                        raise ProtocolError("game receipt conflicts with earned completion")
-                    continue
-                skill, level = map(int, key.split(":"))
-                result.append((skill, level, receipt["points"], receipt["receipt"]))
-            return result
+            pending = self._profile(identity).get("pending")
+            if not pending or pending["kind"] != "skill" or pending["accepted"]:
+                return []
+            key = f"{pending['skill']}:{pending['level']}"
+            if key in claimed:
+                if claimed[key] != {"receipt": pending["receipt"], "points": pending["points"]}:
+                    raise ProtocolError("current completion conflicts with character reward")
+                self.game_claims.setdefault(identity, {})[key] = dict(claimed[key])
+                pending["accepted"] = True
+                self._save()
+                return []
+            return [(pending["skill"], pending["level"], pending["points"], pending["receipt"])]
 
     def acknowledge(self, identity, skill, level, points, receipt, accepted):
-        claim = {"receipt": receipt, "points": points}
-        validate_claims({f"{skill}:{level}": claim})
         with self.lock:
-            expected = self._profile(identity)["receipts"].get(f"{skill}:{level}")
-            if expected != claim:
-                raise ProtocolError("acknowledgment does not match an earned receipt")
+            pending = self._profile(identity).get("pending")
+            expected = {"kind": "skill", "skill": skill, "level": level,
+                        "points": points, "receipt": receipt}
+            if not pending or any(pending.get(key) != value for key, value in expected.items()):
+                raise ProtocolError("acknowledgment does not match the current completion")
             if accepted:
-                self._profile(identity).setdefault("acknowledged", {})[f"{skill}:{level}"] = claim
+                pending["accepted"] = True
+                self.game_claims.setdefault(identity, {})[f"{skill}:{level}"] = {"receipt": receipt, "points": points}
                 self._save()
 
     def expire(self):
@@ -696,7 +707,7 @@ class TrainingSession:
         try:
             self.manager.observe(identity, claimed, values)
         except ProtocolError as exc:
-            self.send(ERROR, ("Training progress recovery failed: " + str(exc)).encode("utf-8")[:4096])
+            self.send(ERROR, ("Current character state rejected: " + str(exc)).encode("utf-8")[:4096])
             raise
 
     def output(self, message, clear=False):
@@ -724,7 +735,7 @@ class TrainingSession:
             value = self.skills[skill]
             level = self.manager.current_level(self.identity, skill)
             band = track["levels"].get(level)
-            completed = sum(f"{skill}:{number}" in state["receipts"] for number in track["levels"])
+            completed = sum(f"{skill}:{number}" in self.claimed for number in track["levels"])
             lines.append(f"[{index + 1}] {track['title']} {value}% | {track['knowledge_title']}"[:width])
             availability = (f"level {level} ({band['min_skill']}-{band['max_skill']}%): {band['title']} [+{band.get('reward_points', 5)}]" if band else
                             "no authored challenges at this value")
@@ -738,7 +749,7 @@ class TrainingSession:
             if attempt.get("facility_error"):
                 lines.extend(textwrap.wrap(attempt["facility_error"], width)[:2])
         if getattr(self.manager.catalog, "course", None):
-            lines.append("[C] Educational fixtures | [Q] Questions | [T] Explicit retry | X <checkpoint>")
+            lines.append("[C] Assessments | [Q] Questions | [T] Explicit retry | X <checkpoint>")
         lines.extend(["F5 Check | F6 Hub | F7 Reset | F8 Abandon", "F10 Close (keeps an active exercise for later)"])
         if self.notice:
             lines.extend(textwrap.wrap(self.notice, width)[:3])
@@ -749,9 +760,9 @@ class TrainingSession:
         self.mode = "course"
         self.line.clear()
         self.course_choices = self.manager.course_status(self.identity)
-        lines = ["Educational integration fixtures / explicit test mappings only", ""]
+        lines = ["Assessments / explicit test mappings only", ""]
         for index, gate in enumerate(self.course_choices, 1):
-            status = "complete" if gate["complete"] else "available" if gate["eligible"] else "prerequisites missing"
+            status = "stage passed" if gate["complete"] else "available" if gate["eligible"] else "not current stage / alternatives used"
             lines.extend(textwrap.wrap(f"[{index}] {gate['id']} ({gate['format']}, {status}) - {gate['title']}", max(20, self.cols - 2)))
         lines.extend(["", str(notice), "Choose a gate number, T to retry, or H for hub: "])
         self.output("\n".join(lines), clear=True)
@@ -812,7 +823,7 @@ class TrainingSession:
         self.mode = "track"
         spec = self.manager.candidate(self.identity, skill, level)
         band = track["levels"][level]
-        finished = f"{skill}:{level}" in state["receipts"]
+        finished = f"{skill}:{level}" in self.claimed
         self.output(f"{track['title']} {self.skills[skill]}% - level {level} "
                     f"({band['min_skill']}-{band['max_skill']}%)\n"
                     f"{track['knowledge_title']} / {band['title']}\n{spec.title}\n\n"
@@ -1063,7 +1074,7 @@ class TrainingSession:
                 status = value["status"]
                 feedback = str(value.get("feedback", ""))
                 if status == "passed":
-                    text = "Passed. " + (f"Skill reward earned. +{value['reward_points']} skill points. " if value.get("rewarded") else "Passive perk reward earned. " if value.get("perk_rewarded") else "Educational completion; no new game reward. " if value.get("educational") else "Practice completed; no reward. ")
+                    text = "Passed. " + (f"Skill reward earned. +{value['reward_points']} skill points. " if value.get("rewarded") else "Passive perk reward earned. " if value.get("perk_rewarded") else "Assessment complete; no game reward. " if value.get("assessment") else "Practice completed; no reward. ")
                 elif status == "pending":
                     text = "Intermediate progress only. "
                 elif status == "incomplete":

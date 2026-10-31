@@ -1,4 +1,4 @@
-"""Educational methods using the existing manager, storage and typed receipts."""
+"""Bounded current assessments and canonical project stages in the manager."""
 import json
 import secrets
 import threading
@@ -13,30 +13,47 @@ def bounded_evidence(value, maximum=8192):
 
 
 class CourseProgress:
-    def _education(self, profile):
-        return profile.setdefault("education", {"version": 1, "completions": {},
-                                                 "queues": {}, "seen": {}, "history": []})
-
     def _course(self):
         course = getattr(self.catalog, "course", None)
         if course is None:
-            raise ValueError("This catalog has no educational gates")
+            raise ValueError("This catalog has no assessments")
         return course
 
-    def _course_complete(self, profile, gate_id):
-        gate = self._course().get(gate_id)
-        records = self._education(profile)["completions"]
-        if gate.format == "all":
-            return all(self._course_complete(profile, child) for child in gate.components)
-        return gate_id in records
+    def _project_eligible(self, profile, gate):
+        if not gate.project:
+            return True
+        current = profile.get("project")
+        expected = current["next_stage"] if current and current["id"] == gate.project["id"] else 1
+        return gate.project["stage"] == expected
 
     def course_status(self, identity):
         with self.lock:
             profile = self._profile(identity)
+            project = profile.get("project")
             return [{"id": gate.id, "title": gate.title, "format": gate.format,
-                     "complete": self._course_complete(profile, gate.id),
-                     "eligible": all(self._course_complete(profile, req) for req in gate.prerequisites)}
+                     "complete": bool(gate.project and project and project["id"] == gate.project["id"]
+                                      and project["next_stage"] > gate.project["stage"]),
+                     "eligible": self._project_eligible(profile, gate) and bool(
+                         profile["assessment_queues"].get(gate.id, {"pending": [None]})["pending"])}
                     for gate in self._course().gates.values()]
+
+    def _assessment_pool(self, profile, gate):
+        authored = [alt.id for alt in gate.alternatives]
+        stored = profile["assessment_queues"].get(gate.id)
+        if stored is None:
+            pool = list(authored)
+            secrets.SystemRandom().shuffle(pool)
+            stored = profile["assessment_queues"][gate.id] = {"authored": authored, "pending": pool, "exposed": []}
+        else:
+            stored["pending"] = [item for item in stored["pending"] if item in authored]
+            stored["exposed"] = [item for item in stored["exposed"] if item in authored]
+            added = [item for item in authored if item not in stored["authored"]]
+            secrets.SystemRandom().shuffle(added)
+            stored["pending"].extend(added)
+            stored["authored"] = authored
+        if not stored["pending"]:
+            raise ValueError("All alternatives for this assessment were completed in the current run")
+        return stored
 
     def select_course(self, identity, gate_id):
         with self._operation(identity), self.lock:
@@ -47,16 +64,13 @@ class CourseProgress:
                 raise ValueError("Resume, retry or abandon the active exercise first")
             course = self._course()
             gate = course.get(gate_id)
-            if gate.format == "all":
-                raise ValueError("This parent completes only when ALL its components complete")
-            if not all(self._course_complete(profile, req) for req in gate.prerequisites):
-                raise ValueError("Educational prerequisites are not complete; game skill cannot bypass them")
+            self._pending_guard(profile)
+            if not self._project_eligible(profile, gate):
+                raise ValueError("Complete the previous canonical project stage in the current run first")
             self._perk_eligibility(identity, gate.reward)
-            education = self._education(profile)
-            alternatives = [alt.id for alt in gate.alternatives]
-            pool = self._ordered_pool(education, gate_id, alternatives)
-            seen = education["seen"].get(gate_id, [])
-            alternative_id = next((item for item in pool if item not in seen), pool[0])
+            queue = self._assessment_pool(profile, gate)
+            seen = queue["exposed"]
+            alternative_id = next((item for item in queue["pending"] if item not in seen), queue["pending"][0])
             alt = course.alternative(gate_id, alternative_id)
             seed = secrets.randbits(63)
             spec = self.catalog.get(alt.challenge) if alt.challenge else None
@@ -72,6 +86,9 @@ class CourseProgress:
                        "mode": "course", "status": "selected", "updated": time.time(),
                        "answers": {}, "conceptual": None, "practical": None, "checkpoints": []}
             if gate.project:
+                current = profile.get("project")
+                if not current or current["id"] != gate.project["id"]:
+                    profile["project"] = {"id": gate.project["id"], "next_stage": 1}
                 from nginx_env import preparation_identity
                 attempt["project"] = dict(gate.project)
                 attempt["preparation_identity"] = preparation_identity(gate.project["preparation"])
@@ -125,7 +142,7 @@ class CourseProgress:
             attempt["conceptual"] = {"committed": True, "graded": False, "passed": False,
                                       "attempt": attempt["id"], "generation": attempt["generation"],
                                       "content": attempt["course_digest"], "at": time.time()}
-            seen = self._education(self._profile(identity))["seen"].setdefault(gate, [])
+            seen = self._assessment_pool(self._profile(identity), self._course().get(gate))["exposed"]
             if alt not in seen:
                 seen.append(alt)
             self._save()
@@ -201,10 +218,9 @@ class CourseProgress:
                     raise ValueError("Before commitment use drafts, reset or abandon; no reassessment is needed")
                 gate = attempt["course_gate"]
             else:
-                history = self._education(profile)["history"]
-                if not history:
-                    raise ValueError("No educational assessment to retry")
-                gate = history[-1]["gate"]
+                gate = profile.get("last_assessment")
+                if not gate:
+                    raise ValueError("No current-run assessment to retry")
         self.abandon(identity)
         return self.select_course(identity, gate)
 
@@ -275,43 +291,30 @@ class CourseProgress:
                     conceptual.get(key) == value for key, value in binding.items()))
                 passed = practical["status"] == "passed" and bool(conceptual_ok)
                 profile = self._profile(identity)
-                education = self._education(profile)
-                record = {"gate": attempt["course_gate"], "alternative": attempt["alternative"],
-                          **binding, "at": time.time(), "passed": passed,
-                          "exposed_retry": attempt["exposed_retry"],
-                          "practical": attempt["practical"], "conceptual": conceptual,
-                          "checkpoints": attempt["checkpoints"]}
-                if attempt.get("project"):
-                    record.update(project=attempt["project"], preparation_identity=attempt["preparation_identity"])
-                record = bounded_evidence(record, 24576)
                 before_completion = json.loads(json.dumps(profile))
                 perk_rewarded = False
                 if passed:
                     try:
                         perk_rewarded = self._earn_perk(identity, self._course().get(attempt["course_gate"]), attempt)
                     except ValueError as exc:
-                        self._save()
-                        return {"status": "error", "feedback": str(exc) + "; attempt preserved without completion/reward."}
-                education["history"] = (education["history"] + [record])[-32:]
-                seen = education["seen"].setdefault(attempt["course_gate"], [])
-                if attempt["alternative"] not in seen:
-                    seen.append(attempt["alternative"])
-                if passed:
-                    education["completions"].setdefault(attempt["course_gate"], record)
-                pool = education["queues"][attempt["course_gate"]]
+                        return {"status": "error", "feedback": str(exc) + "; attempt preserved without reward."}
+                gate = self._course().get(attempt["course_gate"])
+                queue = self._assessment_pool(profile, gate)
                 alternative = attempt["alternative"]
-                pool.remove(alternative)
-                pool.append(alternative)
+                queue["pending"].remove(alternative)
+                if not passed:
+                    queue["pending"].append(alternative)
+                if passed and gate.project:
+                    profile["project"] = {"id": gate.project["id"], "next_stage": gate.project["stage"] + 1}
+                profile["last_assessment"] = gate.id
                 profile["attempt"] = None
                 try:
                     self._save()
                 except Exception:
-                    # A failed durable write must not expose a merely in-memory
-                    # reward to the session's periodic delivery/replay path.
                     profile.clear()
                     profile.update(before_completion)
                     raise
             self._remove_environment(identity)
-            return {"status": "passed" if passed else "incomplete", "rewarded": False, "perk_rewarded": perk_rewarded, "educational": True,
-                    "feedback": ("Educational gate complete; test-only passive perk receipt earned." if perk_rewarded else "Educational gate complete; no new game reward.") if passed else
+            return {"status": "passed" if passed else "incomplete", "rewarded": False, "perk_rewarded": perk_rewarded, "assessment": True,
+                    "feedback": ("Assessment complete; current passive perk reward pending." if perk_rewarded else "Assessment complete; no game reward.") if passed else
                     "Required practical AND conceptual criteria did not both pass. Use T for explicit reassessment."}

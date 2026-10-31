@@ -227,12 +227,12 @@ class AttemptTests(unittest.TestCase):
         self.assertTrue(self.manager.check(self.profile)["rewarded"])
         pending = self.manager.pending_rewards(self.profile, self.completed)
         data = json.loads(self.manager.path.read_text())
-        self.assertEqual(data["profiles"][self.profile]["receipts"]["3:1"], claim(pending[0][3]))
+        self.assertEqual(data["profiles"][self.profile]["pending"]["receipt"], pending[0][3])
         self.manager.acknowledge(self.profile, *pending[0], True)
         self.manager.abandon(self.profile)
         self.manager.close()
         self.manager = self.make_manager()
-        self.assertEqual(self.manager.pending_rewards(self.profile, self.completed), pending)
+        self.assertEqual(self.manager.pending_rewards(self.profile, self.completed), [])
         self.assertEqual(self.manager.pending_rewards(self.profile, {"3:1": claim(pending[0][3])}), [])
 
     def test_practice_success_never_rewards(self):
@@ -243,16 +243,6 @@ class AttemptTests(unittest.TestCase):
         self.assertFalse(result["rewarded"])
         self.assertEqual(self.manager.pending_rewards(self.profile, self.completed), [])
 
-    def test_game_snapshot_recovers_exact_receipt_without_fabricated_pass(self):
-        receipt = bytes(range(16))
-        self.manager.observe(self.profile, {"3:1": claim(receipt.hex())}, context(unarmed=20))
-        state = self.manager.snapshot(self.profile)
-        self.assertEqual(state["receipts"]["3:1"], claim(receipt))
-        self.assertIn("3:1", state["recovered_from_game"])
-        self.assertNotIn("passes", state)
-        self.assertEqual(self.manager.pending_rewards(self.profile, self.completed), [(3, 1, 5, receipt.hex())])
-        with self.assertRaises(wire.ProtocolError):
-            self.manager.observe(self.profile, {"3:1": claim("63" * 16)}, context(unarmed=20))
 
     def test_current_skill_exclusively_selects_its_band_independently_per_track(self):
         for skill, name, cases in ((3, "unarmed", ((14, None), (15, 1), (19, 1), (20, 2), (24, 2), (25, None))),
@@ -280,7 +270,7 @@ class AttemptTests(unittest.TestCase):
         self.assertTrue(self.manager.check(self.profile)["rewarded"])
         state = self.manager.snapshot(self.profile)
         self.assertNotIn("claimed", state)
-        self.assertNotIn("3:1", state["receipts"])
+        self.assertNotIn("receipts", state)
         reward = self.manager.pending_rewards(self.profile, self.completed)
         self.assertEqual([(skill, level) for skill, level, _, _ in reward], [(3, 2)])
         self.assertEqual(self.manager.pending_rewards(self.profile, {"3:2": claim(reward[0][3])}), [])
@@ -288,13 +278,6 @@ class AttemptTests(unittest.TestCase):
             self.manager.select(self.profile, 3, 2)
         self.manager.select(self.profile, 3, 2, "practice")
 
-    def test_sparse_game_receipt_recovery_imports_only_its_claimed_slot(self):
-        receipt = bytes(range(1, 17))
-        self.manager.observe(self.profile, {"3:2": claim(receipt.hex())}, context(unarmed=20))
-        state = self.manager.snapshot(self.profile)
-        self.assertNotIn("claimed", state)
-        self.assertEqual(state["receipts"], {"3:2": claim(receipt.hex())})
-        self.assertEqual(self.manager.pending_rewards(self.profile, self.completed), [(3, 2, 5, receipt.hex())])
 
     def test_changed_skill_band_preserves_attempt_and_refuses_stale_reward(self):
         attempt = self.manager.select(self.profile, 3, 1)
@@ -322,55 +305,8 @@ class AttemptTests(unittest.TestCase):
         self.assertEqual(self.manager.pending_rewards(self.profile, self.completed), [])
         self.assertIsNotNone(self.manager.snapshot(self.profile)["attempt"])
 
-    def test_version_one_migration_preserves_queue_attempt_and_exact_receipts(self):
-        attempt = self.manager.select(self.profile, 3, 1)
-        self.manager.close()
-        data = json.loads(self.manager.path.read_text())
-        profile = data["profiles"][self.profile]
-        queue_before = list(profile["queues"]["3:1"])
-        data["version"] = 1
-        profile["earned"] = {"3": 0, "12": 2}
-        profile["receipts"] = {"12:1": "01" * 16, "12:2": "02" * 16}
-        self.manager.path.write_text(json.dumps(data), encoding="utf-8")
-        self.manager = self.make_manager()
-        restored = self.manager.snapshot(self.profile)
-        self.assertNotIn("claimed", restored)
-        self.assertEqual(restored["queues"]["3:1"], queue_before)
-        self.assertEqual(restored["attempt"]["id"], attempt["id"])
-        self.assertEqual(restored["attempt"]["status"], "needs_reset")
-        self.assertEqual(restored["receipts"], {key: claim(receipt) for key, receipt in profile["receipts"].items()})
-        self.assertEqual(json.loads(self.manager.path.read_text())["version"], 4)
-        self.assertNotIn("earned", restored)
 
-    def test_version_two_sparse_migration_preserves_progress_and_blocks_unfingerprinted_attempt(self):
-        attempt = self.manager.select(self.profile, 3, 1)
-        self.manager.close()
-        data = json.loads(self.manager.path.read_text())
-        profile = data["profiles"][self.profile]
-        data["version"] = 2
-        profile["claimed"] = {"3": 0, "12": 2}
-        profile["receipts"] = {"12:2": "02" * 16}
-        profile["attempt"].pop("content_digest")
-        self.manager.path.write_text(json.dumps(data))
-        self.manager = self.make_manager()
-        self.assertEqual(self.manager.pending_rewards(self.profile, {}), [(12, 2, 5, "02" * 16)])
-        self.assertNotIn("12:1", self.manager.snapshot(self.profile)["receipts"])
-        with self.assertRaisesRegex(ValueError, "older attempt.*abandon"):
-            self.manager.prepare(self.profile)
-        self.assertEqual(self.manager.snapshot(self.profile)["attempt"]["id"], attempt["id"])
 
-    def test_legacy_unclaimed_or_missing_receipts_are_not_promoted_to_completion(self):
-        self.manager.close()
-        original = json.loads(self.manager.path.read_text())
-        for mask, receipts in ((0, {"3:1": "01" * 16}), (1, {})):
-            data = json.loads(json.dumps(original))
-            data["version"] = 2
-            profile = data["profiles"][self.profile]
-            profile["claimed"] = {"3": mask, "12": 0}
-            profile["receipts"] = receipts
-            self.manager.path.write_text(json.dumps(data))
-            with self.assertRaisesRegex(ValueError, "receipts do not match"):
-                self.make_manager()
 
     def test_generic_repair_level_three_rewards_once_and_survives_reconnect(self):
         self.manager.catalog.tracks[13] = {"id": "processes", "title": "Repair", "knowledge_title": "Processes",
@@ -386,7 +322,7 @@ class AttemptTests(unittest.TestCase):
         values["skill.repair"] = 30
         self.manager.observe(self.profile, {"13:3": claim(receipt)}, values)
         self.assertEqual(self.manager.pending_rewards(self.profile, {"13:3": claim(receipt)}), [])
-        self.assertEqual(self.manager.pending_rewards(self.profile, {}), pending)
+        self.assertEqual(self.manager.pending_rewards(self.profile, {}), [])
 
     def test_changed_content_blocks_active_attempt_without_losing_progress(self):
         attempt = self.manager.select(self.profile, 3, 1)
@@ -402,24 +338,6 @@ class AttemptTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "content changed; abandon"):
             self.manager.prepare(self.profile)
 
-    def test_configured_reward_is_frozen_and_replayed_after_edit_or_retirement(self):
-        band = self.manager.catalog.tracks[3]["levels"][1]
-        band["reward_points"] = 7
-        attempt = self.manager.select(self.profile, 3, 1)
-        self.assertEqual(attempt["reward_points"], 7)
-        self.manager.prepare(self.profile)
-        passed = self.manager.check(self.profile)
-        self.assertEqual(passed["reward_points"], 7)
-        pending = self.manager.pending_rewards(self.profile, {})
-        self.assertEqual(pending[0][:3], (3, 1, 7))
-        receipt = pending[0][3]
-        band["reward_points"] = 99
-        self.assertEqual(self.manager.pending_rewards(self.profile, {}), pending)
-        self.manager.catalog.tracks.pop(3)
-        self.assertEqual(self.manager.pending_rewards(self.profile, {}), pending)
-        self.manager.acknowledge(self.profile, 3, 1, 7, receipt, True)
-        self.assertEqual(self.manager.pending_rewards(self.profile, {"3:1": claim(receipt, 7)}), [])
-        self.assertEqual(self.manager.snapshot(self.profile)["receipts"]["3:1"], claim(receipt, 7))
 
     def test_reward_edit_during_active_attempt_requires_reselection(self):
         band = self.manager.catalog.tracks[3]["levels"][1]
@@ -450,24 +368,8 @@ class AttemptTests(unittest.TestCase):
                     self.manager.observe(self.profile, {"3:1": claim(receipt, points)}, context())
                 with self.assertRaises(wire.ProtocolError):
                     self.manager.pending_rewards(self.profile, {"3:1": claim(receipt, points)})
-        self.assertEqual(self.manager.snapshot(self.profile)["receipts"]["3:1"], claim(receipt, 7))
+        self.assertEqual(self.manager.snapshot(self.profile)["pending"]["points"], 7)
 
-    def test_version_three_receipt_migration_uses_historical_five_not_current_configuration(self):
-        self.manager.close()
-        data = json.loads(self.manager.path.read_text())
-        data["version"] = 3
-        profile = data["profiles"][self.profile]
-        profile["receipts"] = {"3:1": "01" * 16, "13:65535": "02" * 16}
-        profile["acknowledged"] = {"3:1": "01" * 16}
-        self.manager.path.write_text(json.dumps(data))
-        catalog = FakeCatalog()
-        catalog.tracks[3]["levels"][1]["reward_points"] = 12
-        self.manager = AttemptManager(self.directory.name, FakeClient, catalog, FakeEnvironment)
-        self.assertEqual(self.manager.pending_rewards(self.profile, {}),
-                         [(3, 1, 5, "01" * 16), (13, 65535, 5, "02" * 16)])
-        state = self.manager.snapshot(self.profile)
-        self.assertEqual(state["acknowledged"]["3:1"], claim("01" * 16, 5))
-        self.assertEqual(json.loads(self.manager.path.read_text())["version"], 4)
 
     def test_shutdown_requires_explicit_facility_reissue_after_restart(self):
         self.manager.observe(self.profile, self.completed, context(science=15))
@@ -660,11 +562,11 @@ class GuestAttemptTests(unittest.TestCase):
         pending = self.manager.pending_rewards(self.profile, {})
         self.assertEqual(pending[0][:3], (3, 1, 1))
         saved = json.loads(self.manager.path.read_text())["profiles"][self.profile]
-        self.assertEqual(saved["passes"]["3:1"]["evidence"], proof)
+        self.assertNotIn("passes", saved)
+        self.assertEqual(saved["pending"]["kind"], "skill")
         self.manager.acknowledge(self.profile, *pending[0], True)
-        # Reopening an older same-profile game ledger replays this same receipt,
-        # while a ledger already containing it suppresses delivery.
-        self.assertEqual(self.manager.pending_rewards(self.profile, {}), pending)
+        # Once accepted, a completion is not replayed from external history.
+        self.assertEqual(self.manager.pending_rewards(self.profile, {}), [])
         self.assertEqual(self.manager.pending_rewards(self.profile, {"3:1": claim(pending[0][3], 1)}), [])
         self.assertFalse(self.manager.check(self.profile).get("rewarded", False))
 
@@ -898,7 +800,8 @@ class TrainingMenuTests(unittest.TestCase):
                 self.assertIn(b"[R] Resume unarmed level 2", output[-1][1])
                 manager.abandon(session.identity)
                 self.assertIsNone(manager.snapshot(session.identity)["attempt"])
-                self.assertEqual(manager.snapshot(session.identity)["receipts"], {"13:65535": claim("01" * 16)})
+                self.assertNotIn("receipts", manager.snapshot(session.identity))
+                self.assertEqual(manager.game_claims[session.identity], {"13:65535": claim("01" * 16)})
             finally:
                 session.close()
                 manager.close()

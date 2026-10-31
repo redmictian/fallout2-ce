@@ -82,28 +82,6 @@ class CourseProgressTests(unittest.TestCase):
         self.assertTrue(self.manager.commit_answers(self.identity)["passed"])
         self.assertEqual(self.manager.check(self.identity)["status"], "passed")
 
-    def test_explicit_prerequisites_ignore_game_percentages_and_all_parent_needs_every_component(self):
-        high = context(science=300)
-        self.manager.observe(self.identity, {}, high)
-        with self.assertRaisesRegex(ValueError, "prerequisites"):
-            self.manager.select_course(self.identity, "test.mixed")
-        with self.assertRaisesRegex(ValueError, "ALL"):
-            self.manager.select_course(self.identity, "test.foundation")
-        self.complete_intro()
-        statuses = {item["id"]: item for item in self.manager.course_status(self.identity)}
-        self.assertTrue(statuses["test.mixed"]["eligible"])
-        self.assertFalse(statuses["test.foundation"]["complete"])
-        # A gate completion, rather than a percentage change, unlocked the mixed fixture.
-        self.assertEqual(self.manager.contexts[self.identity]["skill.science"], 300)
-        self.manager.select_course(self.identity, "test.mixed")
-        self.manager.prepare(self.identity)
-        self.answer_all()
-        self.manager.commit_answers(self.identity)
-        self.assertEqual(self.manager.check(self.identity)["status"], "passed")
-        self.assertTrue(next(item for item in self.manager.course_status(self.identity)
-                             if item["id"] == "test.foundation")["complete"])
-        self.assertFalse(self.state()["receipts"])
-
     def test_theory_only_never_opens_client_or_environment_even_at_prepare_and_check(self):
         self.manager.select_course(self.identity, "test.intro")
         self.assertIsNone(self.manager.prepare(self.identity))
@@ -115,26 +93,6 @@ class CourseProgressTests(unittest.TestCase):
         self.assertFalse(self.environments)
         self.assertEqual(self.manager.pending_rewards(self.identity, {}), [])
 
-    def test_drafts_incomplete_sets_and_premature_feedback_are_nonfinal(self):
-        original = self.manager.select_course(self.identity, "test.intro")
-        before = self.state()["education"]["queues"]
-        public = self.manager.questions(self.identity)
-        self.assertIsNone(public["feedback"])
-        self.assertNotIn("answers", public["questions"][0])
-        with self.assertRaisesRegex(ValueError, "withheld"):
-            self.manager.course_feedback(self.identity)
-        with self.assertRaisesRegex(ValueError, "Complete every"):
-            self.manager.commit_answers(self.identity)
-        question = self.catalog.course.alternative("test.intro", original["alternative"]).questions[0]
-        self.manager.draft_answer(self.identity, question.id, question.answers[0])
-        with self.assertRaisesRegex(ValueError, "Complete every"):
-            self.manager.commit_answers(self.identity)
-        with self.assertRaises(ValueError):
-            self.manager.draft_answer(self.identity, question.id, "999")
-        self.assertEqual(self.state()["attempt"]["id"], original["id"])
-        self.assertIsNone(self.state()["attempt"]["conceptual"])
-        self.assertEqual(self.state()["education"]["queues"], before)
-        self.assertFalse(self.state()["education"]["completions"])
 
     def test_commitment_is_durable_and_reconnect_cannot_edit_committed_answers(self):
         self.manager.select_course(self.identity, "test.intro")
@@ -154,6 +112,7 @@ class CourseProgressTests(unittest.TestCase):
         self.assertTrue(self.manager.questions(self.identity)["committed"])
         self.assertEqual(self.manager.course_feedback(self.identity), result)
 
+
     def test_retry_prefers_unexposed_alternative_then_honestly_marks_exposed_fallback(self):
         first = self.manager.select_course(self.identity, "test.intro")
         self.answer_all(correct=False)
@@ -169,6 +128,7 @@ class CourseProgressTests(unittest.TestCase):
         self.assertTrue(fallback["exposed_retry"])
         self.assertIsNone(fallback["conceptual"])
         self.assertEqual(fallback["answers"], {})
+
 
     def test_interruption_between_commit_and_grading_cannot_reopen_answers(self):
         self.manager.select_course(self.identity, "test.intro")
@@ -188,127 +148,6 @@ class CourseProgressTests(unittest.TestCase):
         self.assertTrue(self.state()["attempt"]["conceptual"]["graded"])
         self.clients.assert_not_called()
 
-    def test_practical_only_submission_preserves_mixed_attempt_and_environment(self):
-        self.complete_intro()
-        attempt = self.manager.select_course(self.identity, "test.mixed")
-        self.manager.prepare(self.identity)
-        environment = self.environments[-1]
-        before = self.state()["education"]["queues"]
-        self.assertEqual(self.manager.check(self.identity)["status"], "pending")
-        self.assertFalse(environment.closed)
-        self.assertEqual(self.state()["attempt"]["id"], attempt["id"])
-        self.assertEqual(self.state()["education"]["queues"], before)
-        self.assertNotIn("test.mixed", self.state()["education"]["completions"])
-        self.assertFalse(self.state()["receipts"])
-
-    def test_conceptual_only_success_cannot_complete_and_finalization_rechecks_mutable_practical_state(self):
-        self.complete_intro()
-        self.manager.select_course(self.identity, "test.mixed")
-        self.manager.prepare(self.identity)
-        environment = self.environments[-1]
-        self.assertEqual(self.manager.check(self.identity)["status"], "pending")
-        self.answer_all()
-        self.assertTrue(self.manager.commit_answers(self.identity)["passed"])
-        environment.outcome = {"status": "incomplete", "feedback": "Required data removed after P submission"}
-        result = self.manager.check(self.identity)
-        self.assertEqual(result["status"], "incomplete")
-        self.assertEqual(environment.checks, 2)
-        self.assertNotIn("test.mixed", self.state()["education"]["completions"])
-        self.assertFalse(self.state()["receipts"])
-
-    def test_ordered_checkpoints_reject_wrong_order_stale_binding_and_final_state_only(self):
-        self.complete_intro()
-        attempt = self.manager.select_course(self.identity, "test.ordered")
-        self.manager.prepare(self.identity)
-        before = self.state()["education"]["queues"]
-        self.assertEqual(self.manager.check(self.identity)["status"], "pending")
-        self.assertEqual(self.environments[-1].observed, [])
-        with self.assertRaisesRegex(ValueError, "Out-of-order"):
-            self.manager.checkpoint(self.identity, "reapply")
-        binding = {"attempt": attempt["id"], "generation": attempt["generation"], "content": attempt["course_digest"]}
-        self.manager.checkpoint(self.identity, "rollback", expected=binding)
-        first = self.state()["attempt"]["checkpoints"][0]
-        self.assertEqual({key: first[key] for key in binding}, binding)
-        self.manager.reset(self.identity)
-        reset = self.state()["attempt"]
-        self.assertEqual(reset["generation"], attempt["generation"] + 1)
-        self.assertEqual(reset["checkpoints"], [])
-        with self.assertRaisesRegex(ValueError, "Stale or cross-attempt"):
-            self.manager.checkpoint(self.identity, "rollback", expected=binding)
-        self.assertEqual(self.environments[-1].observed, [])
-        self.assertEqual(self.state()["education"]["queues"], before)
-        self.manager.checkpoint(self.identity, "rollback")
-        self.manager.checkpoint(self.identity, "reapply")
-        self.assertEqual(self.manager.check(self.identity)["status"], "passed")
-
-    def test_incomplete_or_oversized_checkpoint_is_nonfinal_and_untrusted_claim_is_rejected(self):
-        self.complete_intro()
-        attempt = self.manager.select_course(self.identity, "test.ordered")
-        self.manager.prepare(self.identity)
-        environment = self.environments[-1]
-        before = self.state()["education"]["queues"]
-        with self.assertRaisesRegex(ValueError, "Stale or cross-attempt"):
-            self.manager.checkpoint(self.identity, "rollback", expected={"status": "passed", "evidence": "forged"})
-        environment.checkpoint_outcome = {"status": "incomplete", "feedback": "Actual policy is still new"}
-        self.assertEqual(self.manager.checkpoint(self.identity, "rollback")["status"], "incomplete")
-        environment.checkpoint_outcome = {"status": "passed", "evidence": {"blob": "x" * 5000}}
-        self.assertEqual(self.manager.checkpoint(self.identity, "rollback")["status"], "error")
-        self.assertEqual(self.state()["attempt"]["checkpoints"], [])
-        self.assertEqual(self.state()["attempt"]["id"], attempt["id"])
-        self.assertEqual(self.state()["education"]["queues"], before)
-        self.assertFalse(environment.closed)
-
-    def test_facility_interruption_keeps_queue_and_completion_and_requires_reissue(self):
-        self.complete_intro()
-        self.manager.select_course(self.identity, "test.ordered")
-        self.manager.prepare(self.identity)
-        before = self.state()["education"]["queues"]
-        self.environments[-1].checkpoint_outcome = {
-            "status": "error", "facility_failure": True, "feedback": "Prepared worker lost"}
-        self.assertEqual(self.manager.checkpoint(self.identity, "rollback")["status"], "error")
-        self.assertEqual(self.state()["attempt"]["status"], "provider_lost")
-        self.assertEqual(self.state()["education"]["queues"], before)
-        self.assertIn("test.intro", self.state()["education"]["completions"])
-        self.assertFalse(self.state()["receipts"])
-        with self.assertRaisesRegex(RuntimeError, "interrupted"):
-            self.manager.prepare(self.identity)
-        self.manager.reset(self.identity)
-        self.assertEqual(self.state()["attempt"]["status"], "active")
-
-    def test_completion_survives_older_game_context_reset_restart_and_compatible_catalog_reload(self):
-        self.complete_intro()
-        completion = self.state()["education"]["completions"]["test.intro"]
-        self.manager.observe(self.identity, {}, context(science=0))
-        self.manager.select_course(self.identity, "test.ordered")
-        self.manager.prepare(self.identity)
-        self.manager.reset(self.identity)
-        self.manager.abandon(self.identity)
-        self.manager.close()
-        self.catalog = Catalog(FIXTURE_ROOT)
-        self.manager = self.new_manager()
-        self.manager.observe(self.identity, {}, context(science=0))
-        self.assertEqual(self.state()["education"]["completions"]["test.intro"], completion)
-        self.assertTrue(next(item for item in self.manager.course_status(self.identity)
-                             if item["id"] == "test.mixed")["eligible"])
-
-    def test_provider_restart_cannot_silently_recreate_an_active_practical_attempt(self):
-        self.complete_intro()
-        attempt = self.manager.select_course(self.identity, "test.ordered")
-        self.manager.prepare(self.identity)
-        self.manager.checkpoint(self.identity, "rollback")
-        queue = self.state()["education"]["queues"]
-        self.manager.close()
-        self.manager = self.new_manager()
-        self.manager.observe(self.identity, {}, self.values)
-        self.assertEqual(self.state()["attempt"]["status"], "provider_lost")
-        with self.assertRaisesRegex(RuntimeError, "interrupted"):
-            self.manager.prepare(self.identity)
-        self.assertEqual(self.manager.check(self.identity)["status"], "error")
-        self.assertEqual(self.state()["education"]["queues"], queue)
-        self.assertIn("test.intro", self.state()["education"]["completions"])
-        self.manager.reset(self.identity)
-        self.assertEqual(self.state()["attempt"]["generation"], attempt["generation"] + 1)
-        self.assertEqual(self.state()["attempt"]["checkpoints"], [])
 
     def test_theory_reset_advances_generation_and_clears_only_uncommitted_drafts(self):
         attempt = self.manager.select_course(self.identity, "test.intro")
@@ -322,77 +161,6 @@ class CourseProgressTests(unittest.TestCase):
         self.assertIsNone(reset["conceptual"])
         self.clients.assert_not_called()
 
-    def interrupt_checkpoint(self, close_manager):
-        self.complete_intro()
-        self.manager.select_course(self.identity, "test.ordered")
-        self.manager.prepare(self.identity)
-        entered, release, provider_marked = threading.Event(), threading.Event(), threading.Event()
-        results, errors = [], []
-        def observe(name):
-            entered.set()
-            if not release.wait(3):
-                raise RuntimeError("test observer was not released")
-            return {"status": "passed", "evidence": {"observed": name}}
-        def checkpoint():
-            try:
-                results.append(self.manager.checkpoint(self.identity, "rollback"))
-            except Exception as exc:
-                errors.append(exc)
-        original = self.manager._provider_stopped
-        def mark(attempt):
-            original(attempt)
-            provider_marked.set()
-        worker = threading.Thread(target=checkpoint)
-        closing = None
-        with mock.patch.object(self.environments[-1], "checkpoint", side_effect=observe), \
-                mock.patch.object(self.manager, "_provider_stopped", side_effect=mark):
-            worker.start()
-            try:
-                self.assertTrue(entered.wait(2))
-                if close_manager:
-                    closing = threading.Thread(target=self.manager.close)
-                    closing.start()
-                    self.assertTrue(provider_marked.wait(2))
-                else:
-                    with self.manager.lock:
-                        self.manager._provider_stopped(self.manager._profile(self.identity)["attempt"])
-                        self.manager._save()
-            finally:
-                release.set()
-                worker.join(4)
-                if closing:
-                    closing.join(4)
-        self.assertFalse(worker.is_alive())
-        if closing:
-            self.assertFalse(closing.is_alive())
-        self.assertFalse(errors)
-        self.assertEqual(results[0]["status"], "error")
-        self.assertIn("interrupted", results[0]["feedback"])
-        self.assertEqual(self.state()["attempt"]["checkpoints"], [])
-        self.assertEqual(self.state()["attempt"]["status"], "provider_lost")
-        self.assertIn("test.intro", self.state()["education"]["completions"])
-
-    def test_checkpoint_observation_cannot_commit_after_concurrent_manager_close(self):
-        self.interrupt_checkpoint(close_manager=True)
-
-    def test_checkpoint_observation_cannot_commit_after_concurrent_provider_loss(self):
-        self.interrupt_checkpoint(close_manager=False)
-
-    def test_committed_mixed_facility_loss_directs_explicit_retry_instead_of_forbidden_reset(self):
-        self.complete_intro()
-        self.manager.select_course(self.identity, "test.mixed")
-        self.manager.prepare(self.identity)
-        self.answer_all()
-        self.manager.commit_answers(self.identity)
-        self.environments[-1].outcome = {
-            "status": "error", "facility_failure": True, "feedback": "Prepared environment stopped"}
-        self.assertEqual(self.manager.check(self.identity)["status"], "error")
-        interrupted = self.state()["attempt"]
-        self.assertEqual(interrupted["status"], "provider_lost")
-        self.assertIn("use T", interrupted["facility_error"])
-        self.assertNotIn("F7", interrupted["facility_error"])
-        with self.assertRaisesRegex(ValueError, "use T"):
-            self.manager.reset(self.identity)
 
     def test_question_input_preserves_exact_answer_spaces_and_case_but_trims_commands(self):
         session = TrainingSession(self.manager, mock.Mock(), mock.Mock())
@@ -405,44 +173,6 @@ class CourseProgressTests(unittest.TestCase):
             session.input(b"  H  \r")
             hub.assert_called_once_with()
 
-    def test_content_change_rejects_unfinished_answers_and_checkpoints_without_erasing_completion(self):
-        self.complete_intro()
-        attempt = self.manager.select_course(self.identity, "test.ordered")
-        self.manager.prepare(self.identity)
-        self.manager.checkpoint(self.identity, "rollback")
-        completion = self.state()["education"]["completions"]["test.intro"]
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory) / "changed"
-            shutil.copytree(FIXTURE_ROOT, root)
-            path = root / "course.yaml"
-            raw = yaml.safe_load(path.read_text(encoding="utf-8"))
-            next(gate for gate in raw["gates"] if gate["id"] == "test.ordered")["version"] += 1
-            path.write_text(yaml.safe_dump(raw), encoding="utf-8")
-            self.manager.catalog = Catalog(root)
-            with self.assertRaisesRegex(ValueError, "content changed"):
-                self.manager.checkpoint(self.identity, "reapply")
-            self.assertEqual(self.manager.check(self.identity)["status"], "error")
-        self.assertEqual(self.state()["attempt"]["id"], attempt["id"])
-        self.assertEqual(self.state()["education"]["completions"]["test.intro"], completion)
-        self.assertNotIn("test.ordered", self.state()["education"]["completions"])
-
-    def test_legacy_selection_cannot_bypass_course_requirements_but_legacy_receipts_still_work(self):
-        pool = self.catalog.pool(12, 61000)
-        self.assertFalse(set(pool) & self.catalog.course.challenge_ids)
-        self.assertTrue(pool)
-        attempt = self.manager.select(self.identity, 12, 61000)
-        self.assertNotIn(attempt["challenge"], self.catalog.course.challenge_ids)
-        self.manager.prepare(self.identity)
-        result = self.manager.check(self.identity)
-        self.assertEqual(result["status"], "passed")
-        self.assertTrue(result["rewarded"])
-        receipt = self.state()["receipts"]["12:61000"]
-        self.assertEqual(receipt["points"], 1)
-        self.manager.observe(self.identity, {}, context(science=10))
-        self.assertEqual(self.manager.pending_rewards(self.identity, {})[0][3], receipt["receipt"])
-        self.manager.observe(self.identity, {"12:61000": receipt}, context(science=11))
-        self.assertEqual(self.manager.pending_rewards(self.identity, {"12:61000": receipt}), [])
-
 
     def test_educational_retry_cannot_silently_abandon_a_legacy_lab(self):
         self.complete_intro()
@@ -454,18 +184,103 @@ class CourseProgressTests(unittest.TestCase):
         self.assertEqual(self.state()["attempt"]["id"], attempt["id"])
         self.assertFalse(environment.closed)
 
-    def test_late_practical_result_cannot_complete_after_provider_loss(self):
+
+    def test_standalone_assessments_have_no_independent_achievement_prerequisites(self):
+        self.assertTrue(all(item["eligible"] for item in self.manager.course_status(self.identity)))
         self.complete_intro()
-        self.manager.select_course(self.identity, "test.mixed")
+        state = self.state()
+        self.assertNotIn("education", state)
+        self.assertNotIn("receipts", state)
+        self.assertEqual(state["last_assessment"], "test.intro")
+        self.assertFalse(next(item for item in self.manager.course_status(self.identity)
+                              if item["id"] == "test.intro")["complete"])
+
+    def test_draft_commitment_feedback_and_success_consumption_are_bounded(self):
+        attempt = self.manager.select_course(self.identity, "test.intro")
+        with self.assertRaisesRegex(ValueError, "withheld"):
+            self.manager.course_feedback(self.identity)
+        with self.assertRaisesRegex(ValueError, "Complete every"):
+            self.manager.commit_answers(self.identity)
+        self.assertIsNone(self.state()["attempt"]["conceptual"])
+        self.answer_all()
+        self.assertTrue(self.manager.commit_answers(self.identity)["passed"])
+        self.manager.check(self.identity)
+        pool = self.state()["assessment_queues"]["test.intro"]["pending"]
+        self.assertNotIn(attempt["alternative"], pool)
+        self.assertIsNone(self.state()["attempt"])
+
+    def test_mixed_requires_current_practical_and_committed_conceptual_success(self):
+        attempt = self.manager.select_course(self.identity, "test.mixed")
         self.manager.prepare(self.identity)
+        env = self.environments[-1]
+        self.assertEqual(self.manager.check(self.identity)["status"], "pending")
+        self.assertFalse(env.closed)
         self.answer_all()
         self.manager.commit_answers(self.identity)
-        def interrupted():
-            self.manager._provider_stopped(self.manager.data["profiles"][self.identity]["attempt"])
+        env.outcome = {"status": "incomplete", "feedback": "Protected data changed"}
+        self.assertEqual(self.manager.check(self.identity)["status"], "incomplete")
+        self.assertEqual(env.checks, 2)
+        self.assertFalse(self.state()["pending"])
+        self.assertIn(attempt["alternative"], self.state()["assessment_queues"]["test.mixed"]["pending"])
+
+    def test_ordered_checkpoint_and_reset_bind_to_current_attempt_generation(self):
+        attempt = self.manager.select_course(self.identity, "test.ordered")
+        self.manager.prepare(self.identity)
+        self.assertEqual(self.manager.check(self.identity)["status"], "pending")
+        with self.assertRaisesRegex(ValueError, "Out-of-order"):
+            self.manager.checkpoint(self.identity, "reapply")
+        binding = {"attempt": attempt["id"], "generation": attempt["generation"], "content": attempt["course_digest"]}
+        self.manager.checkpoint(self.identity, "rollback", expected=binding)
+        self.manager.reset(self.identity)
+        with self.assertRaisesRegex(ValueError, "Stale"):
+            self.manager.checkpoint(self.identity, "rollback", expected=binding)
+        self.assertEqual(self.state()["attempt"]["checkpoints"], [])
+        self.manager.checkpoint(self.identity, "rollback")
+        self.manager.checkpoint(self.identity, "reapply")
+        self.assertEqual(self.manager.check(self.identity)["status"], "passed")
+
+    def test_checkpoint_facility_error_preserves_queue_without_reward_or_failure(self):
+        self.manager.select_course(self.identity, "test.ordered")
+        self.manager.prepare(self.identity)
+        before = self.state()["assessment_queues"]
+        env = self.environments[-1]
+        env.checkpoint_outcome = {"status": "error", "facility_failure": True}
+        self.assertEqual(self.manager.checkpoint(self.identity, "rollback")["status"], "error")
+        self.assertEqual(self.state()["assessment_queues"], before)
+        self.assertIsNone(self.state()["pending"])
+        self.assertEqual(self.state()["attempt"]["status"], "provider_lost")
+        self.manager.reset(self.identity)
+        self.assertEqual(self.state()["attempt"]["status"], "active")
+
+    def test_checkpoint_rejects_forgery_oversize_and_late_cancel(self):
+        self.manager.select_course(self.identity, "test.ordered")
+        self.manager.prepare(self.identity)
+        env = self.environments[-1]
+        with self.assertRaisesRegex(ValueError, "Stale"):
+            self.manager.checkpoint(self.identity, "rollback", expected={"evidence": "forged"})
+        env.checkpoint_outcome = {"status": "passed", "evidence": {"blob": "x"*5000}}
+        self.assertEqual(self.manager.checkpoint(self.identity, "rollback")["status"], "error")
+        self.assertEqual(self.state()["attempt"]["checkpoints"], [])
+        def interrupted(name):
+            self.manager.cancel(self.identity)
             return {"status": "passed"}
-        self.environments[-1].check = interrupted
-        self.assertEqual(self.manager.check(self.identity)["status"], "error")
-        self.assertNotIn("test.mixed", self.state()["education"]["completions"])
+        env.checkpoint = interrupted
+        self.assertEqual(self.manager.checkpoint(self.identity, "rollback")["status"], "error")
+        self.assertEqual(self.state()["attempt"]["checkpoints"], [])
+
+    def test_new_runtime_discards_drafts_attempt_queue_and_old_callbacks(self):
+        self.manager.select_course(self.identity, "test.intro")
+        self.manager.draft_answer(self.identity, "q1", "1")
+        other = "22"*16
+        values = dict(self.values)
+        for i in range(4):
+            values[f"training.profile.{i}"] = int.from_bytes(bytes.fromhex(other)[i*4:i*4+4], "big", signed=True)
+        self.manager.observe(other, {}, values)
+        state = self.manager.snapshot(other)
+        self.assertIsNone(state["attempt"])
+        self.assertEqual(state["assessment_queues"], {})
+        with self.assertRaises(wire.ProtocolError):
+            self.manager.questions(self.identity)
 
 
 if __name__ == "__main__":

@@ -36,19 +36,16 @@ class CourseCatalogTests(unittest.TestCase):
         self.assertIsNone(legacy.course)
         self.assertEqual(len(legacy.challenges), 20)
 
-    def test_fixture_formats_and_explicit_prerequisite_are_independent_of_skills(self):
-        self.assertEqual(set(self.course.gates),
-                         {"test.intro", "test.mixed", "test.ordered", "test.foundation"})
-        self.assertEqual(self.course.get("test.intro").format, "theory")
-        self.assertIsNone(self.course.alternative("test.intro", "a").challenge)
-        self.assertFalse(self.course.eligible("test.mixed", {}))
-        self.assertTrue(self.course.eligible("test.mixed", {"test.intro": {"attempt": "earned"}}))
-        self.assertEqual(self.course.missing_prerequisites("test.mixed", set()), ("test.intro",))
 
-    def test_all_parent_needs_every_component_and_cannot_be_forged_by_parent_presence(self):
-        self.assertFalse(self.course.is_complete("test.foundation", {"test.foundation"}))
-        self.assertFalse(self.course.is_complete("test.foundation", {"test.intro"}))
-        self.assertTrue(self.course.is_complete("test.foundation", {"test.intro", "test.mixed"}))
+
+    def test_only_bounded_assessments_remain_and_global_graph_is_rejected(self):
+        self.assertEqual(set(self.course.gates), {"test.intro", "test.mixed", "test.ordered"})
+        root = self.mutate(lambda raw: raw["gates"][1].update(prerequisites=["test.intro"]))
+        with self.assertRaisesRegex(ValueError, "Independent educational"):
+            Catalog(root)
+        root = self.mutate(lambda raw: raw["gates"][0].update(format="all", components=["test.mixed"]))
+        with self.assertRaises(ValueError):
+            Catalog(root)
 
     def test_public_question_projection_contains_no_keys_or_feedback(self):
         public = self.course.public_questions("test.intro", "a")
@@ -104,13 +101,6 @@ class CourseCatalogTests(unittest.TestCase):
             with self.subTest(answer=answer), self.assertRaises(ValueError):
                 self.course.validate_answers("test.mixed", "a", {"q2": answer}, complete=False)
 
-    def test_unknown_references_and_cycles_are_rejected(self):
-        root = self.mutate(lambda raw: raw["gates"][1].update(prerequisites=["missing.gate"]))
-        with self.assertRaisesRegex(ValueError, "unknown prerequisite"):
-            Catalog(root)
-        root = self.mutate(lambda raw: raw["gates"][0].update(prerequisites=["test.foundation"]))
-        with self.assertRaisesRegex(ValueError, "cycle"):
-            Catalog(root)
 
     def test_duplicate_ids_and_ambiguous_yaml_are_rejected(self):
         root = self.mutate(lambda raw: raw["gates"].append(copy.deepcopy(raw["gates"][0])))
@@ -121,15 +111,6 @@ class CourseCatalogTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "duplicate YAML"):
             Catalog(root)
 
-    def test_duplicate_question_alternative_and_component_ids_are_rejected(self):
-        edits = [lambda raw: raw["gates"][0]["alternatives"].append(
-                    copy.deepcopy(raw["gates"][0]["alternatives"][0])),
-                 lambda raw: raw["gates"][0]["alternatives"][0]["questions"].append(
-                    copy.deepcopy(raw["gates"][0]["alternatives"][0]["questions"][0])),
-                 lambda raw: raw["gates"][3].update(components=["test.intro", "test.intro"])]
-        for edit in edits:
-            with self.subTest(edit=edit), self.assertRaises(ValueError):
-                Catalog(self.mutate(edit))
 
     def test_theory_cannot_reference_a_lab_and_practical_cannot_hide_questions(self):
         root = self.mutate(lambda raw: raw["gates"][0]["alternatives"][0].update(challenge="test.mixed-copy"))
@@ -155,7 +136,7 @@ class CourseCatalogTests(unittest.TestCase):
         root = self.mutate(lambda raw: raw["gates"][0]["alternatives"][0]["questions"][0]
                            .update(answers=["1"]))
         self.assertNotEqual(digest, Catalog(root).course.digest("test.intro", "a"))
-        root = self.mutate(lambda raw: raw["gates"][1].update(prerequisites=[]))
+        root = self.mutate(lambda raw: raw["gates"][1].update(version=2))
         self.assertNotEqual(self.course.digest("test.mixed", "a"),
                             Catalog(root).course.digest("test.mixed", "a"))
         path = root / "challenges/mixed-copy.yaml"

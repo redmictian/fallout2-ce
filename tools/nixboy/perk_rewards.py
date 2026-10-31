@@ -1,84 +1,68 @@
-"""Typed passive-perk receipt adapter for the existing bridge-owned manager."""
-import secrets
-import time
-
+"""One current-completion passive-perk delivery, never an achievement ledger."""
 from protocol import ProtocolError, validate_perk_claims
 
 
 class PerkRewards:
-    def _perk_records(self, profile):
-        return profile.setdefault("perk_receipts", {})
-
     def _perk_eligibility(self, identity, reward):
         if reward is None:
             return
         values = self.contexts.get(identity, {})
-        key = f"{reward['perk']}:{reward['target_rank']}"
-        if values.get("training.version") != 5:
-            raise ValueError("This test reward needs the v5 perk-capable review build")
-        if values.get("perk.training.enabled") != 1:
-            raise ValueError("The passive perk training module must be enabled in this review build")
-        if key not in self._perk_records(self._profile(identity)):
-            if values.get("perk.toughness") != 1 or values.get("perk.toughness.max", 0) < 2:
-                raise ValueError("Own inert Toughness rank 1 before starting this test-only reward assessment")
+        if values.get("training.version") != 5 or values.get("perk.training.enabled") != 1:
+            raise ValueError("The passive perk-capable build must be enabled")
+        if values.get("perk.toughness") != 1 or values.get("perk.toughness.max", 0) < 2:
+            raise ValueError("Own inert Toughness rank 1 before this test-only reward assessment")
 
     def _earn_perk(self, identity, gate, attempt):
         if gate.reward is None:
             return False
         self._perk_eligibility(identity, gate.reward)
         profile = self._profile(identity)
-        records = self._perk_records(profile)
-        key = f"{gate.reward['perk']}:{gate.reward['target_rank']}"
-        if key in records:
-            return False
-        used = {entry["receipt"] for entry in profile["receipts"].values()}
-        used.update(entry["receipt"] for entry in records.values())
-        receipt = secrets.token_hex(16)
-        while receipt in used:
-            receipt = secrets.token_hex(16)
-        records[key] = {"profile": identity, "receipt": receipt, "gate": gate.id,
-                        "attempt": attempt["id"], "generation": attempt["generation"],
-                        "content": attempt["course_digest"], "at": time.time(), "test_only": True}
-        return True  # The caller fsyncs this with educational completion before delivery.
+        self._pending_guard(profile)
+        profile["pending"] = {"kind": "perk", "profile": identity,
+            "perk": gate.reward["perk"], "rank": gate.reward["target_rank"],
+            "receipt": self._new_receipt(identity), "accepted": False}
+        return True
 
     def observe_perks(self, identity, claimed):
         validate_perk_claims(claimed)
         with self.lock:
-            profile = self._profile(identity)
-            records = self._perk_records(profile)
-            skill_receipts = {entry["receipt"] for entry in profile["receipts"].values()}
-            for key, receipt in claimed.items():
-                if receipt in skill_receipts:
-                    raise ProtocolError("receipt reused across skill and perk rewards")
-                if key in records and records[key]["receipt"] != receipt:
-                    raise ProtocolError("saved perk receipt conflicts with earned state")
-                if key not in records:
-                    records[key] = {"profile": identity, "receipt": receipt, "recovered_from_game": True}
+            if set(claimed.values()) & {item["receipt"] for item in self.game_claims.get(identity, {}).values()}:
+                raise ProtocolError("receipt reused across character reward types")
+            self.game_perk_claims[identity] = dict(claimed)
+            pending = self._profile(identity).get("pending")
+            if pending and pending["kind"] == "perk":
+                key = f"{pending['perk']}:{pending['rank']}"
+                if key in claimed:
+                    if claimed[key] != pending["receipt"]:
+                        raise ProtocolError("current perk completion conflicts with character claim")
+                    pending["accepted"] = True
             self._save()
 
     def pending_perks(self, identity, claimed):
         validate_perk_claims(claimed)
         with self.lock:
-            result = []
-            for key, record in self._perk_records(self._profile(identity)).items():
-                if record["profile"] != identity:
-                    raise ProtocolError("perk receipt is bound to a different profile")
-                if key in claimed:
-                    if claimed[key] != record["receipt"]:
-                        raise ProtocolError("game perk claim conflicts with earned receipt")
-                    continue
-                perk, rank = map(int, key.split(":"))
-                result.append((identity, perk, rank, record["receipt"]))
-            return result
+            pending = self._profile(identity).get("pending")
+            if not pending or pending["kind"] != "perk" or pending["accepted"]:
+                return []
+            key = f"{pending['perk']}:{pending['rank']}"
+            if key in claimed:
+                if claimed[key] != pending["receipt"]:
+                    raise ProtocolError("current perk completion conflicts with character claim")
+                pending["accepted"] = True
+                self._save()
+                return []
+            return [(identity, pending["perk"], pending["rank"], pending["receipt"])]
 
     def acknowledge_perk(self, identity, profile, perk, rank, receipt, accepted):
         if profile != identity:
-            raise ProtocolError("perk acknowledgment profile mismatch")
+            raise ProtocolError("perk acknowledgment runtime mismatch")
         validate_perk_claims({f"{perk}:{rank}": receipt})
         with self.lock:
-            entry = self._perk_records(self._profile(identity)).get(f"{perk}:{rank}")
-            if entry is None or entry["receipt"] != receipt or entry["profile"] != identity:
-                raise ProtocolError("perk acknowledgment is not an earned receipt")
+            pending = self._profile(identity).get("pending")
+            expected = {"kind": "perk", "profile": identity, "perk": perk, "rank": rank, "receipt": receipt}
+            if not pending or any(pending.get(key) != value for key, value in expected.items()):
+                raise ProtocolError("perk acknowledgment does not match the current completion")
             if accepted:
-                entry["acknowledged"] = True
+                pending["accepted"] = True
+                self.game_perk_claims.setdefault(identity, {})[f"{perk}:{rank}"] = receipt
                 self._save()
