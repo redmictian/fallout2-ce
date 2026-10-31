@@ -1,0 +1,56 @@
+<div class="course-lesson"><div class="doc"><div id="main" class="lesson-main"><h1 id="nginx-preparation-and-retained-apache-comparison">nginx preparation and retained Apache comparison</h1>
+<p>29 October 2026, SA67-N1. This is the preparation <strong>outline and practice contract</strong> needed before the fully specified <span class="reference">SA67 path (reference outside this reading demo)</span>. It does not claim that a complete web-server lesson set was authored in this run. Equivalent existing capability is accepted. nginx is now the primary taught/assessed server; PostgreSQL, its transaction/administration/backup route and the real PostgREST ensemble remain.</p>
+<h2 id="required-nginx-route-before-assessment">Required nginx route before assessment</h2>
+<div class="table-wrap" tabindex="0" role="region" aria-label="Data comparison"><table>
+<thead>
+<tr>
+<th>Supporting unit</th>
+<th>Mechanism to explain</th>
+<th>Worked observation and supported practice</th>
+<th>What the learner must be ready to do</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>CF/SV web entry</td>
+<td>A listening endpoint chooses candidate servers; Host chooses among matching server names; unmatched names use that endpoint&#39;s default server</td>
+<td>Trace two differently named static hosts to distinct exact bodies using explicit endpoint/Host. Change Host while keeping address fixed; predict the default-host response.</td>
+<td>Select the intended server from actual included configuration and genuine requests, not a process name or front page.</td>
+</tr>
+<tr>
+<td>CF configuration contexts</td>
+<td>main → http → server → location; file inclusion occurs in a context, not an independent namespace</td>
+<td>Annotate a small <code>nginx -T</code> dump with its includes. Predict an invalid-context error and compare <code>-t</code>, <code>-T</code>, apply and fresh request evidence.</td>
+<td>Distinguish candidate validation/dump from activated worker behavior. Teach reload&#39;s master/worker transition and old connections.</td>
+</tr>
+<tr>
+<td>URL/filesystem mapping</td>
+<td>root appends URI; a prefix alias replaces the matched prefix; exact/longest prefix/regex selection and <code>^~</code> have documented order</td>
+<td>Use unrelated <code>/manual/</code> and <code>/downloads/</code> data, predict concrete paths; contrast a slash-bounded prefix with a near-prefix URL. No rewrites or application handlers needed.</td>
+<td>Construct the path intentionally and preserve a neighboring host/location. Do not mechanically substitute Apache Directory rules.</td>
+</tr>
+<tr>
+<td>Access and listing</td>
+<td>Ordered first-match allow/deny; local access directives replace inherited access lists; directory listing and index resolution are separate from file readability</td>
+<td>Two real clients read the same OS-readable file; reverse two rules, then introduce a local override of a parent list. Observe an actual denial rather than network refusal. Compare autoindex with/without a real index file.</td>
+<td>Build a narrowly scoped source policy and test positive/negative behavior from the actual source identities.</td>
+</tr>
+<tr>
+<td>Reversible change</td>
+<td>Stored text, candidate checks and live policy are separate states</td>
+<td>On a different <code>/exports/</code> resource, save current config, publish a bounded permission change, restore/test/apply the original and prove its old behavior; then reapply.</td>
+<td>Demonstrate rollback, not just create a backup. Understand this as policy change, not package migration.</td>
+</tr>
+<tr>
+<td>Native transfer/recovery</td>
+<td>Included server blocks can be portable while main paths, user/group and service context differ</td>
+<td>Compare provided Debian and RHEL native excerpts, test traversal as the actual worker, enable startup, observe genuine boot and restore a current-stage lost include. Use a different content tree and defect from SA67.</td>
+<td>Transfer behavior without replacing the target&#39;s entire main config or weakening access; distinguish restart from boot.</td>
+</tr>
+</tbody></table></div>
+<p>Supply installed matching manuals and bounded reference diagrams/text as authoring prerequisites before offering SA67. No prerequisite requires solving another alternative. The canonical prepared-state approach remains: a later stage starts with the expected prior policy supplied. Full source traceability and worked examples must accompany future lesson production, which is outside this focused run.</p>
+<h2 id="brief-apache-comparison-retained">Brief Apache comparison retained</h2>
+<p>Keep one short planned comparison article in the existing CF/SV material, roughly20–30min reading plus10–15min supported exploration. Use one Apache2.4 VirtualHost/DocumentRoot/Directory/Require example beside an nginx server/root/location/allow-deny case. Compare request/path scope, per-directory versus URL-location policy, native loaded configuration and unprivileged worker access. Explicitly explain that no directive-by-directive conversion rule exists. Use the existing synthetic datasets after checking each server&#39;s semantics.</p>
+<p>One existing low-scope service/configuration challenge may offer Apache as a small server-specific alternative where its essential practical demands are comparable; it must receive normal preparation and full positive/negative evidence before acceptance. Do not create an additional administration route or a new counted pool here. The former three-stage Apache SA67 and legacy2.2 syntax translation are preserved as <strong>historical design/source evidence</strong>, not current required objectives or an assessment route. Software-version migration remains in PK&#39;s real maintenance objectives.</p>
+<h2 id="source-and-technology-boundary">Source and technology boundary</h2>
+<p>Use primary nginx request-processing, core location/root/alias, access, autoindex, command-line and control documentation; Debian&#39;s native package files; RHEL 9&#39;s nginx guide. The ledger records exact inspected revisions and tests. The prepared RHEL include/account facts in SA67 are explicitly supplied facts, not universal package defaults. Required two-source routing, worker credentials, SELinux context, manager/reboot and recovery capabilities must be matched to technology separately. No architecture, image, validator, integration or custom application is implemented.</p>
+</div></div></div>

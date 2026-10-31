@@ -1,8 +1,4 @@
-"""Optional educational methods for the existing AttemptManager.
-
-No game rewards or new manager lifetime: locking, atomic storage, environments,
-profile identities and trusted operations remain owned by AttemptManager.
-"""
+"""Educational methods using the existing manager, storage and typed receipts."""
 import json
 import secrets
 import threading
@@ -55,6 +51,7 @@ class CourseProgress:
                 raise ValueError("This parent completes only when ALL its components complete")
             if not all(self._course_complete(profile, req) for req in gate.prerequisites):
                 raise ValueError("Educational prerequisites are not complete; game skill cannot bypass them")
+            self._perk_eligibility(identity, gate.reward)
             education = self._education(profile)
             alternatives = [alt.id for alt in gate.alternatives]
             pool = self._ordered_pool(education, gate_id, alternatives)
@@ -74,6 +71,10 @@ class CourseProgress:
                        "reward_points": 0, "params": self.catalog.instantiate(spec.id, seed) if spec else {},
                        "mode": "course", "status": "selected", "updated": time.time(),
                        "answers": {}, "conceptual": None, "practical": None, "checkpoints": []}
+            if gate.project:
+                from nginx_env import preparation_identity
+                attempt["project"] = dict(gate.project)
+                attempt["preparation_identity"] = preparation_identity(gate.project["preparation"])
             profile["attempt"] = attempt
             self._save()
             return bounded_evidence(attempt, 65536)
@@ -226,6 +227,10 @@ class CourseProgress:
                 environment = self.environments.get(identity)
                 if fmt != "theory" and not environment:
                     return {"status": "error", "feedback": "Resume the practical environment before checking."}
+                if attempt.get("preparation_identity") and getattr(environment, "preparation_identity", None) != attempt["preparation_identity"]:
+                    self._provider_stopped(attempt)
+                    self._save()
+                    return {"status": "error", "facility_failure": True, "feedback": "Canonical project preparation identity mismatch; reissue."}
                 cancel = cancel or threading.Event()
                 self.cancel_events[identity] = cancel
             try:
@@ -276,7 +281,17 @@ class CourseProgress:
                           "exposed_retry": attempt["exposed_retry"],
                           "practical": attempt["practical"], "conceptual": conceptual,
                           "checkpoints": attempt["checkpoints"]}
+                if attempt.get("project"):
+                    record.update(project=attempt["project"], preparation_identity=attempt["preparation_identity"])
                 record = bounded_evidence(record, 24576)
+                before_completion = json.loads(json.dumps(profile))
+                perk_rewarded = False
+                if passed:
+                    try:
+                        perk_rewarded = self._earn_perk(identity, self._course().get(attempt["course_gate"]), attempt)
+                    except ValueError as exc:
+                        self._save()
+                        return {"status": "error", "feedback": str(exc) + "; attempt preserved without completion/reward."}
                 education["history"] = (education["history"] + [record])[-32:]
                 seen = education["seen"].setdefault(attempt["course_gate"], [])
                 if attempt["alternative"] not in seen:
@@ -288,8 +303,15 @@ class CourseProgress:
                 pool.remove(alternative)
                 pool.append(alternative)
                 profile["attempt"] = None
-                self._save()
+                try:
+                    self._save()
+                except Exception:
+                    # A failed durable write must not expose a merely in-memory
+                    # reward to the session's periodic delivery/replay path.
+                    profile.clear()
+                    profile.update(before_completion)
+                    raise
             self._remove_environment(identity)
-            return {"status": "passed" if passed else "incomplete", "rewarded": False, "educational": True,
-                    "feedback": "Educational gate complete; no game reward." if passed else
+            return {"status": "passed" if passed else "incomplete", "rewarded": False, "perk_rewarded": perk_rewarded, "educational": True,
+                    "feedback": ("Educational gate complete; test-only passive perk receipt earned." if perk_rewarded else "Educational gate complete; no new game reward.") if passed else
                     "Required practical AND conceptual criteria did not both pass. Use T for explicit reassessment."}

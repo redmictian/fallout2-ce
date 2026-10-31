@@ -51,6 +51,7 @@ class Article:
     subject: str
     file: str
     html: str
+    stylesheets: tuple = ()
 
 
 def _text(value, maximum=200):
@@ -109,6 +110,7 @@ class WikiCatalog:
             raise ValueError("wiki index needs schema 1 and between one and 128 subjects")
         self.subjects = {}
         self.articles = {}
+        self._checked_stylesheets = set()
         asset_paths = {}
         identifiers = set()
         references = {}
@@ -121,7 +123,8 @@ class WikiCatalog:
             identifiers.add(subject["id"])
             article_ids = []
             for article in subject["articles"]:
-                if not isinstance(article, dict) or set(article) != {"id", "title", "file"} \
+                if not isinstance(article, dict) or not {"id", "title", "file"} <= set(article) \
+                        or set(article) - {"id", "title", "file", "stylesheets"} \
                         or not _identifier(article["id"]) or article["id"] in identifiers \
                         or not _text(article["title"]):
                     raise ValueError("invalid or duplicate wiki article identity/title")
@@ -129,13 +132,21 @@ class WikiCatalog:
                 if path.suffix.lower() not in {".html", ".htm"}:
                     raise ValueError(f"wiki article must be an HTML file: {article['id']}")
                 html = _read_text(path, MAX_ARTICLE_BYTES)
+                stylesheets = article.get("stylesheets", [])
+                if not isinstance(stylesheets, list) or len(stylesheets) > 8 \
+                        or any(not _text(item, 1024) for item in stylesheets) \
+                        or len(set(stylesheets)) != len(stylesheets):
+                    raise ValueError("invalid local wiki stylesheets")
+                for stylesheet in stylesheets:
+                    self._stylesheet(self._local_file(stylesheet), asset_paths, set())
                 parser = _References()
                 parser.feed(html)
                 parser.close()
                 for source in parser.images:
                     asset = self._image_file(source, (self.root / article["file"]).parent)
                     asset_paths[asset] = None
-                spec = Article(article["id"], article["title"], subject["id"], article["file"], html)
+                spec = Article(article["id"], article["title"], subject["id"], article["file"], html,
+                               tuple(stylesheets))
                 self.articles[spec.id] = spec
                 references[spec.id] = parser.links
                 article_ids.append(spec.id)
@@ -186,6 +197,42 @@ class WikiCatalog:
         if path.stat().st_size > MAX_ASSET_BYTES:
             raise ValueError(f"wiki asset exceeds {MAX_ASSET_BYTES} bytes: {source}")
         return path
+
+    def _stylesheet(self, path, assets, active):
+        """Follow reviewed local CSS imports/url assets; never fetch resources.
+
+        This is a bounded dependency walker, not an arbitrary CSS sanitizer.
+        Escaped/remote resource spellings are deliberately outside its contract.
+        Original relative paths are retained in export, so nested URLs still work.
+        """
+        if path.suffix.lower() != ".css":
+            raise ValueError("wiki stylesheet must be a local CSS file")
+        if path in active:
+            raise ValueError("cyclic wiki stylesheet import")
+        if path in self._checked_stylesheets:
+            return
+        if len(assets) >= 256:
+            raise ValueError("wiki stylesheet asset graph exceeds 256 files")
+        css = _read_text(path, MAX_ARTICLE_BYTES)
+        assets[path] = None
+        active.add(path)
+        # Comments cannot create dependencies. All url(...) references and
+        # quoted @imports are then checked against the same root/size policy.
+        stripped = re.sub(r"/\*[\s\S]*?\*/", "", css)
+        sources = re.findall(r"url\(\s*['\"]?([^)'\"]+?)['\"]?\s*\)", stripped, re.I)
+        sources += re.findall(r"@import\s+['\"]([^'\"]+)['\"]", stripped, re.I)
+        for source in sources:
+            asset = self._image_file(source.strip(), path.parent)
+            if asset.suffix.lower() == ".css":
+                self._stylesheet(asset, assets, active)
+            else:
+                if asset.suffix.lower() not in {".svg", ".png", ".jpg", ".jpeg", ".webp"}:
+                    raise ValueError("unsupported local wiki CSS asset")
+                assets[asset] = None
+                if len(assets) > 256:
+                    raise ValueError("wiki stylesheet asset graph exceeds 256 files")
+        active.remove(path)
+        self._checked_stylesheets.add(path)
 
     def get(self, identifier):
         try:

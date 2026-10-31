@@ -87,6 +87,37 @@ selected alternatives survive pool growth. Materially changed unfinished evidenc
 must be reissued; an earned educational completion is not silently erased by a
 content edit. Course rewards are separate: this integration catalog awards none.
 
+## Canonical project stages and the delivery pilot
+
+The separate `content-delivery-test/` catalog exercises two native nginx stages.
+A gate may add `project: {id: delivery.nginx, stage: 1, preparation: nginx-policy-v1}`.
+Stage numbers are unique/contiguous from one, and every later stage must explicitly
+require the previous gate. Every alternative must name exactly that preparation
+in its fixed challenge parameters. Preparation identities bind the frozen image
+and reviewed preparation/probe code; actual issuance checks the expected canonical
+fault before handoff. A new stage gets a new attempt/environment, not a previous
+learner disk or snapshot. Reset changes the current generation and clears its
+unfinished evidence while keeping earlier completion.
+
+`qemu-nginx` uses a fixed server and two real client namespaces. Its declared
+`checkpoints: [reload]` requires the actual native reload; restarting the server
+does not satisfy the same-master/worker-transition observer. See [NGINX.md](NGINX.md)
+for setup, client routes, protected files and canonical preparations.
+
+Only this explicit pilot reward is accepted:
+
+```yaml
+reward: {type: perk, perk: 12, target_rank: 2, test_only: true}
+```
+
+It requires the v5-capable perk-enabled build and owned inert Toughness rank one;
+it does not unlock ownership. The receipt is persisted with successful educational
+completion before delivery. Existing course catalogs with no reward remain
+reward-free, and legacy skill bands/receipts stay independent. See
+[PERK_REWARDS.md](PERK_REWARDS.md) for typed delivery, duplicate handling, save
+compatibility and older-save reconciliation. Permanent mappings and other perk
+effects are deliberately not defined by this pilot.
+
 ## Runtime and retry rules
 
 In the terminal hub, `C` lists educational gates; choose a gate number. `Q` opens
@@ -119,8 +150,9 @@ evidence. No endless pool, forced wait or starvation is required. `F7` refuses
 to reset already committed questions into editable drafts: use `T` instead.
 Before commitment, reset restores canonical preparation; abandonment is explicit.
 
-Course completions do not issue game rewards. Existing legacy skill receipts,
-acknowledgment and save reconciliation remain separate and unchanged. A failed
+The assessment-test catalog issues no game rewards. The separate delivery pilot
+may explicitly earn its test-only passive perk receipt as described below.
+Existing legacy skill receipts and reconciliation stay separate. A failed
 facility is not learner noncompletion: provider loss requires explicit reissue,
 or `T` when a questionnaire was already committed. Ordinary assignments do not
 silently expire during reading/breaks. Attachment-owned shell commands may stop
@@ -132,7 +164,8 @@ Educational records use nested `education.version: 1` inside the existing
 bridge snapshot version 4. The bridge persists records atomically in
 `STATE_DIRECTORY/training.json`, bound to the existing character profile.
 Completions, drafts/commitments, alternative exposure and compact trusted evidence
-live outside disposable containers. Game wire/save versions are unchanged.
+live outside disposable containers. This educational subtree introduces no game
+save fields; the separate typed-perk adapter has explicit v5 compatibility below.
 
 Loading an older game save with the **same profile** does not erase earned
 educational progress in the bridge. Existing game-save skill claims cannot

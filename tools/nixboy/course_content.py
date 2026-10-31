@@ -66,6 +66,8 @@ class Gate:
     alternatives: tuple[Alternative, ...]
     components: tuple[str, ...] = ()
     version: int = 1
+    project: dict | None = None
+    reward: dict | None = None
 
 
 def normalize_answer(question, value):
@@ -133,7 +135,7 @@ class CourseCatalog:
 
     def _gate(self, data):
         required = {"id", "title", "format", "prerequisites"}
-        optional = {"version", "components", "alternatives"}
+        optional = {"version", "components", "alternatives", "project", "reward"}
         if not isinstance(data, dict) or not required <= set(data) or set(data) - required - optional \
                 or not _identifier(data["id"]) or not _text(data["title"], 200) \
                 or not isinstance(data["format"], str) \
@@ -153,8 +155,22 @@ class CourseCatalog:
         parsed = tuple(self._alternative(item, data["format"]) for item in alternatives)
         if len({item.id for item in parsed}) != len(parsed):
             raise ValueError("duplicate alternative id within gate")
+        project = data.get("project")
+        if project is not None:
+            if not isinstance(project, dict) or set(project) != {"id", "stage", "preparation"} \
+                    or not _identifier(project["id"]) or not _identifier(project["preparation"]) \
+                    or type(project["stage"]) is not int or not 1 <= project["stage"] <= 8 or data["format"] == "all":
+                raise ValueError("invalid canonical project stage")
+            for alternative in parsed:
+                if alternative.challenge is None or self.challenges.get(alternative.challenge).parameters.get("preparation") != [project["preparation"]]:
+                    raise ValueError("stage alternatives must name exactly their declared canonical preparation")
+        reward = data.get("reward")
+        if reward is not None and (not isinstance(reward, dict) or
+                reward != {"type": "perk", "perk": 12, "target_rank": 2, "test_only": True} or
+                type(reward.get("perk")) is not int or type(reward.get("target_rank")) is not int or reward.get("test_only") is not True or data["format"] == "all"):
+            raise ValueError("only the explicit test-only passive Toughness rank-2 reward is supported")
         return Gate(data["id"], data["title"], data["format"], tuple(data["prerequisites"]),
-                    parsed, tuple(components), data.get("version", 1))
+                    parsed, tuple(components), data.get("version", 1), project, reward)
 
     def _alternative(self, data, gate_format):
         required = {"id", "title", "instructions"}
@@ -196,8 +212,8 @@ class CourseCatalog:
             raise ValueError("invalid checkpoint sequence")
         # Only implemented checkpoint observers can be bound. Adding another
         # sequence requires an explicit trusted observer, not authored code.
-        if checkpoints and (self.challenges.get(challenge).kind != "checkpoint-policy"
-                            or checkpoints != ["rollback", "reapply"]):
+        allowed = {"checkpoint-policy": ["rollback", "reapply"], "qemu-nginx": ["reload"]}
+        if checkpoints and allowed.get(self.challenges.get(challenge).kind) != checkpoints:
             raise ValueError("unsupported trusted checkpoint sequence")
         return Alternative(data["id"], data["title"], data["instructions"], challenge, parsed,
                            tuple(checkpoints))
@@ -256,6 +272,19 @@ class CourseCatalog:
 
         for identifier in self.gates:
             visit(identifier)
+        projects = {}
+        for gate in self.gates.values():
+            if gate.project:
+                stages = projects.setdefault(gate.project["id"], {})
+                if gate.project["stage"] in stages:
+                    raise ValueError("duplicate project stage number")
+                stages[gate.project["stage"]] = gate
+        for stages in projects.values():
+            if sorted(stages) != list(range(1, len(stages) + 1)):
+                raise ValueError("project stages must be contiguous from one")
+            for number, gate in stages.items():
+                if number > 1 and stages[number-1].id not in gate.prerequisites:
+                    raise ValueError("project stages require explicit previous-stage completion")
 
     def get(self, identifier):
         try:
@@ -294,6 +323,10 @@ class CourseCatalog:
             # this selected assessment when the retained pool grows.
             related[identifier] = {"id": item.id, "version": item.version, "format": item.format,
                                    "prerequisites": item.prerequisites, "components": item.components}
+            if item.project is not None:
+                related[identifier]["project"] = item.project
+            if item.reward is not None:
+                related[identifier]["reward"] = item.reward
             for target in item.prerequisites + item.components:
                 include(target)
 

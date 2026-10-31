@@ -106,8 +106,9 @@ def _link(kind, identifier, label):
     return f'<a href="{kind}-{identifier}.html">{escape(label)}</a>'
 
 
-def _page(title, body, parent="index.html", subject=None):
+def _page(title, body, parent="index.html", subject=None, stylesheets=()):
     subject_link = "" if subject is None else " " + _link("subject", subject.id, subject.title)
+    styles = "".join(f'<link rel="stylesheet" href="{escape(path, quote=True)}">\n' for path in stylesheets)
     return f'''<!doctype html>
 <html lang="en">
 <head>
@@ -116,7 +117,7 @@ def _page(title, body, parent="index.html", subject=None):
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{escape(title)} | nix-boy wiki</title>
 <link rel="stylesheet" href="wiki.css">
-<script src="navigation.js" defer></script>
+{styles}<script src="navigation.js" defer></script>
 </head>
 <body>
 <header><a href="index.html">nix-boy</a><span>Linux field wiki</span></header>
@@ -224,7 +225,9 @@ def export_wiki(content_dir, output):
         raise ValueError("output must be a new or empty directory")
 
     pages = {}
-    assets = {}
+    # CSS and its reviewed local dependency graph retain their hierarchy. Article
+    # images join this same allowlist; nothing else in the content root is copied.
+    assets = {"wiki-assets/" + path.relative_to(wiki.root).as_posix(): path for path in wiki.asset_paths}
     cards = []
     for subject in wiki.subjects.values():
         count = len(subject.articles)
@@ -252,7 +255,8 @@ def export_wiki(content_dir, output):
             f'<p class="eyebrow">{escape(subject.title)}</p><h1>{escape(article.title)}</h1>'
             '<article>' + "".join(fragment.parts) + '</article>'
             '<section class="related"><h2>Related challenges</h2>' + related_html + '</section>',
-            f"subject-{subject.id}.html", subject)
+            f"subject-{subject.id}.html", subject,
+            tuple(quote("wiki-assets/" + path, safe="/") for path in article.stylesheets))
 
     for challenge in challenges.challenges.values():
         readings = "".join(f'<li>{_link("article", identifier, wiki.get(identifier).title)}</li>'

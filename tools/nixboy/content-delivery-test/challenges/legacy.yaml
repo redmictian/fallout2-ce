@@ -1,0 +1,11 @@
+id: delivery.legacy-copy
+version: 1
+skill: 12
+level: 62000
+title: Test-only direct-container copy regression
+kind: copy-file
+parameters:
+  name: [delivery-legacy]
+instructions: >-
+  TEST ONLY: copy ~/lab/incoming/{name}.txt to ~/lab/delivery/{name}.txt,
+  preserving the source. This separate legacy mapping awards one Science point.

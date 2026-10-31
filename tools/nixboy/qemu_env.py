@@ -61,10 +61,12 @@ def cleanup_qemu_owned(client, state_dir):
 
 class QemuEnvironment:
     persistent = True
+    kind = QEMU_KIND
+    load_manifest = staticmethod(manifest)
 
     def __init__(self, client, spec, attempt_id, seed, generation, state_dir, params=None, runner=None,
                  content_root=None, training_label=""):
-        if spec.kind != QEMU_KIND:
+        if spec.kind != self.kind:
             raise ValueError("unsupported guest kind")
         if not isinstance(attempt_id, str) or not re.fullmatch(r"[A-Za-z0-9_.-]{1,128}", attempt_id):
             raise ValueError("invalid attempt identifier")
@@ -79,7 +81,7 @@ class QemuEnvironment:
         self.evidence = self.state_dir / "qemu-evidence" / attempt_id / str(generation)
         self.evidence.mkdir(parents=True, exist_ok=True)
         self.image, self.images_volume = settings()
-        self.manifest = manifest()
+        self.manifest = self.load_manifest()
         self.expected = self.manifest["expected"]
         choices = getattr(spec, "parameters", {})
         if params is None:
@@ -240,34 +242,41 @@ class QemuEnvironment:
         except Exception as exc:
             return {"state": "failure", "feedback": "Guest facility unavailable: " + str(exc)[:250]}
 
-    def start(self, cancel=None, progress=None):
-        self._cancelled(cancel)
+    def _launch_runner(self, progress=None, network="none"):
+        """Shared confined machine launch; guest readiness belongs to its profile."""
+        if network not in ("none", "bridge"):
+            raise ValueError("unsupported fixed runner network")
         progress = progress or (lambda value: None)
         labels = {TRAINING_LABEL: "1", OWNER_LABEL: self.owner, ATTEMPT_LABEL: self.attempt_id,
                   ROLE_LABEL: "runner", "org.fallout2-ce.nixboy.generation": str(self.generation)}
+        progress("Checking pinned guest artifacts and creating disposable overlays...")
+        self.client.api.inspect_volume(self.images_volume)
+        self.client.api.inspect_image(self.image)
+        v = self.client.api.create_volume(self.volume, labels={**labels, ROLE_LABEL: "work"})
+        if v.get("Labels", {}).get(OWNER_LABEL) != self.owner:
+            raise RuntimeError("guest work-volume ownership collision")
+        config = {"base": "/images/" + self.manifest["root"], "hashes": self.manifest["hashes"],
+                  "memory": self.manifest["memory_mib"], "cpus": self.manifest["cpus"],
+                  "cpu": self.manifest["cpu"], "disks": self.manifest["disks"]}
+        host = self.client.api.create_host_config(
+            binds={self.images_volume: {"bind": "/images", "mode": "ro"},
+                   self.volume: {"bind": "/work", "mode": "rw"},
+                   str(self.evidence): {"bind": "/evidence", "mode": "rw"}},
+            network_mode=network, cap_drop=["ALL"], security_opt=["no-new-privileges:true"],
+            read_only=True, mem_limit=2 * 1024**3, memswap_limit=2 * 1024**3,
+            nano_cpus=3 * 10**9, pids_limit=256, tmpfs={"/tmp": "mode=1777"})
+        created = self.client.api.create_container(self.image, name=self.name, user="1000:1000",
+            labels=labels, environment={"VM_CONFIG": json.dumps(config)}, host_config=host)
+        self.container_id = created["Id"]
+        self.client.api.start(self.container_id)
+        self._created_at = time.monotonic()
+        self._write("runner-inspect.json", self.client.api.inspect_container(self.container_id))
+
+    def start(self, cancel=None, progress=None):
+        self._cancelled(cancel)
+        progress = progress or (lambda value: None)
         try:
-            progress("Checking pinned guest artifacts and creating disposable overlays...")
-            self.client.api.inspect_volume(self.images_volume)  # Never create an empty substitute.
-            self.client.api.inspect_image(self.image)
-            v = self.client.api.create_volume(self.volume, labels={**labels, ROLE_LABEL: "work"})
-            if v.get("Labels", {}).get(OWNER_LABEL) != self.owner:
-                raise RuntimeError("guest work-volume ownership collision")
-            config = {"base": "/images/" + self.manifest["root"], "hashes": self.manifest["hashes"],
-                      "memory": self.manifest["memory_mib"], "cpus": self.manifest["cpus"],
-                      "cpu": self.manifest["cpu"], "disks": self.manifest["disks"]}
-            host = self.client.api.create_host_config(
-                binds={self.images_volume: {"bind": "/images", "mode": "ro"},
-                       self.volume: {"bind": "/work", "mode": "rw"},
-                       str(self.evidence): {"bind": "/evidence", "mode": "rw"}},
-                network_mode="none", cap_drop=["ALL"], security_opt=["no-new-privileges:true"],
-                read_only=True, mem_limit=2 * 1024**3, memswap_limit=2 * 1024**3,
-                nano_cpus=3 * 10**9, pids_limit=256, tmpfs={"/tmp": "mode=1777"})
-            created = self.client.api.create_container(self.image, name=self.name, user="1000:1000",
-                labels=labels, environment={"VM_CONFIG": json.dumps(config)}, host_config=host)
-            self.container_id = created["Id"]
-            self.client.api.start(self.container_id)
-            self._created_at = time.monotonic()
-            self._write("runner-inspect.json", self.client.api.inspect_container(self.container_id))
+            self._launch_runner(progress)
             progress("Runner started. Booting the guest kernel into the intended mount recovery...")
             deadline = time.monotonic() + 300
             while time.monotonic() < deadline:

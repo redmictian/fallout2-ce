@@ -3,6 +3,7 @@
 #include "../src/perk.cc"
 #include "perk_training.h"
 #include "debug_perks.h"
+#include "nixboy_perk_reward.h"
 
 #include <array>
 #include <cstdlib>
@@ -107,13 +108,43 @@ int main()
         require(affected == 0 && perkTrainingSaveRelease() == 'R', "vanilla save identity when disabled");
 #endif
         perksReset(); bonus = {}; pc = {};
+        nixboy::TrainingState unownedLearning;
+        require(unownedLearning.ensureProfile(), "unowned test profile");
+        nixboy::TrainingReceipt unownedReceipt {}; unownedReceipt.back() = 18;
+        require(nixboy::applyPerkTrainingReward(unownedLearning, unownedLearning.profile(), PERK_TOUGHNESS, 2, unownedReceipt)
+            == nixboy::PerkClaimResult::Rejected && perkGetRank(gDude, PERK_TOUGHNESS) == 0
+            && bonus[0][STAT_DAMAGE_RESISTANCE] == 0, "unowned production perk does not acquire reward ownership");
         pc[PC_STAT_LEVEL] = 2;
         require(perkAdd(gDude, PERK_TOUGHNESS) == -1, "first rank retains original minimum level");
         pc[PC_STAT_LEVEL] = 3;
         require(perkCanSelect(gDude, PERK_TOUGHNESS) && perkAdd(gDude, PERK_TOUGHNESS) == 0, "eligible first rank is selectable");
         int firstRank = perkBenefitRank(PERK_TOUGHNESS, 1);
         require(bonus[0][STAT_DAMAGE_RESISTANCE] == firstRank * 10, "real Toughness acquisition effect");
-        require(perkAddForce(gDude, PERK_TOUGHNESS) == 0, "Toughness upgrade");
+        nixboy::TrainingState learning;
+        require(learning.ensureProfile(), "reward profile");
+        nixboy::TrainingReceipt perkReceipt {}; perkReceipt.back() = 19;
+        auto olderLearning = learning;
+        if (perkUsesTraining(PERK_TOUGHNESS)) {
+            auto wrongProfile = learning.profile(); wrongProfile[0] ^= 1;
+            require(nixboy::applyPerkTrainingReward(learning, wrongProfile, PERK_TOUGHNESS, 2, perkReceipt)
+                == nixboy::PerkClaimResult::Rejected && perkGetRank(gDude, PERK_TOUGHNESS) == 1, "wrong profile leaves production perk unchanged");
+            require(nixboy::applyPerkTrainingReward(learning, learning.profile(), PERK_TOUGHNESS, 2, perkReceipt)
+                == nixboy::PerkClaimResult::New, "earned typed passive reward uses production grant");
+            require(nixboy::applyPerkTrainingReward(learning, learning.profile(), PERK_TOUGHNESS, 2, perkReceipt)
+                == nixboy::PerkClaimResult::Duplicate && bonus[0][STAT_DAMAGE_RESISTANCE] == 10
+                && perkGetRank(gDude, PERK_TOUGHNESS) == 2, "duplicate ACK adds no production rank or effect");
+            require(nixboy::applyPerkTrainingReward(olderLearning, olderLearning.profile(), PERK_TOUGHNESS, 2, perkReceipt)
+                == nixboy::PerkClaimResult::Rejected, "missing ledger at already upgraded rank does not add another rank");
+            require(perkRemove(gDude, PERK_TOUGHNESS) == 0 && perkGetRank(gDude, PERK_TOUGHNESS) == 1
+                && bonus[0][STAT_DAMAGE_RESISTANCE] == 0, "older-save native rank/effect state restored");
+            require(nixboy::applyPerkTrainingReward(olderLearning, olderLearning.profile(), PERK_TOUGHNESS, 2, perkReceipt)
+                == nixboy::PerkClaimResult::New && perkGetRank(gDude, PERK_TOUGHNESS) == 2
+                && bonus[0][STAT_DAMAGE_RESISTANCE] == 10, "same-profile older ledger reapplies earned rank exactly once");
+        } else {
+            require(nixboy::applyPerkTrainingReward(learning, learning.profile(), PERK_TOUGHNESS, 2, perkReceipt)
+                == nixboy::PerkClaimResult::Rejected, "feature disabled rejects perk rewards");
+            require(perkAddForce(gDude, PERK_TOUGHNESS) == 0, "ordinary Toughness upgrade when feature disabled");
+        }
         require(bonus[0][STAT_DAMAGE_RESISTANCE] == perkBenefitRank(PERK_TOUGHNESS, 2) * 10, "real upgraded Toughness effect");
         perksReset(); bonus = {};
         require(perkAddForce(gDude, PERK_SURVIVALIST) == 0, "Survivalist unlock");

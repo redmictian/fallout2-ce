@@ -8,7 +8,7 @@ import argparse
 import json
 import os
 from pathlib import Path
-from protocol import validate_claims
+from protocol import validate_claims, validate_perk_claims
 
 
 def read_snapshot(path):
@@ -23,6 +23,12 @@ def read_snapshot(path):
                 or any(ch not in "0123456789abcdef" for ch in identity):
             raise ValueError("invalid training profile")
         validate_claims(profile.get("receipts", {}))
+        records = profile.get("perk_receipts", {})
+        if not isinstance(records, dict) or any(not isinstance(record, dict) for record in records.values()):
+            raise ValueError("invalid typed perk receipt records")
+        validate_perk_claims({key: record.get("receipt") for key, record in records.items()})
+        if any(record.get("profile") != identity for record in records.values()):
+            raise ValueError("typed perk receipt profile mismatch")
         education = profile.get("education")
         if education is not None and (education.get("version") != 1 or
                 any(not isinstance(education.get(key), dict) for key in ("completions", "queues", "seen")) or

@@ -133,7 +133,9 @@ survive normal terminal detach; attachment-owned shell commands may stop.
 An optional `course.yaml` adds educational gates independently of skill bands.
 See [COURSE.md](COURSE.md) for prerequisites, committed questions, mixed completion,
 ordered checkpoints, explicit retries and private educational-record recovery.
-Existing game wire/save v4 and skill receipt reconciliation are unchanged.
+Legacy skill receipt payloads and reconciliation are preserved. The optional
+typed-perk adapter adds explicit opening/save v5 support; see
+[PERK_REWARDS.md](PERK_REWARDS.md) before moving saves between review builds.
 
 The bridge owns all orchestration. One-service exercises have no network;
 network exercises use workstation/server services on an internal Docker network,

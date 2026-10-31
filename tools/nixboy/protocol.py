@@ -7,8 +7,10 @@ MAX_PAYLOAD = 65536
 MAX_CONTEXT = 128
 AUTH, OPEN, INPUT, RESIZE, CLOSE, CONTEXT = range(1, 7)
 TRAIN_OPEN, TRAIN_ACTION, TRAIN_ACK = range(7, 10)
+TRAIN_PERK_ACK = 10
 READY, OUTPUT, RESULT, EXIT, ERROR = range(16, 21)
 TRAIN_REWARD = 21
+TRAIN_PERK_REWARD = 22
 TRAIN_CHECK, TRAIN_HUB, TRAIN_RESET, TRAIN_ABANDON = range(1, 5)
 NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_.-]{0,63}\Z", re.ASCII)
 TOKEN = re.compile(rb"[0-9a-fA-F]{64}\Z")
@@ -19,6 +21,9 @@ SKILL_NAMES = (
 )
 MAX_CLAIMS = 2048
 MAX_LEVEL = 65535
+MAX_PERK_CLAIMS = 64
+PILOT_PERK = 12
+PILOT_PERK_RANK = 2
 
 
 class ProtocolError(ValueError):
@@ -111,7 +116,7 @@ def decode_context(payload):
 
 def training_context(values):
     """Validate the training handshake before catalog/state/Docker access."""
-    if values.get("training.version") != 4:
+    if values.get("training.version") not in (4, 5):
         raise ProtocolError("unsupported training version")
     chunks = []
     for index in range(4):
@@ -152,7 +157,20 @@ def validate_claims(claims):
     return claims
 
 
-def encode_training_open(rows, cols, values, claims):
+def validate_perk_claims(claims):
+    """Typed pilot claims; no skill fields or invented upgrade amounts."""
+    if not isinstance(claims, dict) or len(claims) > MAX_PERK_CLAIMS:
+        raise ProtocolError("invalid or oversized perk claim ledger")
+    seen = set()
+    for key, receipt in claims.items():
+        if key != f"{PILOT_PERK}:{PILOT_PERK_RANK}" or not isinstance(receipt, str) \
+                or not re.fullmatch(r"[0-9a-f]{32}", receipt) or receipt == "0" * 32 or receipt in seen:
+            raise ProtocolError("invalid or duplicate perk training receipt")
+        seen.add(receipt)
+    return claims
+
+
+def encode_training_open(rows, cols, values, claims, perk_claims=None):
     size = struct.pack("!HH", rows, cols)
     dimensions(size)
     training_context(values)
@@ -161,12 +179,23 @@ def encode_training_open(rows, cols, values, claims):
     records = b"".join(encode_training_reward(*map(int, key.split(":")), claim["points"], bytes.fromhex(claim["receipt"]))
                        for key, claim in sorted(claims.items()))
     payload = size + struct.pack("!I", len(context)) + context + struct.pack("!H", len(claims)) + records
+    perk_claims = {} if perk_claims is None else perk_claims
+    validate_perk_claims(perk_claims)
+    if any(receipt in {claim["receipt"] for claim in claims.values()} for receipt in perk_claims.values()):
+        raise ProtocolError("receipt reused across reward types")
+    if values["training.version"] == 5:
+        payload += struct.pack("!H", len(perk_claims))
+        for key, receipt in sorted(perk_claims.items()):
+            perk, rank = map(int, key.split(":"))
+            payload += struct.pack("!HB", perk, rank) + bytes.fromhex(receipt)
+    elif perk_claims:
+        raise ProtocolError("perk claims require training version 5")
     if len(payload) > MAX_PAYLOAD:
         raise ProtocolError("training open exceeds frame limit")
     return payload
 
 
-def decode_training_open(payload):
+def decode_training_open(payload, include_perks=False):
     if len(payload) < 12:
         raise ProtocolError("truncated training open")
     rows, cols = dimensions(payload[:4])
@@ -176,7 +205,9 @@ def decode_training_open(payload):
     values = decode_context(payload[8:8 + size])
     training_context(values)
     count = struct.unpack_from("!H", payload, 8 + size)[0]
-    if count > MAX_CLAIMS or len(payload) != 10 + size + count * 21:
+    skill_end = 10 + size + count * 21
+    if count > MAX_CLAIMS or (values["training.version"] == 4 and len(payload) != skill_end) \
+            or (values["training.version"] == 5 and len(payload) < skill_end + 2):
         raise ProtocolError("invalid training claim record count")
     claims = {}
     offset = 10 + size
@@ -189,7 +220,23 @@ def decode_training_open(payload):
         claims[key] = {"receipt": receipt, "points": points}
         offset += 21
     validate_claims(claims)
-    return rows, cols, values, claims
+    perks = {}
+    if values["training.version"] == 5:
+        perk_count = struct.unpack_from("!H", payload, offset)[0]
+        offset += 2
+        if perk_count > MAX_PERK_CLAIMS or len(payload) != offset + perk_count * 19:
+            raise ProtocolError("invalid perk training record count")
+        for _ in range(perk_count):
+            perk, rank = struct.unpack_from("!HB", payload, offset)
+            key = f"{perk}:{rank}"
+            if key in perks:
+                raise ProtocolError("duplicate perk training claim key")
+            perks[key] = payload[offset + 3:offset + 19].hex()
+            offset += 19
+        validate_perk_claims(perks)
+        if any(receipt in {claim["receipt"] for claim in claims.values()} for receipt in perks.values()):
+            raise ProtocolError("receipt reused across reward types")
+    return (rows, cols, values, claims, perks) if include_perks else (rows, cols, values, claims)
 
 
 def encode_training_reward(skill, level, points, receipt):
@@ -209,3 +256,29 @@ def decode_training_ack(payload):
     if payload[21] not in (0, 1):
         raise ProtocolError("invalid training acknowledgment")
     return skill, level, points, payload[5:21].hex(), bool(payload[21])
+
+
+def encode_training_perk_reward(profile, perk, rank, receipt):
+    if isinstance(profile, str):
+        if not re.fullmatch(r"[0-9a-f]{32}", profile):
+            raise ProtocolError("invalid perk reward profile")
+        profile = bytes.fromhex(profile)
+    if not isinstance(profile, bytes) or len(profile) != 16 or not any(profile) \
+            or type(perk) is not int or perk != PILOT_PERK or type(rank) is not int or rank != PILOT_PERK_RANK \
+            or not isinstance(receipt, bytes) or len(receipt) != 16 or not any(receipt):
+        raise ProtocolError("invalid typed perk reward")
+    return profile + struct.pack("!HB", perk, rank) + receipt
+
+
+def decode_training_perk_reward(payload):
+    if len(payload) != 35:
+        raise ProtocolError("invalid typed perk reward length")
+    perk, rank = struct.unpack_from("!HB", payload, 16)
+    encode_training_perk_reward(payload[:16], perk, rank, payload[19:35])
+    return payload[:16].hex(), perk, rank, payload[19:35].hex()
+
+
+def decode_training_perk_ack(payload):
+    if len(payload) != 36 or payload[35] not in (0, 1):
+        raise ProtocolError("invalid perk acknowledgment")
+    return (*decode_training_perk_reward(payload[:35]), bool(payload[35]))

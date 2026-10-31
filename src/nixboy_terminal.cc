@@ -747,7 +747,8 @@ bool nixboyTerminalOpen(uint16_t port, const std::string& token,
     std::string error;
     bool opening = state.client.connect(port, token, error)
         && state.client.open(static_cast<uint16_t>(rows), static_cast<uint16_t>(cols), context, error, training.enabled,
-            training.progress ? training.progress() : std::vector<nixboy::TrainingClaim> {});
+            training.progress ? training.progress() : std::vector<nixboy::TrainingClaim> {},
+            training.perkProgress ? training.perkProgress() : std::vector<nixboy::PerkTrainingClaim> {});
     if (!opening) {
         state.status = "Cannot start nix-boy: " + error;
         state.dirty = true;
@@ -808,6 +809,16 @@ bool nixboyTerminalOpen(uint16_t port, const std::string& token,
                 state.status = !queued ? "Reward response could not be sent. Reopen to reconcile training progress."
                     : accepted         ? "Training reward recorded. Save your game to keep this progress."
                                        : "Training reward rejected: invalid, conflicting or progress limit reached.";
+                break;
+            }
+            case nixboy::EventType::PerkTrainingReward: {
+                bool accepted = training.enabled && training.perkReward
+                    && training.perkReward(event.profile, event.perk, event.rank, event.receipt);
+                bool queued = state.client.acknowledgePerkTraining(event.profile, event.perk, event.rank, event.receipt, accepted);
+                if (training.snapshot) queued = state.client.sendContext(training.snapshot()) && queued;
+                state.status = !queued ? "Perk response could not be sent. Reopen to reconcile."
+                    : accepted ? "Perk training recorded. Save your game to keep this progress."
+                               : "Perk reward rejected: profile, ownership, rank or receipt conflict.";
                 break;
             }
             case nixboy::EventType::Exit:

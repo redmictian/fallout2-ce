@@ -172,7 +172,7 @@ void testCapacityAndCorruption()
     for (int level = 1; level <= int(TrainingState::kMaxClaims); level++)
         require(state.accept(fallout::SKILL_REPAIR, level, receipt(level)), "bounded ledger capacity");
     auto full = state.encode();
-    require(full.size() == TrainingState::kMaxTrailerSize && state.decode(full.data(), full.size()), "maximum ledger round trip");
+    require(full.size() == TrainingState::kMaxSkillTrailerSize && state.decode(full.data(), full.size()), "maximum skill ledger round trip");
     require(!state.accept(fallout::SKILL_REPAIR, 2049, receipt(2049)), "overflow claim rejected");
     require(state.accept(fallout::SKILL_REPAIR, 1, receipt(1)), "full ledger still accepts duplicate delivery");
     state.reset();
@@ -232,6 +232,44 @@ void testCapacityAndCorruption()
     std::vector<uint8_t> oversized(TrainingState::kMaxTrailerSize + 1);
     require(!state.decode(oversized.data(), oversized.size()), "oversized trailer bounded before allocation");
 }
+
+void testTypedPerkClaims()
+{
+    using fallout::nixboy::PerkClaimResult;
+    TrainingState state;
+    require(state.ensureProfile(), "perk profile");
+    auto profile = state.profile();
+    auto wrongProfile = profile;
+    wrongProfile[0] ^= 1;
+    require(state.acceptPerk(wrongProfile, 12, 2, receipt(90), 1, 4) == PerkClaimResult::Rejected, "perk profile binding");
+    require(state.acceptPerk(profile, 12, 2, receipt(90), 0, 4) == PerkClaimResult::Rejected, "missing ownership");
+    require(state.acceptPerk(profile, 12, 2, receipt(90), 4, 4) == PerkClaimResult::Rejected, "max rank no grant");
+    require(state.acceptPerk(profile, 12, 2, receipt(90), 1, 1) == PerkClaimResult::Rejected, "maximum below target");
+    require(state.acceptPerk(profile, 12, 3, receipt(90), 2, 4) == PerkClaimResult::Rejected, "pilot target allowlist");
+    require(state.acceptPerk(profile, 13, 2, receipt(90), 1, 4) == PerkClaimResult::Rejected, "pilot perk allowlist");
+    require(state.accept(3, 1, receipt(1)), "old skill receipt");
+    require(state.acceptPerk(profile, 12, 2, receipt(1), 1, 4) == PerkClaimResult::Rejected, "skill receipt cannot fund perk");
+    require(state.acceptPerk(profile, 12, 2, receipt(90), 1, 4) == PerkClaimResult::New, "new perk grant distinct from ACK");
+    require(state.acceptPerk(profile, 12, 2, receipt(90), 2, 4) == PerkClaimResult::Duplicate, "exact duplicate acknowledgment");
+    require(state.acceptPerk(profile, 12, 2, receipt(91), 2, 4) == PerkClaimResult::Rejected, "conflicting perk claim");
+    require(state.acceptPerk(profile, 12, 2, receipt(90), 1, 4) == PerkClaimResult::Rejected, "claim/rank inconsistency");
+    require(!state.accept(12, 60000, receipt(90)), "perk receipt cannot fund skill");
+    auto bytes = state.encode();
+    require(bytes[11] == 5 && bytes.size() == 80, "typed v5 trailer exact length");
+    TrainingState loaded;
+    require(loaded.decode(bytes.data(), bytes.size()) && loaded.perkClaims().size() == 1
+        && loaded.claims().size() == 1 && loaded.bonus(3) == 5, "v5 load preserves independent skill and perk claims");
+    require(loaded.encode() == bytes, "v5 deterministic saved ledger");
+    auto corrupt = bytes;
+    corrupt[56] = 0; // Perk count must not be zero in v5.
+    seal(corrupt);
+    require(!loaded.decode(corrupt.data(), corrupt.size()), "v5 bad count rejected despite CRC");
+    corrupt = bytes;
+    auto reused = receipt(1);
+    std::copy(reused.begin(), reused.end(), corrupt.begin() + 60);
+    seal(corrupt);
+    require(!loaded.decode(corrupt.data(), corrupt.size()), "v5 cross-kind duplicate rejected despite CRC");
+}
 } // namespace
 
 int main()
@@ -241,6 +279,7 @@ int main()
         testLegacyMigration();
         testRecordedPoints();
         testCapacityAndCorruption();
+        testTypedPerkClaims();
         std::cout << "nix-boy training state: all tests passed\n";
         return EXIT_SUCCESS;
     } catch (const std::exception& error) {

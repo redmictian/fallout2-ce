@@ -18,9 +18,11 @@ import inspect
 from protocol import (
     ERROR, OUTPUT, READY, TRAIN_REWARD, TRAIN_CHECK, TRAIN_HUB, TRAIN_RESET, TRAIN_ABANDON,
     MAX_CLAIMS, SKILL_NAMES, ProtocolError, encode_training_reward, training_context, validate_claims,
+    TRAIN_PERK_REWARD, encode_training_perk_reward, validate_perk_claims,
 )
-from challenge_content import QEMU_KIND
+from challenge_content import QEMU_KIND, GUEST_KINDS
 from course_progress import CourseProgress
+from perk_rewards import PerkRewards
 
 LOG = logging.getLogger("nixboy.training")
 TRACKS = dict(enumerate(SKILL_NAMES))
@@ -38,7 +40,7 @@ def default_state_dir():
     return Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local/state")) / "nixboy/training"
 
 
-class AttemptManager(CourseProgress):
+class AttemptManager(CourseProgress, PerkRewards):
     """One durable attempt per profile; environments outlive frontend sockets."""
 
     def __init__(self, state_dir, client_factory, catalog=None, environment_factory=None,
@@ -83,9 +85,9 @@ class AttemptManager(CourseProgress):
         if not attempt:
             return False
         if "environment_kind" in attempt:
-            return attempt["environment_kind"] == QEMU_KIND
+            return attempt["environment_kind"] in GUEST_KINDS
         try:
-            return self.catalog.get(attempt["challenge"]).kind == QEMU_KIND
+            return self.catalog.get(attempt["challenge"]).kind in GUEST_KINDS
         except (KeyError, ValueError):
             return False
 
@@ -163,6 +165,14 @@ class AttemptManager(CourseProgress):
                     or not isinstance(profile, dict):
                 raise ValueError("invalid training profile state")
             validate_claims(profile.get("receipts", {}))
+            perk_records = profile.get("perk_receipts", {})
+            if not isinstance(perk_records, dict) or any(not isinstance(entry, dict) for entry in perk_records.values()):
+                raise ValueError("invalid perk receipt state")
+            validate_perk_claims({name: entry.get("receipt") for name, entry in perk_records.items()})
+            if any(entry.get("profile") != key for entry in perk_records.values()):
+                raise ValueError("perk receipt profile mismatch")
+            if {entry["receipt"] for entry in perk_records.values()} & {entry["receipt"] for entry in profile.get("receipts", {}).values()}:
+                raise ValueError("receipt reused across reward types")
             if not isinstance(profile.get("queues", {}), dict):
                 raise ValueError("invalid challenge queue")
             education = profile.get("education")
@@ -238,6 +248,8 @@ class AttemptManager(CourseProgress):
             receipts = dict(profile["receipts"])
             recovered = list(profile.get("recovered_from_game", []))
             for key, receipt in claimed.items():
+                if receipt["receipt"] in {entry["receipt"] for entry in profile.get("perk_receipts", {}).values()}:
+                    raise ProtocolError("receipt reused across skill and perk rewards")
                 existing = receipts.get(key)
                 if existing and existing != receipt:
                     raise ProtocolError("saved reward receipt conflicts with training state")
@@ -377,6 +389,9 @@ class AttemptManager(CourseProgress):
                 supports_cancel = "cancel" in inspect.signature(environment.start).parameters
                 container_id = (environment.start(cancel=cancel, progress=progress)
                                 if supports_cancel else environment.start())
+                if parameters.get("preparation_identity") and (
+                        getattr(environment, "preparation_identity", None) != parameters["preparation_identity"]):
+                    raise RuntimeError("Canonical stage preparation identity mismatch")
                 with self.lock:
                     if self.closed:
                         raise RuntimeError("Training service is stopping")
@@ -416,7 +431,9 @@ class AttemptManager(CourseProgress):
 
     def _training_label(self, attempt):
         if attempt.get("course_gate"):
-            return f"Educational integration fixture / {attempt['course_gate']} ({attempt['alternative']}); no game reward"
+            gate = self._course().get(attempt["course_gate"])
+            reward = "test-only owned Toughness rank 1 -> 2" if gate.reward else "no game reward"
+            return f"Educational integration fixture / {attempt['course_gate']} ({attempt['alternative']}); {reward}"
         track = self.catalog.tracks[attempt["skill"]]
         band = track["levels"][attempt["level"]]
         reward = attempt["reward_points"]
@@ -662,12 +679,14 @@ class TrainingSession:
         self.last_reward = 0
         self.hub_page = 0
 
-    def start(self, rows, cols, context, progress):
+    def start(self, rows, cols, context, progress, perk_progress=None):
         self.rows, self.cols = rows, cols
         self.values = dict(context)
         self.identity, self.skills = training_context(context)
         self.claimed = dict(validate_claims(progress))
+        self.perk_claimed = dict(validate_perk_claims(perk_progress or {}))
         self._observe(self.identity, self.claimed, context)
+        self.manager.observe_perks(self.identity, self.perk_claimed)
         self.manager.attach_frontend(self.identity)
         self.send(READY)
         self.hub()
@@ -730,7 +749,7 @@ class TrainingSession:
         self.mode = "course"
         self.line.clear()
         self.course_choices = self.manager.course_status(self.identity)
-        lines = ["Educational integration fixtures / no game rewards", ""]
+        lines = ["Educational integration fixtures / explicit test mappings only", ""]
         for index, gate in enumerate(self.course_choices, 1):
             status = "complete" if gate["complete"] else "available" if gate["eligible"] else "prerequisites missing"
             lines.extend(textwrap.wrap(f"[{index}] {gate['id']} ({gate['format']}, {status}) - {gate['title']}", max(20, self.cols - 2)))
@@ -1044,7 +1063,7 @@ class TrainingSession:
                 status = value["status"]
                 feedback = str(value.get("feedback", ""))
                 if status == "passed":
-                    text = "Passed. " + (f"Skill reward earned. +{value['reward_points']} skill points. " if value.get("rewarded") else "Educational completion; no game reward. " if value.get("educational") else "Practice completed; no reward. ")
+                    text = "Passed. " + (f"Skill reward earned. +{value['reward_points']} skill points. " if value.get("rewarded") else "Passive perk reward earned. " if value.get("perk_rewarded") else "Educational completion; no new game reward. " if value.get("educational") else "Practice completed; no reward. ")
                 elif status == "pending":
                     text = "Intermediate progress only. "
                 elif status == "incomplete":
@@ -1078,6 +1097,16 @@ class TrainingSession:
         self.last_reward = time.monotonic()
         for skill, level, points, receipt in self.manager.pending_rewards(self.identity, self.claimed):
             self.send(TRAIN_REWARD, encode_training_reward(skill, level, points, bytes.fromhex(receipt)))
+        if self.values.get("training.version") == 5:
+            for profile, perk, rank, receipt in self.manager.pending_perks(self.identity, self.perk_claimed):
+                self.send(TRAIN_PERK_REWARD, encode_training_perk_reward(profile, perk, rank, bytes.fromhex(receipt)))
+
+    def acknowledge_perk(self, profile, perk, rank, receipt, accepted):
+        self.manager.acknowledge_perk(self.identity, profile, perk, rank, receipt, accepted)
+        if accepted:
+            self.perk_claimed[f"{perk}:{rank}"] = receipt
+        else:
+            self.output("\nPerk reward not applied (ownership/rank/profile guard). Receipt retained for reconciliation.\n")
 
     def acknowledge(self, skill, level, points, receipt, accepted):
         self.manager.acknowledge(self.identity, skill, level, points, receipt, accepted)

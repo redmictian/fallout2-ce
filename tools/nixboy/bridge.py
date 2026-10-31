@@ -23,6 +23,7 @@ import time
 from protocol import (
     AUTH, CLOSE, CONTEXT, ERROR, EXIT, INPUT, OPEN, OUTPUT, READY, RESIZE, RESULT,
     TRAIN_OPEN, TRAIN_ACTION, TRAIN_ACK, decode_training_open, decode_training_ack,
+    TRAIN_PERK_ACK, decode_training_perk_ack,
     MAX_PAYLOAD, TOKEN, ProtocolError, decode_context, dimensions, encode_result,
     frame, read_frame, validate_event,
 )
@@ -615,7 +616,7 @@ class BridgeHandler(socketserver.BaseRequestHandler):
                 raise ProtocolError("expected OPEN after AUTH")
             training = kind == TRAIN_OPEN
             if training:
-                rows, cols, context, progress = decode_training_open(payload)
+                rows, cols, context, progress, perk_progress = decode_training_open(payload, include_perks=True)
             else:
                 rows, cols = dimensions(payload[:4])
                 context = decode_context(payload[4:])
@@ -638,7 +639,7 @@ class BridgeHandler(socketserver.BaseRequestHandler):
             with self.server.handlers_lock:
                 self.server.sessions.add(self.session)
             if training:
-                self.session.start(rows, cols, context, progress)
+                self.session.start(rows, cols, context, progress, perk_progress)
             else:
                 self.session.start(rows, cols, context)
             self.request.settimeout(1)
@@ -661,6 +662,8 @@ class BridgeHandler(socketserver.BaseRequestHandler):
                     self.session.action(payload[0])
                 elif training and kind == TRAIN_ACK:
                     self.session.acknowledge(*decode_training_ack(payload))
+                elif training and kind == TRAIN_PERK_ACK:
+                    self.session.acknowledge_perk(*decode_training_perk_ack(payload))
                 elif kind == CLOSE and not payload:
                     break
                 else:

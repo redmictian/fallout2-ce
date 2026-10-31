@@ -1,0 +1,19 @@
+id: delivery.nginx-reload
+version: 1
+skill: 12
+level: 62000
+title: Native nginx repair fixture - stage two
+kind: qemu-nginx
+parameters:
+  name: [native-nginx-reload]
+  preparation: [nginx-reload-v1]
+wiki: [course.nginx-preparation]
+instructions: >-
+  INTEGRATION FIXTURE, not full SA67. This independent canonical environment
+  already implements stage one's staff policy in /etc/nginx/nginx.conf. Its
+  /stage2 location deliberately returns 503. Repair that location to return
+  status 200 with the exact body native nginx stage two ready v1 followed by
+  one newline; preserve public/staff behavior and the www-data worker.
+  Validate then systemctl reload nginx. F6 then X reload records the trusted
+  observation. Q opens the bounded question; COMMIT fixes it, F5 submits both.
+  The test-only reward advances owned inert Toughness rank 1 to rank 2.

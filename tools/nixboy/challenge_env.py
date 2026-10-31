@@ -519,6 +519,9 @@ def Environment(client, spec, *args, **kwargs):
     if spec.kind == QEMU_KIND:
         from qemu_env import QemuEnvironment
         return QemuEnvironment(client, spec, *args, **kwargs)
+    if spec.kind == "qemu-nginx":
+        from nginx_env import NginxEnvironment
+        return NginxEnvironment(client, spec, *args, **kwargs)
     return ComposeEnvironment(client, spec, *args, **kwargs)
 
 

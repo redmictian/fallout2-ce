@@ -16,11 +16,12 @@ from protocol import MAX_LEVEL, SKILL_NAMES
 CONTENT_ROOT = Path(__file__).resolve().parent / "content"
 IDENTIFIER = re.compile(r"^[a-z][a-z0-9_.-]{0,63}$")
 QEMU_KIND = "qemu-bt05"
+GUEST_KINDS = {QEMU_KIND, "qemu-nginx"}
 KINDS = {"make-directory", "copy-file", "move-file", "rename-directory", "remove-empty",
          "filter-lines", "sort-unique", "extract-field", "count-matches", "replace-text",
          "ssh-upload", "ssh-download", "ssh-remote-move", "ssh-key-login", "ssh-alias",
          "private-file", "public-read", "executable", "shared-directory", "group-readable",
-         "checkpoint-policy", QEMU_KIND}
+         "checkpoint-policy", *GUEST_KINDS}
 
 
 class ContentLoader(yaml.SafeLoader):
@@ -222,6 +223,9 @@ class Catalog:
         digest = hashlib.sha256(json.dumps(data, sort_keys=True, separators=(",", ":")).encode("utf-8"))
         if spec.kind == QEMU_KIND:
             from qemu_env import digest_artifacts
+            digest.update(digest_artifacts().encode("utf-8"))
+        elif spec.kind == "qemu-nginx":
+            from nginx_env import digest_artifacts
             digest.update(digest_artifacts().encode("utf-8"))
         else:
             topology = "network" if spec.kind.startswith("ssh-") else "single"

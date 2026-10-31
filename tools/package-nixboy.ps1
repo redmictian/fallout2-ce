@@ -5,7 +5,8 @@ param(
     [Parameter(Mandatory = $true)][string]$WebView2Loader,
     [string]$LiveProbe,
     [switch]$QemuPilot,
-    [switch]$AssessmentPilot
+    [switch]$AssessmentPilot,
+    [switch]$DeliveryPilot
 )
 $ErrorActionPreference = 'Stop'
 
@@ -62,15 +63,21 @@ if ($manifest.schema -ne 1 -or $null -eq $manifest.source_sha256 -or $null -eq $
     throw 'Unsupported wiki export manifest.'
 }
 $sourceNames = @('challenge_content.py', 'wiki_content.py', 'wiki_pages.py')
-foreach ($item in Get-PackageFiles (Join-Path $runtimeRoot 'content')) {
-    $sourceNames += $item.FullName.Substring($runtimeRoot.Length + 1).Replace('\', '/')
+$wikiSourceContent = Join-Path $runtimeRoot $(if ($DeliveryPilot) { 'content-delivery-test' } else { 'content' })
+foreach ($item in Get-PackageFiles $wikiSourceContent) {
+    $sourceNames += 'content/' + $item.FullName.Substring($wikiSourceContent.Length + 1).Replace('\', '/')
 }
 $sourceProperties = @($manifest.source_sha256.PSObject.Properties)
 if (@(Compare-Object ($sourceNames | Sort-Object) ($sourceProperties.Name | Sort-Object)).Count) {
     throw 'Wiki source files changed; regenerate the wiki before packaging.'
 }
 foreach ($entry in $sourceProperties) {
-    Assert-ManifestHash (Get-RelativeFile $runtimeRoot $entry.Name) $entry.Value
+    $sourcePath = if ($entry.Name.StartsWith('content/')) {
+        Get-RelativeFile $wikiSourceContent $entry.Name.Substring(8)
+    } else {
+        Get-RelativeFile $runtimeRoot $entry.Name
+    }
+    Assert-ManifestHash $sourcePath $entry.Value
 }
 $exportProperties = @($manifest.files_sha256.PSObject.Properties)
 $exportNames = @($wikiFiles | Where-Object { $_.FullName -ne $manifestPath } |
@@ -108,6 +115,10 @@ $files = @(
     'tools/nixboy/requirements.txt', 'tools/nixboy/bridge.py', 'tools/nixboy/QEMU.md',
     'tools/nixboy/protocol.py', 'tools/nixboy/training.py',
     'tools/nixboy/course_content.py', 'tools/nixboy/course_progress.py', 'tools/nixboy/education_records.py', 'tools/nixboy/COURSE.md',
+    'tools/nixboy/perk_rewards.py', 'tools/nixboy/PERK_REWARDS.md', 'tools/nixboy/import_course_lessons.py',
+    'tools/nixboy/NGINX.md',
+    'tools/nixboy/nginx_env.py', 'tools/nixboy/nginx_profile.py', 'tools/nixboy/nginx_prepare.py', 'tools/nixboy/nginx_probe.py',
+    'tools/nixboy/prepare_nginx_artifact.py', 'tools/nixboy/container/nginx/manifest.json',
     'tools/nixboy/challenge_content.py', 'tools/nixboy/challenge_env.py',
     'tools/nixboy/qemu_env.py', 'tools/nixboy/qemu_probe.py', 'tools/nixboy/qemu_artifacts.py', 'tools/nixboy/wsl_provider.py',
     'tools/start-nixboy-wsl.ps1',
@@ -137,6 +148,12 @@ if ($QemuPilot) {
 if ($AssessmentPilot) {
     foreach ($pilotFile in Get-PackageFiles (Join-Path $runtimeRoot 'content-assessment-test')) {
         if ($pilotFile.Extension -notin @('.yaml', '.yml', '.md', '.json')) { throw 'Unexpected assessment catalog file.' }
+        $files += $pilotFile.FullName.Substring($sourceDir.Length + 1).Replace('\', '/')
+    }
+}
+if ($DeliveryPilot) {
+    foreach ($pilotFile in Get-PackageFiles (Join-Path $runtimeRoot 'content-delivery-test')) {
+        if ($pilotFile.Extension -notin @('.yaml', '.yml', '.md', '.json', '.html', '.css', '.svg', '.png', '.jpg', '.webp')) { throw 'Unexpected delivery catalog file.' }
         $files += $pilotFile.FullName.Substring($sourceDir.Length + 1).Replace('\', '/')
     }
 }

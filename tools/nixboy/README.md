@@ -24,10 +24,12 @@ from the source root. Authoring tools need Python/PyYAML, without Docker.
 Deploy the export as `nixboy/wiki/`, separate from editable `nixboy/content/wiki/`.
 The Windows reader opens with Ctrl+W from gameplay or Pip-Boy, and Escape
 closes it. Reading uses WebView2 and requires no Python, Docker or bridge.
-The standard 0.7.0 perk policy uses new characters and 1.2T saves: level-up
+The perk-training policy uses new characters and 1.2T saves: level-up
 selection unlocks training without a bonus, and original benefits start at rank
-two. Further ordinary ranks require level 310; challenge grants are not wired
-yet. The [debug guide](DEBUGGING.md) documents direct-to-game, perk gallery,
+two. Further ordinary ranks require level 310. The optional delivery pilot now
+supports one owned passive Toughness upgrade through a trusted typed receipt;
+[PERK_REWARDS.md](PERK_REWARDS.md) documents the explicit v4/v5 compatibility.
+The [debug guide](DEBUGGING.md) documents direct-to-game, perk gallery,
 focused-rank and picker launches for disposable testing.
 Configure `[wiki]` with `enabled=1`, `hotkey=Ctrl+W` and
 `home=nixboy/wiki/index.html` in `nixboy.ini`. This section does not need the
