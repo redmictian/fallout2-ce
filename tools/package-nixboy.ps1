@@ -98,7 +98,7 @@ if ((Get-FileHash -LiteralPath $loaderPath -Algorithm SHA256).Hash.ToLowerInvari
 $sourceCommit = (& git -C $sourceDir rev-parse HEAD).Trim()
 if ($LASTEXITCODE -ne 0) { throw 'Cannot determine source revision.' }
 $modVersion = (Get-Content -LiteralPath (Join-Path $sourceDir 'nixboy.version') -Raw).Trim()
-if ($modVersion -notmatch '^\d+\.\d+\.\d+$') { throw 'nixboy.version must contain one semantic release version.' }
+if ($modVersion -notmatch '^\d+\.\d+\.\d+(?:-rc\.[1-9]\d*)?$') { throw 'nixboy.version must contain one release or rc.N version.' }
 $sourceBranch = (& git -C $sourceDir branch --show-current).Trim()
 if ($LASTEXITCODE -ne 0) { throw 'Cannot determine source branch.' }
 $sourceStatus = & git -C $sourceDir status --porcelain
