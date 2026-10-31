@@ -14,8 +14,8 @@ after completion even when the catalog changes.
 The optional [educational catalog](COURSE.md) adds independent gate/prerequisite
 records, committed questions, mixed completion and trusted ordered checkpoints.
 `content-assessment-test/` is an infrastructure demonstration with no course
-rewards, separate from the default skill-band catalog. The game wire/save and
-skill-reward contract are unchanged.
+rewards, separate from the default skill-band catalog. The current save-bound progression extension is documented in
+[PROGRESSION.md](PROGRESSION.md); loading an older save rolls back learning and rewards.
 The [wiki content directory](content/wiki/README.md) holds separate HTML
 lessons organized by Linux subject, with stable reading references from challenge
 YAML. Validate both catalogs with `python tools/nixboy/challenge_content.py` and

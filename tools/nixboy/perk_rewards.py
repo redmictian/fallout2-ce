@@ -14,8 +14,8 @@ class PerkRewards:
             return
         values = self.contexts.get(identity, {})
         key = f"{reward['perk']}:{reward['target_rank']}"
-        if values.get("training.version") != 5:
-            raise ValueError("This test reward needs the v5 perk-capable review build")
+        if values.get("training.version") not in (5, 6):
+            raise ValueError("This test reward needs a perk-capable review build")
         if values.get("perk.training.enabled") != 1:
             raise ValueError("The passive perk training module must be enabled in this review build")
         if key not in self._perk_records(self._profile(identity)):

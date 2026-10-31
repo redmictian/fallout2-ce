@@ -37,6 +37,7 @@
 #include "message.h"
 #include "mouse.h"
 #include "nixboy_training_state.h"
+#include "nixboy.h"
 #include "object.h"
 #include "party_member.h"
 #include "perk.h"
@@ -1611,8 +1612,9 @@ static int lsgPerformSaveGame()
     // Training levels are also the source of their additive skill bonus. Keep
     // levels and receipts together in the checked SAVE.DAT transaction, so a
     // partial companion-file write cannot save a bonus without its receipt.
+    bool checkpointSaved = nixboyPrepareSave();
     auto trainingTrailer = nixboy::trainingState().encode();
-    bool trainingSaved = fileWrite(trainingTrailer.data(), 1, trainingTrailer.size(), _flptr) == trainingTrailer.size();
+    bool trainingSaved = checkpointSaved && fileWrite(trainingTrailer.data(), 1, trainingTrailer.size(), _flptr) == trainingTrailer.size();
     int saveCloseResult = fileClose(_flptr);
     if (!trainingSaved || saveCloseResult != 0) {
         debugPrint("LOADSAVE: ** Error writing or closing Nix-Boy training state **\n");

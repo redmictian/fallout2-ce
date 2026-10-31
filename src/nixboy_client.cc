@@ -46,6 +46,7 @@ namespace nixboy {
         constexpr uint8_t kTrainingAction = 8;
         constexpr uint8_t kTrainingAck = 9;
         constexpr uint8_t kPerkTrainingAck = 10;
+        constexpr uint8_t kTrainingCapture = 11;
         constexpr uint8_t kReady = 16;
         constexpr uint8_t kOutput = 17;
         constexpr uint8_t kResult = 18;
@@ -53,6 +54,7 @@ namespace nixboy {
         constexpr uint8_t kError = 20;
         constexpr uint8_t kTrainingReward = 21;
         constexpr uint8_t kPerkTrainingReward = 22;
+        constexpr uint8_t kTrainingSnapshot = 23;
 
 #ifdef _WIN32
         using Socket = SOCKET;
@@ -216,6 +218,9 @@ namespace nixboy {
         State state = State::Closed;
         bool training = false;
         bool perkTraining = false;
+        bool timelineTraining = false;
+        bool capturing = false;
+        ProgressionBinding binding;
         std::deque<std::vector<uint8_t>> outgoing;
         size_t outgoingOffset = 0;
         size_t queuedBytes = 0;
@@ -240,6 +245,9 @@ namespace nixboy {
             state = State::Closed;
             training = false;
             perkTraining = false;
+            timelineTraining = false;
+            capturing = false;
+            binding = {};
             outgoing.clear();
             outgoingOffset = 0;
             queuedBytes = 0;
@@ -314,15 +322,17 @@ namespace nixboy {
             uint8_t type = header[0];
             size_t length = get32(header + 1);
             bool ready = state == State::Ready;
+            size_t epochBytes = timelineTraining ? binding.activation.size() : 0;
             if (length > kMaxPayload
-                || (type == kReady && (state != State::AwaitingReady || length != 0))
+                || (type == kReady && (state != State::AwaitingReady || capturing || length != 0))
                 || (type == kOutput && !ready)
                 || (type == kResult && (!ready || training || length < 6 || length > 69))
-                || (type == kTrainingReward && (!ready || !training || length != 21))
-                || (type == kPerkTrainingReward && (!ready || !perkTraining || length != 35))
+                || (type == kTrainingReward && (!ready || !training || length != 21 + epochBytes))
+                || (type == kPerkTrainingReward && (!ready || !perkTraining || length != 35 + epochBytes))
+                || (type == kTrainingSnapshot && (!capturing || state != State::AwaitingReady || length != 32))
                 || (type == kExit && (!ready || length != 4))
                 || (type == kError && length > 4096)
-                || (type != kReady && type != kOutput && type != kResult && type != kExit && type != kError && type != kTrainingReward && type != kPerkTrainingReward)) {
+                || (type != kReady && type != kOutput && type != kResult && type != kExit && type != kError && type != kTrainingReward && type != kPerkTrainingReward && type != kTrainingSnapshot)) {
                 fail(events, "Invalid Nix-Boy protocol frame or session order.");
                 return true;
             }
@@ -331,11 +341,29 @@ namespace nixboy {
             }
             const uint8_t* payload = header + 5;
             incomingOffset += length + 5;
+            if (epochBytes && (type == kTrainingReward || type == kPerkTrainingReward)) {
+                if (!std::equal(binding.activation.begin(), binding.activation.end(), payload)) {
+                    fail(events, "Nix-Boy rejected a reward from a discarded progression timeline.");
+                    return true;
+                }
+                payload += epochBytes;
+            }
             switch (type) {
             case kReady:
                 state = State::Ready;
                 events.push_back({ EventType::Ready, {}, {}, 0 });
                 break;
+            case kTrainingSnapshot: {
+                Event event { EventType::Snapshot, {}, {}, 0 };
+                std::copy(payload, payload + event.snapshot.size(), event.snapshot.begin());
+                if (std::all_of(event.snapshot.begin(), event.snapshot.end(), [](uint8_t byte) { return byte == 0; })) {
+                    fail(events, "Nix-Boy returned an invalid progression snapshot.");
+                    return true;
+                }
+                events.push_back(std::move(event));
+                disconnect();
+                break;
+            }
             case kOutput:
                 events.push_back({ EventType::Output, std::string(reinterpret_cast<const char*>(payload), length), {}, 0 });
                 break;
@@ -502,16 +530,36 @@ namespace nixboy {
     }
 
     bool Client::open(uint16_t rows, uint16_t cols, const Context& context, std::string& error, bool training,
-        const std::vector<TrainingClaim>& claims, const std::vector<PerkTrainingClaim>& perkClaims)
+        const std::vector<TrainingClaim>& claims, const std::vector<PerkTrainingClaim>& perkClaims,
+        const ProgressionBinding& binding)
+    {
+        return openInternal(rows, cols, context, error, training, claims, perkClaims, binding, false);
+    }
+
+    bool Client::capture(const Context& context, std::string& error,
+        const std::vector<TrainingClaim>& claims, const std::vector<PerkTrainingClaim>& perkClaims,
+        const ProgressionBinding& binding)
+    {
+        return openInternal(1, 1, context, error, true, claims, perkClaims, binding, true);
+    }
+
+    bool Client::openInternal(uint16_t rows, uint16_t cols, const Context& context, std::string& error, bool training,
+        const std::vector<TrainingClaim>& claims, const std::vector<PerkTrainingClaim>& perkClaims,
+        const ProgressionBinding& binding, bool capture)
     {
         error.clear();
         if (impl_->state != Impl::State::Connected) {
             error = "Nix-Boy session is disconnected or already open.";
             return false;
         }
-        bool version5 = training && std::find(context.begin(), context.end(), std::make_pair(std::string("training.version"), int32_t(5))) != context.end();
+        bool version6 = training && std::find(context.begin(), context.end(), std::make_pair(std::string("training.version"), int32_t(6))) != context.end();
+        bool version5 = version6 || (training && std::find(context.begin(), context.end(), std::make_pair(std::string("training.version"), int32_t(5))) != context.end());
         if (training && !version5 && std::find(context.begin(), context.end(), std::make_pair(std::string("training.version"), int32_t(4))) == context.end()) {
-            error = "nix-boy training requires context version 4 or 5.";
+            error = "nix-boy training requires context version 4, 5 or 6.";
+            return false;
+        }
+        if ((capture && !version6) || (version6 && std::all_of(binding.activation.begin(), binding.activation.end(), [](uint8_t byte) { return byte == 0; }))) {
+            error = "Save-bound progression requires a nonzero activation and training version 6.";
             return false;
         }
         if ((!training && !claims.empty()) || claims.size() > TrainingState::kMaxClaims
@@ -564,14 +612,22 @@ namespace nixboy {
                     payload.insert(payload.end(), claim.receipt.begin(), claim.receipt.end());
                 }
             }
+            if (version6) {
+                payload.insert(payload.end(), binding.activation.begin(), binding.activation.end());
+                payload.insert(payload.end(), binding.snapshot.begin(), binding.snapshot.end());
+                payload.push_back(binding.restore ? 1 : 0);
+            }
         }
-        if (!impl_->queue(training ? kTrainingOpen : kOpen, payload)) {
+        if (!impl_->queue(capture ? kTrainingCapture : (training ? kTrainingOpen : kOpen), payload)) {
             error = "Nix-Boy send queue is full.";
             return false;
         }
         impl_->state = Impl::State::AwaitingReady;
         impl_->training = training;
         impl_->perkTraining = version5;
+        impl_->timelineTraining = version6;
+        impl_->capturing = capture;
+        impl_->binding = binding;
         return true;
     }
 
@@ -617,7 +673,10 @@ namespace nixboy {
     {
         if (impl_->state != Impl::State::Ready || !impl_->training || skill >= SKILL_COUNT || level == 0 || points < 1 || points > 300
             || std::all_of(receipt.begin(), receipt.end(), [](uint8_t byte) { return byte == 0; })) return false;
-        std::vector<uint8_t> payload { skill };
+        std::vector<uint8_t> payload;
+        if (impl_->timelineTraining)
+            payload.insert(payload.end(), impl_->binding.activation.begin(), impl_->binding.activation.end());
+        payload.push_back(skill);
         put16(payload, level);
         put16(payload, points);
         payload.insert(payload.end(), receipt.begin(), receipt.end());
@@ -631,7 +690,10 @@ namespace nixboy {
         if (impl_->state != Impl::State::Ready || !impl_->perkTraining || perk != PERK_TOUGHNESS || rank != 2
             || std::all_of(profile.begin(), profile.end(), [](uint8_t byte) { return byte == 0; })
             || std::all_of(receipt.begin(), receipt.end(), [](uint8_t byte) { return byte == 0; })) return false;
-        std::vector<uint8_t> payload(profile.begin(), profile.end());
+        std::vector<uint8_t> payload;
+        if (impl_->timelineTraining)
+            payload.insert(payload.end(), impl_->binding.activation.begin(), impl_->binding.activation.end());
+        payload.insert(payload.end(), profile.begin(), profile.end());
         put16(payload, perk);
         payload.push_back(rank);
         payload.insert(payload.end(), receipt.begin(), receipt.end());

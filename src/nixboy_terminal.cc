@@ -748,7 +748,8 @@ bool nixboyTerminalOpen(uint16_t port, const std::string& token,
     bool opening = state.client.connect(port, token, error)
         && state.client.open(static_cast<uint16_t>(rows), static_cast<uint16_t>(cols), context, error, training.enabled,
             training.progress ? training.progress() : std::vector<nixboy::TrainingClaim> {},
-            training.perkProgress ? training.perkProgress() : std::vector<nixboy::PerkTrainingClaim> {});
+            training.perkProgress ? training.perkProgress() : std::vector<nixboy::PerkTrainingClaim> {},
+            training.binding ? training.binding() : nixboy::ProgressionBinding {});
     if (!opening) {
         state.status = "Cannot start nix-boy: " + error;
         state.dirty = true;
@@ -834,6 +835,12 @@ bool nixboyTerminalOpen(uint16_t port, const std::string& token,
                 state.ready = false;
                 opening = false;
                 if (!state.exited) state.status = "nix-boy error: " + event.text;
+                break;
+            case nixboy::EventType::Snapshot:
+                state.client.close();
+                state.ready = false;
+                opening = false;
+                state.status = "Unexpected save checkpoint reply in a terminal session.";
                 break;
             }
             state.dirty = true;

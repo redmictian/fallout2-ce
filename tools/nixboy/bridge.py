@@ -23,7 +23,8 @@ import time
 from protocol import (
     AUTH, CLOSE, CONTEXT, ERROR, EXIT, INPUT, OPEN, OUTPUT, READY, RESIZE, RESULT,
     TRAIN_OPEN, TRAIN_ACTION, TRAIN_ACK, decode_training_open, decode_training_ack,
-    TRAIN_PERK_ACK, decode_training_perk_ack,
+    TRAIN_PERK_ACK, decode_training_perk_ack, TRAIN_CAPTURE, TRAIN_SNAPSHOT,
+    training_context, unfence_training_payload,
     MAX_PAYLOAD, TOKEN, ProtocolError, decode_context, dimensions, encode_result,
     frame, read_frame, validate_event,
 )
@@ -612,17 +613,32 @@ class BridgeHandler(socketserver.BaseRequestHandler):
             ):
                 raise ProtocolError("authentication failed")
             kind, payload = read_frame(self.request)
-            if kind not in (OPEN, TRAIN_OPEN) or len(payload) < 6:
+            if kind not in (OPEN, TRAIN_OPEN, TRAIN_CAPTURE) or len(payload) < 6:
                 raise ProtocolError("expected OPEN after AUTH")
-            training = kind == TRAIN_OPEN
+            capture = kind == TRAIN_CAPTURE
+            training = kind in (TRAIN_OPEN, TRAIN_CAPTURE)
             if training:
-                rows, cols, context, progress, perk_progress = decode_training_open(payload, include_perks=True)
+                rows, cols, context, progress, perk_progress, binding = decode_training_open(payload, include_binding=True)
+                if capture and binding is None:
+                    raise ProtocolError("save capture requires version 6")
             else:
                 rows, cols = dimensions(payload[:4])
                 context = decode_context(payload[4:])
             acquired = self.server.active.acquire(blocking=False)
             if not acquired:
                 self.send(ERROR, b"Nix-Boy already has an active session")
+                return
+            if capture:
+                manager = self.server.get_training()
+                identity, _ = training_context(context)
+                try:
+                    manager.activate_progression(identity, binding["activation"], binding["snapshot"],
+                        binding["restore"], progress, perk_progress, context)
+                    snapshot = manager.capture_progression(identity, binding["activation"], progress, perk_progress, context)
+                except (ProtocolError, ValueError, OSError) as exc:
+                    self.send(ERROR, ("Cannot capture save progression: " + str(exc)).encode("utf-8"))
+                    return
+                self.send(TRAIN_SNAPSHOT, bytes.fromhex(snapshot))
                 return
             if training:
                 from training import TrainingSession
@@ -639,7 +655,11 @@ class BridgeHandler(socketserver.BaseRequestHandler):
             with self.server.handlers_lock:
                 self.server.sessions.add(self.session)
             if training:
-                self.session.start(rows, cols, context, progress, perk_progress)
+                try:
+                    self.session.start(rows, cols, context, progress, perk_progress, binding=binding)
+                except (ProtocolError, ValueError, OSError) as exc:
+                    self.send(ERROR, ("Save progression unavailable: " + str(exc)).encode("utf-8"))
+                    return
             else:
                 self.session.start(rows, cols, context)
             self.request.settimeout(1)
@@ -661,8 +681,12 @@ class BridgeHandler(socketserver.BaseRequestHandler):
                 elif training and kind == TRAIN_ACTION and len(payload) == 1:
                     self.session.action(payload[0])
                 elif training and kind == TRAIN_ACK:
+                    if self.session.values.get("training.version") == 6:
+                        payload = unfence_training_payload(payload, self.session.activation)
                     self.session.acknowledge(*decode_training_ack(payload))
-                elif training and kind == TRAIN_PERK_ACK and self.session.values.get("training.version") == 5:
+                elif training and kind == TRAIN_PERK_ACK and self.session.values.get("training.version") in (5, 6):
+                    if self.session.values.get("training.version") == 6:
+                        payload = unfence_training_payload(payload, self.session.activation)
                     self.session.acknowledge_perk(*decode_training_perk_ack(payload))
                 elif kind == CLOSE and not payload:
                     break

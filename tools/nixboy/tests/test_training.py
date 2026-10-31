@@ -339,7 +339,7 @@ class AttemptTests(unittest.TestCase):
         self.assertEqual(restored["attempt"]["id"], attempt["id"])
         self.assertEqual(restored["attempt"]["status"], "needs_reset")
         self.assertEqual(restored["receipts"], {key: claim(receipt) for key, receipt in profile["receipts"].items()})
-        self.assertEqual(json.loads(self.manager.path.read_text())["version"], 4)
+        self.assertEqual(json.loads(self.manager.path.read_text())["version"], 5)
         self.assertNotIn("earned", restored)
 
     def test_version_two_sparse_migration_preserves_progress_and_blocks_unfingerprinted_attempt(self):
@@ -467,7 +467,7 @@ class AttemptTests(unittest.TestCase):
                          [(3, 1, 5, "01" * 16), (13, 65535, 5, "02" * 16)])
         state = self.manager.snapshot(self.profile)
         self.assertEqual(state["acknowledged"]["3:1"], claim("01" * 16, 5))
-        self.assertEqual(json.loads(self.manager.path.read_text())["version"], 4)
+        self.assertEqual(json.loads(self.manager.path.read_text())["version"], 5)
 
     def test_shutdown_requires_explicit_facility_reissue_after_restart(self):
         self.manager.observe(self.profile, self.completed, context(science=15))

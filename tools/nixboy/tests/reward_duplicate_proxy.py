@@ -17,6 +17,7 @@ from protocol import (
     TRAIN_OPEN, TRAIN_ACK, TRAIN_REWARD, TRAIN_PERK_ACK, TRAIN_PERK_REWARD, CONTEXT,
     decode_training_open, training_context, decode_context, decode_training_ack,
     decode_training_perk_reward, decode_training_perk_ack, frame, read_frame,
+    TRAIN_CAPTURE, TRAIN_SNAPSHOT, unfence_training_payload,
 )
 
 
@@ -38,37 +39,60 @@ class ReceiptRelay:
         self.duplicated = False
         self.lock = threading.Lock()
 
+    @staticmethod
+    def unfenced(kind, payload):
+        """Decode a received envelope for evidence, without changing forwarded bytes."""
+        ordinary_size = {TRAIN_REWARD: 21, TRAIN_ACK: 22,
+                         TRAIN_PERK_REWARD: 35, TRAIN_PERK_ACK: 36}[kind]
+        if len(payload) == ordinary_size:
+            return payload, None
+        if len(payload) == ordinary_size + 16:
+            activation = payload[:16].hex()
+            return unfence_training_payload(payload, activation), activation
+        raise ValueError("Invalid received reward envelope length")
+
     def transfer(self, kind, payload, to_game):
         copies, drop = 1, False
         nominated = TRAIN_REWARD if self.reward_kind == "skill" else TRAIN_PERK_REWARD
         if to_game and kind == nominated:
+            ordinary, activation = self.unfenced(kind, payload)
             with self.lock:
                 if not self.duplicated:
                     self.duplicated = True
                     copies = self.copies
             if kind == TRAIN_PERK_REWARD:
-                profile, perk, rank, receipt = decode_training_perk_reward(payload)
+                profile, perk, rank, receipt = decode_training_perk_reward(ordinary)
                 self.log({"kind": "earned_reward_delivery", "reward_kind": "perk", "copies": copies,
-                          "profile": profile, "perk": perk, "target_rank": rank, "receipt": receipt})
+                          "profile": profile, "perk": perk, "target_rank": rank, "receipt": receipt,
+                          "activation": activation})
             else:
-                skill, level, points, receipt, _ = decode_training_ack(payload + b"\x01")
+                skill, level, points, receipt, _ = decode_training_ack(ordinary + b"\x01")
                 self.log({"kind": "earned_reward_delivery", "reward_kind": "skill", "copies": copies,
-                          "skill": skill, "level": level, "points": points, "receipt": receipt})
+                          "skill": skill, "level": level, "points": points, "receipt": receipt,
+                          "activation": activation})
         elif not to_game and kind == TRAIN_PERK_ACK:
-            profile, perk, rank, receipt, accepted = decode_training_perk_ack(payload)
+            ordinary, activation = self.unfenced(kind, payload)
+            profile, perk, rank, receipt, accepted = decode_training_perk_ack(ordinary)
             drop = self.drop_acks and self.reward_kind == "perk"
             self.log({"kind": "game_ack", "reward_kind": "perk", "profile": profile,
                       "perk": perk, "target_rank": rank, "receipt": receipt,
-                      "accepted": int(accepted), "dropped": drop})
+                      "accepted": int(accepted), "dropped": drop, "activation": activation})
         elif not to_game and kind == TRAIN_ACK:
-            skill, level, points, receipt, accepted = decode_training_ack(payload)
+            ordinary, activation = self.unfenced(kind, payload)
+            skill, level, points, receipt, accepted = decode_training_ack(ordinary)
             self.log({"kind": "game_ack", "reward_kind": "skill", "accepted": int(accepted),
-                      "skill": skill, "level": level, "points": points, "receipt": receipt, "dropped": False})
-        elif not to_game and kind == TRAIN_OPEN:
-            _, _, context, claims, perks = decode_training_open(payload, include_perks=True)
+                      "skill": skill, "level": level, "points": points, "receipt": receipt, "dropped": False,
+                      "activation": activation})
+        elif not to_game and kind in (TRAIN_OPEN, TRAIN_CAPTURE):
+            _, _, context, claims, perks, binding = decode_training_open(payload, include_binding=True)
             identity, skills = training_context(context)
-            self.log({"kind": "game_open", "profile": identity, "science": skills[12],
-                      "claims": claims, "perk_claims": perks, **observed_context(context)})
+            self.log({"kind": "game_open" if kind == TRAIN_OPEN else "game_capture",
+                      "profile": identity, "science": skills[12], "claims": claims,
+                      "perk_claims": perks, "binding": binding, **observed_context(context)})
+        elif to_game and kind == TRAIN_SNAPSHOT:
+            if len(payload) != 32:
+                raise ValueError("Invalid received progression snapshot length")
+            self.log({"kind": "game_snapshot", "snapshot": payload.hex()})
         elif not to_game and kind == CONTEXT:
             context = decode_context(payload)
             identity, skills = training_context(context)

@@ -18,15 +18,17 @@ import inspect
 from protocol import (
     ERROR, OUTPUT, READY, TRAIN_REWARD, TRAIN_CHECK, TRAIN_HUB, TRAIN_RESET, TRAIN_ABANDON,
     MAX_CLAIMS, SKILL_NAMES, ProtocolError, encode_training_reward, training_context, validate_claims,
-    TRAIN_PERK_REWARD, encode_training_perk_reward, validate_perk_claims,
+    TRAIN_PERK_REWARD, encode_training_perk_reward, validate_perk_claims, fence_training_payload,
 )
 from challenge_content import QEMU_KIND, GUEST_KINDS
 from course_progress import CourseProgress
 from perk_rewards import PerkRewards
+from progression_state import ProgressionState
+from education_records import validate_profile, validate_activations
 
 LOG = logging.getLogger("nixboy.training")
 TRACKS = dict(enumerate(SKILL_NAMES))
-STATE_VERSION = 4
+STATE_VERSION = 5
 IDLE_SECONDS = 24 * 60 * 60
 
 
@@ -40,7 +42,7 @@ def default_state_dir():
     return Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local/state")) / "nixboy/training"
 
 
-class AttemptManager(CourseProgress, PerkRewards):
+class AttemptManager(CourseProgress, PerkRewards, ProgressionState):
     """One durable attempt per profile; environments outlive frontend sockets."""
 
     def __init__(self, state_dir, client_factory, catalog=None, environment_factory=None,
@@ -68,7 +70,7 @@ class AttemptManager(CourseProgress, PerkRewards):
         self.closed = False
         self.reconciled = False
         self.reconcile_lock = threading.Lock()
-        self.data = {"version": STATE_VERSION, "profiles": {}}
+        self.data = {"version": STATE_VERSION, "profiles": {}, "activations": {}}
         if self.path.exists():
             if self.path.stat().st_size > 8 * 1024 * 1024:
                 raise ValueError("training state exceeds size limit")
@@ -117,6 +119,10 @@ class AttemptManager(CourseProgress, PerkRewards):
         return environment.attachment() if environment and hasattr(environment, "attachment") else None
 
     def _migrate_state(self):
+        if isinstance(self.data, dict) and self.data.get("version") == 4:
+            self.data["version"] = STATE_VERSION
+            self.data["activations"] = {}
+            return
         if not isinstance(self.data, dict) or self.data.get("version") not in (1, 2, 3):
             return
         version = self.data["version"]
@@ -155,6 +161,7 @@ class AttemptManager(CourseProgress, PerkRewards):
             profile.pop("earned", None)
             profile.pop("claimed", None)
         self.data["version"] = STATE_VERSION
+        self.data["activations"] = {}
 
     def _validate_state(self):
         if not isinstance(self.data, dict) or self.data.get("version") != STATE_VERSION \
@@ -181,6 +188,8 @@ class AttemptManager(CourseProgress, PerkRewards):
                         or any(not isinstance(education.get(key), dict) for key in ("completions", "queues", "seen")) \
                         or not isinstance(education.get("history"), list):
                     raise ValueError("unsupported educational state; preserve it for recovery")
+            validate_profile(key, profile)
+        validate_activations(self.data.get("activations", {}))
 
     def _save(self):
         """Replace one fsynced snapshot; a pass is committed before transmission."""
@@ -214,7 +223,7 @@ class AttemptManager(CourseProgress, PerkRewards):
 
     def _operation(self, identity):
         with self.lock:
-            return self.operations.setdefault(identity, threading.Lock())
+            return self.operations.setdefault(identity, threading.RLock())
 
     def current_level(self, identity, skill):
         with self.lock:
@@ -244,6 +253,8 @@ class AttemptManager(CourseProgress, PerkRewards):
         """Import exact game receipts; the receipt map is the completion ledger."""
         validate_claims(claimed)
         with self.lock:
+            if identity in self.data.get("activations", {}) and values.get("training.version", 0) < 6:
+                raise ProtocolError("This profile uses save-bound progression; reopen it in the v6-capable build")
             profile = self._profile(identity)
             receipts = dict(profile["receipts"])
             recovered = list(profile.get("recovered_from_game", []))
@@ -395,6 +406,8 @@ class AttemptManager(CourseProgress, PerkRewards):
                 with self.lock:
                     if self.closed:
                         raise RuntimeError("Training service is stopping")
+                    if self._profile(identity).get("attempt") is not attempt:
+                        raise OperationCancelled("Stale preparation discarded after loading another save.")
                     if cancel.is_set():
                         raise OperationCancelled("Preparation cancelled; provisional resources removed.")
                     self.environments[identity] = environment
@@ -519,6 +532,8 @@ class AttemptManager(CourseProgress, PerkRewards):
                 except (TypeError, ValueError):
                     result = {"status": "error", "feedback": "Trusted validation evidence is invalid or exceeds its persistence bound; attempt preserved."}
             with self.lock:
+                if self._profile(identity) is not profile or profile.get("attempt") is not attempt:
+                    return {"status": "error", "feedback": "Stale validation discarded after loading another save."}
                 if self.closed:
                     self._provider_stopped(attempt)
                     self._save()
@@ -679,18 +694,30 @@ class TrainingSession:
         self.last_reward = 0
         self.hub_page = 0
 
-    def start(self, rows, cols, context, progress, perk_progress=None):
+    def start(self, rows, cols, context, progress, perk_progress=None, binding=None):
         self.rows, self.cols = rows, cols
         self.values = dict(context)
         self.identity, self.skills = training_context(context)
         self.claimed = dict(validate_claims(progress))
         self.perk_claimed = dict(validate_perk_claims(perk_progress or {}))
+        self.activation = binding["activation"] if binding else None
+        restore_notice = ""
+        if self.values.get("training.version") == 6:
+            if binding is None:
+                raise ProtocolError("Save-bound progression selector is required")
+            restored = self.manager.activate_progression(self.identity, self.activation, binding["snapshot"],
+                binding["restore"], self.claimed, self.perk_claimed, context)
+            restore_notice = restored["notice"]
         self._observe(self.identity, self.claimed, context)
         self.manager.observe_perks(self.identity, self.perk_claimed)
         self.manager.attach_frontend(self.identity)
         self.send(READY)
-        self.hub()
+        self.hub(restore_notice)
         self.rewards()
+
+    def _assert_current(self):
+        if getattr(self, "activation", None):
+            self.manager.assert_activation(self.identity, self.activation)
 
     def _observe(self, identity, claimed, values):
         try:
@@ -822,6 +849,7 @@ class TrainingSession:
                     + "[H] Return to hub\nChoose a letter, then Enter: ", clear=True)
 
     def input(self, data):
+        self._assert_current()
         with self.lock:
             if self.shell and self.mode == "challenge":
                 self.shell.input(data)
@@ -982,7 +1010,11 @@ class TrainingSession:
 
         def run():
             try:
-                self._event(name, work())
+                # Keep the same per-profile operation boundary as restore. A
+                # queued callback from a discarded load cannot start new work.
+                with self.manager._operation(self.identity):
+                    self._assert_current()
+                    self._event(name, work())
             except OperationCancelled as exc:
                 self._event("cancelled", str(exc))
             except Exception as exc:
@@ -1004,6 +1036,7 @@ class TrainingSession:
                 self.close()
 
     def action(self, action):
+        self._assert_current()
         if self.job and self.job.is_alive():
             if action in (TRAIN_ABANDON, TRAIN_RESET):
                 self.cancel_next = action
@@ -1033,6 +1066,7 @@ class TrainingSession:
             raise ProtocolError("unknown training action")
 
     def poll(self):
+        self._assert_current()
         while True:
             try:
                 event, value = self.events.get_nowait()
@@ -1094,14 +1128,20 @@ class TrainingSession:
             self.rewards()
 
     def rewards(self):
+        self._assert_current()
         self.last_reward = time.monotonic()
+        def deliver(kind, payload):
+            if self.values.get("training.version") == 6:
+                payload = fence_training_payload(payload, self.activation)
+            self.send(kind, payload)
         for skill, level, points, receipt in self.manager.pending_rewards(self.identity, self.claimed):
-            self.send(TRAIN_REWARD, encode_training_reward(skill, level, points, bytes.fromhex(receipt)))
-        if self.values.get("training.version") == 5:
+            deliver(TRAIN_REWARD, encode_training_reward(skill, level, points, bytes.fromhex(receipt)))
+        if self.values.get("training.version") in (5, 6):
             for profile, perk, rank, receipt in self.manager.pending_perks(self.identity, self.perk_claimed):
-                self.send(TRAIN_PERK_REWARD, encode_training_perk_reward(profile, perk, rank, bytes.fromhex(receipt)))
+                deliver(TRAIN_PERK_REWARD, encode_training_perk_reward(profile, perk, rank, bytes.fromhex(receipt)))
 
     def acknowledge_perk(self, profile, perk, rank, receipt, accepted):
+        self._assert_current()
         self.manager.acknowledge_perk(self.identity, profile, perk, rank, receipt, accepted)
         if accepted:
             self.perk_claimed[f"{perk}:{rank}"] = receipt
@@ -1109,6 +1149,7 @@ class TrainingSession:
             self.output("\nPerk reward not applied (ownership/rank/profile guard). Receipt retained for reconciliation.\n")
 
     def acknowledge(self, skill, level, points, receipt, accepted):
+        self._assert_current()
         self.manager.acknowledge(self.identity, skill, level, points, receipt, accepted)
         if accepted:
             self.claimed[f"{skill}:{level}"] = {"receipt": receipt, "points": points}
@@ -1122,6 +1163,7 @@ class TrainingSession:
                 self.shell.resize(rows, cols)
 
     def context(self, values):
+        self._assert_current()
         identity, skills = training_context(values)
         if identity != self.identity:
             raise ProtocolError("training profile cannot change inside a session")

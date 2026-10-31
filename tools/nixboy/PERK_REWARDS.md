@@ -53,33 +53,27 @@ conflicts leave both rank/effect and ledger unchanged. Feature-disabled builds
 reject this typed reward. An exact duplicate with the matching existing ledger
 acknowledges successfully without another rank/effect.
 
-The bridge durably earns a typed receipt before delivery. A lost ACK/reopen may
-redeliver the exact receipt. The opening game's separate perk claim ledger lets
-the bridge suppress claims already present, or replay them into an older save
-of the **same** profile. Replaying into that save's owned rank1 state applies
-the earned rank once to that loaded state. Loading a save without prerequisite
-ownership does not grant ownership; the game rejects the upgrade safely.
+The bridge durably earns a typed receipt before delivery within the active loaded
+progression. Lost ACK/reopen can redeliver that exact receipt without a new effect.
+Loading an older save selects its own saved profile and reward ledgers; later
+earned receipts are discarded from the current progression and may be earned again.
+Protocol 6 prefixes reward/ACK bodies with the unsaved activation token, preventing
+late delivery from a discarded load. See [PROGRESSION.md](PROGRESSION.md).
 
 ## Save format and inspection
 
-The game retains the existing `NXBTRAIN` trailer and skill records. With no perk
-claims the writer emits byte-for-byte version4. With perk claims it emits
-**version5**, adding the uint16 perk count and19-byte records after all skill
-records, before the trailer CRC32. The payload length and CRC cover the extension.
-The new reader accepts versions1â€“5 and preserves prior skill IDs, receipts and
-point amounts. Serialized duplicate or cross-kind reused receipts reject the
-trailer even with a valid CRC. The outer perk-training save policy remains1.2T.
+The game retains `NXBTRAIN` and reads trailers 1–5, while new saves write trailer
+**6**: existing profile/skill/perk ledgers (empty perk count is valid), then a
+32-byte immutable progression snapshot SHA256, followed by the covering CRC32.
+Only that saved profile can provide pending rewards after a load. Native perk
+rank/effect still resides in the ordinary game records; no effect is applied by
+trailer decode. The outer perk-training save policy remains 1.2T.
 
-An old0.7.0 binary cannot read a version5 trailer containing perk progress. Keep
-pilot saves in the dedicated review copy; do not overwrite original saves or
-promise backwards loading after a perk reward. Existing version4 saves remain
-readable in the new build. There is no player-data migration or release promotion.
-
-`inspect_training_save.py` reads versions4/5 without changing the file and reports
-separate `claims` and `perk_claims`. It verifies trailer length/count/CRC, profile
-and receipt constraints. The native raw perk/effect lives in the ordinary game
-save records, so use actual game context/stat observations alongside the trailer
-when verifying a reward. The trailer alone does not establish an effective perk.
+Earlier binaries cannot read trailer 6. Legacy v4/v5 saves lack education snapshots:
+the new build retains their exact saved rewards but reports an empty historical
+education baseline, never the latest external state. `inspect_training_save.py`
+reads v4/v5/v6 without changing files. The claim trailer alone does not prove an
+effective perk; use actual game context/stat observations as well.
 
 Focused native tests cover the real production rank/effect adapter, duplicate
 ACK, profile/ownership/rank/receipt rejection, older owned-state replay, v4/v5

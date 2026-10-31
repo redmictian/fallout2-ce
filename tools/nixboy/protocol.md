@@ -152,7 +152,7 @@ update the bridge's current game ledger; later CONTEXT frames refresh skills
 and profile values without resending the opening ledger.
 The amount comes from the completed level's `reward_points` (default 5), then
 remains part of the immutable earned record. Catalog edits cannot reprice an
-earned reward or a replay into an older save.
+earned reward within its selected progression.
 It never invents success from shell exit, PTY text or learner helper events.
 
 INPUT routes to a restricted hub menu or the current exercise PTY. RESIZE and
@@ -165,15 +165,16 @@ idle expiry. Reset, abandonment and provider interruption have distinct handling
 provider loss requires explicit reissue and is not learner failure.
 
 The optional educational hub uses these same INPUT/OUTPUT/TRAIN_ACTION frames.
-Its versioned educational ledger remains bridge-owned, separate from game-save
-skill claims. That educational subtree introduces no game-save fields; see COURSE.md.
+Its educational ledger remains bridge-hosted. Protocol/trailer 6 below associates
+a complete educational snapshot with each game save; see COURSE.md and PROGRESSION.md.
 
-The optional typed passive-perk adapter negotiates `training.version=5`, appends
+The earlier typed passive-perk adapter negotiated `training.version=5`, appending
 a separate opening perk ledger and uses profile-bound TRAIN_PERK_REWARD22 /
 TRAIN_PERK_ACK10 frames. Version4 remains skill-only; a live session cannot
-change its negotiated version. Existing skill payloads are unchanged. The game
-writes trailer-v5 only when perk claims exist and reads earlier trailer versions;
-older binaries cannot read perk-bearing saves. See PERK_REWARDS.md for exact
+change its negotiated version. Existing inner skill payloads are unchanged. That
+earlier writer used trailer-v5 only when perk claims existed. The current writer
+always uses trailer 6 with the save reference described below; older binaries
+cannot read it. See PERK_REWARDS.md for exact
 fields, maximums, duplicate/new application and reconciliation semantics.
 
 Legacy RESULT events are never forwarded by the training bridge, and the C++
@@ -181,3 +182,27 @@ client rejects RESULT in training mode. Legacy OPEN retains its original
 RESULT/EXIT/global-binding behavior. The per-installation authentication token
 never enters the learner environment. Docker/provisioning errors and validator
 errors cannot grant a completion receipt.
+
+
+## Save-bound progression extension (version 6)
+
+The current game negotiates `training.version=6`. V6 TRAIN_OPEN appends 49 bytes to
+its v5 skill/perk opening: `activation:16`, `snapshot_sha256:32`, `restore:uint8`.
+The nonzero activation is runtime-only and changes on each successful game load;
+the snapshot reference is saved in trailer 6. Repeated openings with the same
+activation resume the current mutable profile. A new activation selects the exact
+saved snapshot before any learning/reward access; it does not merge later history.
+Zero snapshot explicitly means a legacy/new empty educational baseline containing
+only known game reward claims. A missing/corrupt nonzero snapshot is an error.
+
+Initial `TRAIN_CAPTURE=11` after AUTH carries that same V6 opening payload and
+returns `TRAIN_SNAPSHOT=23` with exactly 32 digest bytes, then closes. It creates
+no terminal or Docker environment. The existing game save transaction requires
+this durable capture before writing the digest for a profile-bearing save.
+
+V6 TRAIN_REWARD21/TRAIN_PERK_REWARD22 and TRAIN_ACK9/TRAIN_PERK_ACK10 prefix their
+unchanged inner payloads with the 16-byte activation. Client/session checks reject
+mismatches and retired activations. Skill/perk receipts still distinguish exact
+duplicates from new applications. V4/v5 clients remain legacy-only and cannot
+access a profile activated by V6. See PROGRESSION.md for the complete rollback,
+practical-attempt reissue, compatibility and recovery policy.

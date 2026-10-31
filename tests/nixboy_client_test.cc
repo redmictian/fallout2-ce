@@ -596,6 +596,49 @@ void testPerkTrainingProtocol()
         && !client.acknowledgePerkTraining(profile, 12, 3, receipt, true), "perk bounds before send");
 }
 
+void testSaveBoundTraining()
+{
+    fallout::nixboy::ProgressionBinding binding;
+    binding.activation.fill(0x11); binding.snapshot.fill(0x22); binding.restore = true;
+    Context context { { "training.version", 6 }, { "training.profile.0", 0x01000000 } };
+    for (bool stale : {false, true}) {
+        Service service; Client client; std::string error;
+        require(client.connect(service.port, kToken, error), "v6 connect");
+        service.acceptClient();
+        require(client.open(24, 80, context, error, true, {}, {}, binding), "v6 open");
+        std::vector<Event> events; client.poll(events);
+        require(service.readFrame(1) == bytes(kToken), "v6 AUTH");
+        auto opened = service.readFrame(7);
+        require(opened.size() >= 49 && std::equal(binding.activation.begin(), binding.activation.end(), opened.end()-49)
+            && std::equal(binding.snapshot.begin(), binding.snapshot.end(), opened.end()-33) && opened.back() == 1,
+            "v6 wire contains activation/snapshot/load selector");
+        makeReady(service, client);
+        Bytes reward(binding.activation.begin(), binding.activation.end());
+        if (stale) reward[0] ^= 1;
+        reward.push_back(12); put16(reward, 62000); put16(reward, 1);
+        TrainingReceipt receipt {}; receipt.back() = 77;
+        reward.insert(reward.end(), receipt.begin(), receipt.end());
+        service.send(frame(21, reward)); pollUntil(client, events, 1);
+        if (stale) {
+            require(events[0].type == EventType::Error && !client.isConnected(), "discarded timeline reward never reaches effect callback");
+        } else {
+            require(events[0].type == EventType::TrainingReward && events[0].receipt == receipt, "current timeline skill reward decoded");
+            require(client.acknowledgeTraining(12, 62000, 1, receipt, true), "bound ACK");
+            client.poll(events); reward.push_back(1);
+            require(service.readFrame(9) == reward, "ACK carries same activation fence");
+        }
+    }
+    Service service; Client client; std::string error;
+    require(client.connect(service.port, kToken, error), "capture connect"); service.acceptClient();
+    require(client.capture(context, error, {}, {}, binding), "capture request");
+    std::vector<Event> events; client.poll(events);
+    require(service.readFrame(1) == bytes(kToken), "capture AUTH");
+    auto request = service.readFrame(11);
+    require(request.size() >= 49 && request.back() == 1, "capture uses same progression selector");
+    service.send(frame(23, Bytes(32, 0x44))); pollUntil(client, events, 1);
+    require(events[0].type == EventType::Snapshot && events[0].snapshot.front() == 0x44 && !client.isConnected(),
+        "save snapshot reply is bounded and terminal-free");
+}
 } // namespace
 
 int main()
@@ -606,6 +649,7 @@ int main()
         testRoundTrip();
         testTrainingProtocol();
         testPerkTrainingProtocol();
+        testSaveBoundTraining();
         testMalformedFrames();
         testFragmentedPayloadAndLimits();
         testDisconnectAndClose();

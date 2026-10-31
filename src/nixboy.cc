@@ -2,11 +2,14 @@
 
 #ifdef FALLOUT_NIXBOY
 #include <cerrno>
+#include <algorithm>
+#include <chrono>
 #include <cstdint>
 #include <cstdlib>
 #include <fstream>
 #include <limits>
 #include <string>
+#include <thread>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -181,6 +184,24 @@ namespace {
         return true;
     }
 
+    bool readToken(const Options& options, std::string& token, std::string& error)
+    {
+        std::ifstream stream(options.tokenFile, std::ios::binary);
+        char bytes[68];
+        stream.read(bytes, sizeof(bytes));
+        token.assign(bytes, static_cast<size_t>(stream.gcount()));
+        while (!token.empty() && (token.back() == '\r' || token.back() == '\n'))
+            token.pop_back();
+        bool valid = token.size() == 64;
+        for (unsigned char ch : token)
+            valid = valid && ((ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f') || (ch >= 'A' && ch <= 'F'));
+        if (!valid || stream.gcount() == static_cast<std::streamsize>(sizeof(bytes))) {
+            error = "Cannot read a 64-digit authentication token. Start the nix-boy bridge first.";
+            return false;
+        }
+        return true;
+    }
+
     bool readWikiOptions(WikiOptions& options, std::string& error)
     {
         Config config;
@@ -291,7 +312,7 @@ namespace {
             for (int skill = 0; skill < SKILL_COUNT; skill++) {
                 context.emplace_back(std::string("skill.") + skillNames[skill], skillGetValue(gDude, skill));
             }
-            context.emplace_back("training.version", 5);
+            context.emplace_back("training.version", 6);
             context.emplace_back("perk.toughness", perkGetRank(gDude, PERK_TOUGHNESS));
             context.emplace_back("perk.toughness.max", perkGetMaximumRank(gDude, PERK_TOUGHNESS));
 #ifdef FALLOUT_NIXBOY_PERK_TRAINING
@@ -394,6 +415,51 @@ void nixboyOpenWiki()
 #endif
 }
 
+bool nixboyPrepareSave()
+{
+#ifdef FALLOUT_NIXBOY
+    auto& state = nixboy::trainingState();
+    if (std::all_of(state.profile().begin(), state.profile().end(), [](uint8_t byte) { return byte == 0; })) return true;
+    Options options;
+    std::string error;
+    std::string token;
+    if (!readOptions(options, error) || !options.enabled || !options.training || !readToken(options, token, error)) {
+        if (error.empty()) error = "Enable nix-boy training to capture this character's progression.";
+        showError("Game save cancelled: " + error);
+        return false;
+    }
+    nixboy::Client client;
+    if (!client.connect(options.port, token, error)
+        || !client.capture(collectContext(options), error, state.claims(), state.perkClaims(), state.binding())) {
+        showError("Game save cancelled: cannot capture progression. " + error);
+        return false;
+    }
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    while (std::chrono::steady_clock::now() < deadline && client.isConnected()) {
+        std::vector<nixboy::Event> events;
+        client.poll(events);
+        for (const auto& event : events) {
+            if (event.type == nixboy::EventType::Snapshot) {
+                state.setSnapshot(event.snapshot);
+                debugPrint("Nix-Boy progression: save checkpoint captured.\n");
+                return true;
+            }
+            if (event.type == nixboy::EventType::Error) {
+                error = event.text;
+                break;
+            }
+        }
+        if (!error.empty()) break;
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    if (error.empty()) error = "Progression checkpoint timed out; verify the bridge and retry.";
+    showError("Game save cancelled: " + error);
+    return false;
+#else
+    return true;
+#endif
+}
+
 void nixboyOpen()
 {
 #ifdef FALLOUT_NIXBOY
@@ -412,18 +478,9 @@ void nixboyOpen()
         }
     }
 
-    std::ifstream stream(options.tokenFile, std::ios::binary);
-    char bytes[68];
-    stream.read(bytes, sizeof(bytes));
-    std::string token(bytes, static_cast<size_t>(stream.gcount()));
-    while (!token.empty() && (token.back() == '\r' || token.back() == '\n'))
-        token.pop_back();
-    bool valid = token.size() == 64;
-    for (unsigned char ch : token) {
-        valid = valid && ((ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f') || (ch >= 'A' && ch <= 'F'));
-    }
-    if (!valid || stream.gcount() == static_cast<std::streamsize>(sizeof(bytes))) {
-        showError("Cannot read a 64-digit authentication token. Start the nix-boy bridge first.");
+    std::string token;
+    if (!readToken(options, token, error)) {
+        showError(error);
         return;
     }
 
@@ -441,6 +498,7 @@ void nixboyOpen()
     training.snapshot = [&options]() { return collectContext(options); };
     training.progress = []() { return nixboy::trainingState().claims(); };
     training.perkProgress = []() { return nixboy::trainingState().perkClaims(); };
+    training.binding = []() { return nixboy::trainingState().binding(); };
     training.perkReward = [](const nixboy::TrainingReceipt& profile, uint16_t perk, uint8_t rank,
                               const nixboy::TrainingReceipt& receipt) {
         auto result = nixboy::applyPerkTrainingReward(nixboy::trainingState(), profile, perk, rank, receipt);

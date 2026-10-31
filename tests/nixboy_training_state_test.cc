@@ -80,7 +80,7 @@ void testGenericProgression()
     require(state.accept(fallout::SKILL_REPAIR, UINT16_MAX, receipt(30)), "sparse maximum level supported");
     require(state.bonus(fallout::SKILL_REPAIR) == 10 && state.bonus(-1) == 0, "bonus counts claims rather than level number");
     auto bytes = state.encode();
-    require(bytes.size() == TrainingState::kMinTrailerSize + 21 * 19 && bytes[11] == 4, "variable v4 trailer length");
+    require(bytes.size() == 72 + 21 * 19 && bytes[11] == 6, "variable v6 trailer length");
     TrainingState restored;
     require(restored.decode(bytes.data(), bytes.size()) && restored.encode() == bytes, "ledger round trip");
     require(restored.accept(fallout::SKILL_REPAIR, UINT16_MAX, receipt(30)) && restored.bonus(fallout::SKILL_REPAIR) == 10,
@@ -103,7 +103,7 @@ void testLegacyMigration()
         require(state.receipt(fallout::SKILL_UNARMED, 2) == receipt(2) && state.receipt(fallout::SKILL_SCIENCE, 1) == receipt(3),
             "migration preserves receipts");
         auto migrated = state.encode();
-        require(migrated[11] == 4 && migrated.size() == 101, "legacy next save records fixed five-point historical awards");
+        require(migrated[11] == 6 && migrated.size() == 135, "legacy next save records fixed five-point historical awards");
         for (const auto& claim : state.claims())
             require(claim.points == 5, "v1/v2 historical points migrate as five");
         require(state.accept(fallout::SKILL_UNARMED, 2, receipt(2)) && state.bonus(fallout::SKILL_UNARMED) == 10,
@@ -172,7 +172,7 @@ void testCapacityAndCorruption()
     for (int level = 1; level <= int(TrainingState::kMaxClaims); level++)
         require(state.accept(fallout::SKILL_REPAIR, level, receipt(level)), "bounded ledger capacity");
     auto full = state.encode();
-    require(full.size() == TrainingState::kMaxSkillTrailerSize && state.decode(full.data(), full.size()), "maximum skill ledger round trip");
+    require(full.size() == TrainingState::kMaxSkillTrailerSize + 34 && state.decode(full.data(), full.size()), "maximum skill ledger round trip");
     require(!state.accept(fallout::SKILL_REPAIR, 2049, receipt(2049)), "overflow claim rejected");
     require(state.accept(fallout::SKILL_REPAIR, 1, receipt(1)), "full ledger still accepts duplicate delivery");
     state.reset();
@@ -255,7 +255,7 @@ void testTypedPerkClaims()
     require(state.acceptPerk(profile, 12, 2, receipt(90), 1, 4) == PerkClaimResult::Rejected, "claim/rank inconsistency");
     require(!state.accept(12, 60000, receipt(90)), "perk receipt cannot fund skill");
     auto bytes = state.encode();
-    require(bytes[11] == 5 && bytes.size() == 80, "typed v5 trailer exact length");
+    require(bytes[11] == 6 && bytes.size() == 112, "typed v6 trailer exact length");
     TrainingState loaded;
     require(loaded.decode(bytes.data(), bytes.size()) && loaded.perkClaims().size() == 1
         && loaded.claims().size() == 1 && loaded.bonus(3) == 5, "v5 load preserves independent skill and perk claims");
@@ -270,6 +270,38 @@ void testTypedPerkClaims()
     seal(corrupt);
     require(!loaded.decode(corrupt.data(), corrupt.size()), "v5 cross-kind duplicate rejected despite CRC");
 }
+void testSaveSelectedSnapshot()
+{
+    TrainingState state;
+    require(state.ensureProfile(), "snapshot profile");
+    fallout::nixboy::ProgressionSnapshot snapshot {}; snapshot.fill(0x55);
+    state.setSnapshot(snapshot);
+    auto activation = state.binding().activation;
+    auto a = state.encode();
+    require(state.accept(12, 62000, receipt(101), 1), "later reward");
+    auto b = state.encode();
+    require(state.decode(a.data(), a.size()) && state.claims().empty(), "load A rolls reward ledger back");
+    require(state.binding().snapshot == snapshot && state.binding().activation != activation,
+        "save contains snapshot reference but load rotates unsaved activation");
+    activation = state.binding().activation;
+    require(state.encode() == a && state.ensureProfile() && state.binding().activation == activation,
+        "reopen/save without load keeps activation");
+    require(state.accept(12, 62000, receipt(102), 1), "rolled-back reward may be earned anew");
+    require(state.decode(b.data(), b.size()) && state.receipt(12, 62000) == receipt(101), "load B restores B receipt");
+    // Actual old v4 body, without perk section/snapshot, remains readable.
+    auto old = b;
+    old.erase(old.end()-38, old.end()-4);
+    old[11] = 4; old[15] = static_cast<uint8_t>(old.size()-20);
+    seal(old);
+    require(state.decode(old.data(), old.size()) && state.binding().snapshot == fallout::nixboy::ProgressionSnapshot {},
+        "legacy v4 has explicit no-education-snapshot selector");
+    require(state.acceptPerk(state.profile(), 12, 2, receipt(103), 1, 4) == fallout::nixboy::PerkClaimResult::New,
+        "legacy v5 fixture perk");
+    old = state.encode(); old.erase(old.end()-36, old.end()-4);
+    old[11] = 5; old[15] = static_cast<uint8_t>(old.size()-20); seal(old);
+    require(state.decode(old.data(), old.size()) && state.perkClaims().size() == 1,
+        "legacy v5 remains readable without importing external education");
+}
 } // namespace
 
 int main()
@@ -280,6 +312,7 @@ int main()
         testRecordedPoints();
         testCapacityAndCorruption();
         testTypedPerkClaims();
+        testSaveSelectedSnapshot();
         std::cout << "nix-boy training state: all tests passed\n";
         return EXIT_SUCCESS;
     } catch (const std::exception& error) {

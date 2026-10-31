@@ -11,7 +11,7 @@ namespace fallout {
 namespace nixboy {
     namespace {
         constexpr uint8_t kMagic[] = { 'N', 'X', 'B', 'T', 'R', 'A', 'I', 'N' };
-        constexpr uint32_t kVersion = 4;
+        constexpr uint32_t kVersion = 6;
         static_assert(SKILL_COUNT == 18, "Training wire skill IDs require an explicit migration if changed");
 
         bool empty(const TrainingReceipt& receipt)
@@ -46,10 +46,26 @@ namespace nixboy {
     void TrainingState::reset()
     {
         *this = TrainingState();
+        ensureActivation();
+    }
+
+    bool TrainingState::ensureActivation()
+    {
+        if (!empty(binding_.activation)) return true;
+        try {
+            std::random_device random;
+            for (auto& byte : binding_.activation)
+                byte = static_cast<uint8_t>(random());
+        } catch (...) {
+            binding_.activation.fill(0);
+            return false;
+        }
+        return !empty(binding_.activation);
     }
 
     bool TrainingState::ensureProfile()
     {
+        if (!ensureActivation()) return false;
         if (!empty(profile_)) return true;
         try {
             std::random_device random;
@@ -131,9 +147,8 @@ namespace nixboy {
     std::vector<uint8_t> TrainingState::encode() const
     {
         std::vector<uint8_t> bytes(std::begin(kMagic), std::end(kMagic));
-        bool hasPerks = !perkClaims_.empty();
-        append32(bytes, hasPerks ? 5 : kVersion);
-        append32(bytes, static_cast<uint32_t>(18 + claims_.size() * 21 + (hasPerks ? 2 + perkClaims_.size() * 19 : 0)));
+        append32(bytes, kVersion);
+        append32(bytes, static_cast<uint32_t>(18 + claims_.size() * 21 + 2 + perkClaims_.size() * 19 + binding_.snapshot.size()));
         bytes.insert(bytes.end(), profile_.begin(), profile_.end());
         bytes.push_back(static_cast<uint8_t>(claims_.size() >> 8));
         bytes.push_back(static_cast<uint8_t>(claims_.size()));
@@ -145,7 +160,7 @@ namespace nixboy {
             bytes.push_back(static_cast<uint8_t>(claim.points));
             bytes.insert(bytes.end(), claim.receipt.begin(), claim.receipt.end());
         }
-        if (hasPerks) {
+        {
             bytes.push_back(static_cast<uint8_t>(perkClaims_.size() >> 8));
             bytes.push_back(static_cast<uint8_t>(perkClaims_.size()));
             for (const auto& claim : perkClaims_) {
@@ -155,6 +170,7 @@ namespace nixboy {
                 bytes.insert(bytes.end(), claim.receipt.begin(), claim.receipt.end());
             }
         }
+        bytes.insert(bytes.end(), binding_.snapshot.begin(), binding_.snapshot.end());
         append32(bytes, checksum(bytes.data(), bytes.size()));
         return bytes;
     }
@@ -189,12 +205,14 @@ namespace nixboy {
                     if (claimed && !candidate.accept(track == 0 ? SKILL_UNARMED : SKILL_SCIENCE, level + 1, receipt)) return false;
                 }
             }
-        } else if (version == 3 || version == kVersion || version == 5) {
+        } else if (version == 3 || version == 4 || version == 5 || version == kVersion) {
             size_t recordSize = version == 3 ? 19 : 21;
             size_t count = (size_t(bytes[32]) << 8) | bytes[33];
             size_t skillEnd = kMinTrailerSize + count * recordSize;
-            if (count > kMaxClaims || (version != 5 && size != skillEnd)
-                || (version == 5 && size < skillEnd + 2)) return false;
+            bool hasPerkSection = version >= 5;
+            size_t snapshotBytes = version == kVersion ? candidate.binding_.snapshot.size() : 0;
+            if (count > kMaxClaims || (!hasPerkSection && size != skillEnd)
+                || (hasPerkSection && size < skillEnd + 2 + snapshotBytes)) return false;
             for (size_t index = 0; index < count; index++) {
                 int skill = bytes[offset];
                 int level = (int(bytes[offset + 1]) << 8) | bytes[offset + 2];
@@ -205,10 +223,11 @@ namespace nixboy {
                 if (!empty(candidate.receipt(skill, level)) || !candidate.accept(skill, level, receipt, points)) return false;
                 offset += recordSize;
             }
-            if (version == 5) {
+            if (hasPerkSection) {
                 size_t perkCount = (size_t(bytes[offset]) << 8) | bytes[offset + 1];
                 offset += 2;
-                if (perkCount == 0 || perkCount > kMaxPerkClaims || offset + perkCount * 19 + 4 != size) return false;
+                if ((version == 5 && perkCount == 0) || perkCount > kMaxPerkClaims
+                    || offset + perkCount * 19 + snapshotBytes + 4 != size) return false;
                 for (size_t index = 0; index < perkCount; index++) {
                     int perk = (int(bytes[offset]) << 8) | bytes[offset + 1];
                     int rank = bytes[offset + 2];
@@ -217,9 +236,12 @@ namespace nixboy {
                     if (candidate.acceptPerk(candidate.profile(), perk, rank, receipt, rank - 1, rank) != PerkClaimResult::New) return false;
                     offset += 19;
                 }
+                if (snapshotBytes)
+                    std::copy(bytes + offset, bytes + offset + snapshotBytes, candidate.binding_.snapshot.begin());
             }
         } else
             return false;
+        if (!candidate.ensureActivation()) return false;
         *this = candidate;
         return true;
     }

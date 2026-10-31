@@ -115,7 +115,7 @@ it does not unlock ownership. The receipt is persisted with successful education
 completion before delivery. Existing course catalogs with no reward remain
 reward-free, and legacy skill bands/receipts stay independent. See
 [PERK_REWARDS.md](PERK_REWARDS.md) for typed delivery, duplicate handling, save
-compatibility and older-save reconciliation. Permanent mappings and other perk
+compatibility and save-bound rollback. Permanent mappings and other perk
 effects are deliberately not defined by this pilot.
 
 ## Runtime and retry rules
@@ -158,43 +158,17 @@ or `T` when a questionnaire was already committed. Ordinary assignments do not
 silently expire during reading/breaks. Attachment-owned shell commands may stop
 on detach; attempt-owned prepared workers and files survive ordinary detach.
 
-## Durable records, backup and recovery
+## Save-bound records, backup and recovery
 
-Educational records use nested `education.version: 1` inside the existing
-bridge snapshot version 4. The bridge persists records atomically in
-`STATE_DIRECTORY/training.json`, bound to the existing character profile.
-Completions, drafts/commitments, alternative exposure and compact trusted evidence
-live outside disposable containers. This educational subtree introduces no game
-save fields; the separate typed-perk adapter has explicit v5 compatibility below.
+Educational records remain `education.version: 1` in the existing bridge profile.
+The current bridge snapshot is version 5; new game trailer 6 selects an immutable
+copy of the complete profile at save time. Loading restores that exact saved
+education, project progress, alternative accounting and receipts. Reopening
+without a game load keeps current unsaved progress. Later external history is
+not merged into an older save, and rolled-back rewards can be earned again.
 
-Loading an older game save with the **same profile** does not erase earned
-educational progress in the bridge. Existing game-save skill claims cannot
-reconstruct gate completions, P/K evidence, drafts or checkpoints if bridge state
-is lost. Keep a private backup of the entire bridge snapshot, not only a selected
-educational subtree or learner success files.
-
-Using the existing bridge Python environment, export to a new private file:
-
-```sh
-python education_records.py export --state-dir /path/to/state --output /path/to/private/backup.json
-python education_records.py validate /path/to/private/backup.json
-```
-
-Export reads a complete atomic snapshot and refuses to overwrite an existing
-backup or the active state file. Keep profile IDs, answers and reward receipts
-private; do not commit these files into source or distribute them as content.
-
-Recovery is deliberately offline:
-
-1. Stop the **owning** bridge/provider using its scoped operational controls.
-2. Validate the backup and preserve the existing `training.json` separately.
-3. Restore the complete backup as that state directory's `training.json`, with
-   private ownership/permissions; retain the source backup unchanged.
-4. Restart the provider against the same content/state directory and reconnect
-   the matching profile. A live questionnaire retains its saved commitment.
-   An execution environment is not restored by the JSON backup; follow explicit
-   facility reissue rules for an interrupted attempt.
-
-Do not edit or merge live snapshots, reuse someone else's profile, or infer later
-completion from an older backup. A backup preserves records up to its export;
-it is not a general reconstruction or active-environment transfer mechanism.
+[PROGRESSION.md](PROGRESSION.md) owns the save/load selection, practical reissue,
+legacy v4/v5 limitations, missing-state errors and complete backup/recovery route.
+Use `education_records.py export/validate` to preserve both the atomic profile
+backup and its companion progression-snapshots directory. Offline restore targets
+a new directory and never overwrites an existing player/test state.

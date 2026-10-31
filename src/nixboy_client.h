@@ -19,6 +19,7 @@ namespace nixboy {
         Result,
         TrainingReward,
         PerkTrainingReward,
+        Snapshot,
         Exit,
         Error };
 
@@ -34,6 +35,7 @@ namespace nixboy {
         TrainingReceipt profile {};
         uint16_t perk = 0;
         uint8_t rank = 0;
+        ProgressionSnapshot snapshot {};
     };
 
     enum class TrainingAction : uint8_t { Check = 1,
@@ -55,7 +57,13 @@ namespace nixboy {
 
         bool connect(uint16_t port, const std::string& token, std::string& error);
         bool open(uint16_t rows, uint16_t cols, const Context& context, std::string& error, bool training = false,
-            const std::vector<TrainingClaim>& claims = {}, const std::vector<PerkTrainingClaim>& perkClaims = {});
+            const std::vector<TrainingClaim>& claims = {}, const std::vector<PerkTrainingClaim>& perkClaims = {},
+            const ProgressionBinding& binding = {});
+        // Save checkpoint only: authenticates and freezes bridge progression;
+        // creates no terminal, assignment or environment. Reply is Snapshot.
+        bool capture(const Context& context, std::string& error,
+            const std::vector<TrainingClaim>& claims, const std::vector<PerkTrainingClaim>& perkClaims,
+            const ProgressionBinding& binding);
         // False means not ready, invalid arguments, or bounded send queue full.
         bool sendInput(const std::string& bytes);
         bool resize(uint16_t rows, uint16_t cols);
@@ -69,6 +77,9 @@ namespace nixboy {
         bool isConnected() const;
 
     private:
+        bool openInternal(uint16_t rows, uint16_t cols, const Context& context, std::string& error, bool training,
+            const std::vector<TrainingClaim>& claims, const std::vector<PerkTrainingClaim>& perkClaims,
+            const ProgressionBinding& binding, bool capture);
         struct Impl;
         std::unique_ptr<Impl> impl_;
     };

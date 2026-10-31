@@ -17,6 +17,7 @@ struct NixboyTrainingCallbacks {
     std::function<std::vector<nixboy::TrainingClaim>()> progress;
     std::function<bool(const nixboy::TrainingReceipt&, uint16_t, uint8_t, const nixboy::TrainingReceipt&)> perkReward;
     std::function<std::vector<nixboy::PerkTrainingClaim>()> perkProgress;
+    std::function<nixboy::ProgressionBinding()> binding;
 };
 
 struct NixboyTerminalOptions {

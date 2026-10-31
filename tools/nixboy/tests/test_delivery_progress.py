@@ -331,7 +331,7 @@ class DeliveryProgressTests(unittest.TestCase):
         expected = self.state()
         self.manager.close()
         data = json.loads(self.manager.path.read_text())
-        self.assertEqual(data["version"], 4)
+        self.assertEqual(data["version"], 5)
         data["profiles"][self.identity].pop("perk_receipts", None)
         self.manager.path.write_text(json.dumps(data))
         self.manager = self.new_manager()

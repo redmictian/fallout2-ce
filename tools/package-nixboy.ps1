@@ -115,6 +115,7 @@ $files = @(
     'tools/nixboy/requirements.txt', 'tools/nixboy/bridge.py', 'tools/nixboy/QEMU.md',
     'tools/nixboy/protocol.py', 'tools/nixboy/training.py',
     'tools/nixboy/course_content.py', 'tools/nixboy/course_progress.py', 'tools/nixboy/education_records.py', 'tools/nixboy/COURSE.md',
+    'tools/nixboy/progression_state.py', 'tools/nixboy/PROGRESSION.md',
     'tools/nixboy/perk_rewards.py', 'tools/nixboy/PERK_REWARDS.md', 'tools/nixboy/import_course_lessons.py',
     'tools/nixboy/NGINX.md',
     'tools/nixboy/nginx_env.py', 'tools/nixboy/nginx_profile.py', 'tools/nixboy/nginx_prepare.py', 'tools/nixboy/nginx_probe.py',

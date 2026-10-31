@@ -10,6 +10,13 @@ namespace fallout {
 namespace nixboy {
 
     using TrainingReceipt = std::array<uint8_t, 16>;
+    using ProgressionSnapshot = std::array<uint8_t, 32>;
+
+    struct ProgressionBinding {
+        TrainingReceipt activation {};
+        ProgressionSnapshot snapshot {};
+        bool restore = true;
+    };
 
     struct TrainingClaim {
         uint8_t skill;
@@ -35,11 +42,13 @@ namespace nixboy {
         static constexpr size_t kMinTrailerSize = 38;
         static constexpr size_t kMaxPerkClaims = 64;
         static constexpr size_t kMaxSkillTrailerSize = kMinTrailerSize + 21 * kMaxClaims;
-        static constexpr size_t kMaxTrailerSize = kMaxSkillTrailerSize + 2 + 19 * kMaxPerkClaims;
+        static constexpr size_t kMaxTrailerSize = kMaxSkillTrailerSize + 2 + 19 * kMaxPerkClaims + 32;
         void reset();
         bool ensureProfile();
         int32_t profileWord(size_t index) const;
         const TrainingReceipt& profile() const { return profile_; }
+        const ProgressionBinding& binding() const { return binding_; }
+        void setSnapshot(const ProgressionSnapshot& snapshot) { binding_.snapshot = snapshot; }
         int completed(int skill) const;
         const std::vector<TrainingClaim>& claims() const { return claims_; }
         const std::vector<PerkTrainingClaim>& perkClaims() const { return perkClaims_; }
@@ -59,6 +68,10 @@ namespace nixboy {
 
     private:
         TrainingReceipt profile_ {};
+        // Snapshot is saved; activation identifies this loaded runtime and is
+        // deliberately regenerated rather than serialized into SAVE.DAT.
+        ProgressionBinding binding_;
+        bool ensureActivation();
         std::vector<TrainingClaim> claims_;
         std::vector<PerkTrainingClaim> perkClaims_;
     };

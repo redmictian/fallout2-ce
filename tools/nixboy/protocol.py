@@ -8,9 +8,11 @@ MAX_CONTEXT = 128
 AUTH, OPEN, INPUT, RESIZE, CLOSE, CONTEXT = range(1, 7)
 TRAIN_OPEN, TRAIN_ACTION, TRAIN_ACK = range(7, 10)
 TRAIN_PERK_ACK = 10
+TRAIN_CAPTURE = 11
 READY, OUTPUT, RESULT, EXIT, ERROR = range(16, 21)
 TRAIN_REWARD = 21
 TRAIN_PERK_REWARD = 22
+TRAIN_SNAPSHOT = 23
 TRAIN_CHECK, TRAIN_HUB, TRAIN_RESET, TRAIN_ABANDON = range(1, 5)
 NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_.-]{0,63}\Z", re.ASCII)
 TOKEN = re.compile(rb"[0-9a-fA-F]{64}\Z")
@@ -116,7 +118,7 @@ def decode_context(payload):
 
 def training_context(values):
     """Validate the training handshake before catalog/state/Docker access."""
-    if values.get("training.version") not in (4, 5):
+    if values.get("training.version") not in (4, 5, 6):
         raise ProtocolError("unsupported training version")
     chunks = []
     for index in range(4):
@@ -170,7 +172,35 @@ def validate_perk_claims(claims):
     return claims
 
 
-def encode_training_open(rows, cols, values, claims, perk_claims=None):
+def validate_progression_binding(binding):
+    if not isinstance(binding, dict) or set(binding) != {"activation", "snapshot", "restore"} \
+            or not isinstance(binding["activation"], str) \
+            or not re.fullmatch(r"[0-9a-f]{32}", binding["activation"]) \
+            or binding["activation"] == "0" * 32 \
+            or not isinstance(binding["snapshot"], str) \
+            or not re.fullmatch(r"[0-9a-f]{64}", binding["snapshot"]) \
+            or type(binding["restore"]) is not bool:
+        raise ProtocolError("invalid save progression binding")
+    return binding
+
+
+def fence_training_payload(payload, activation):
+    if not isinstance(activation, str) or not re.fullmatch(r"[0-9a-f]{32}", activation) \
+            or activation == "0" * 32:
+        raise ProtocolError("invalid progression activation")
+    if len(payload) + 16 > MAX_PAYLOAD:
+        raise ProtocolError("bound training payload exceeds frame limit")
+    return bytes.fromhex(activation) + payload
+
+
+def unfence_training_payload(payload, activation):
+    prefix = fence_training_payload(b"", activation)
+    if len(payload) < 16 or payload[:16] != prefix:
+        raise ProtocolError("stale progression delivery or acknowledgment")
+    return payload[16:]
+
+
+def encode_training_open(rows, cols, values, claims, perk_claims=None, binding=None):
     size = struct.pack("!HH", rows, cols)
     dimensions(size)
     training_context(values)
@@ -183,19 +213,24 @@ def encode_training_open(rows, cols, values, claims, perk_claims=None):
     validate_perk_claims(perk_claims)
     if any(receipt in {claim["receipt"] for claim in claims.values()} for receipt in perk_claims.values()):
         raise ProtocolError("receipt reused across reward types")
-    if values["training.version"] == 5:
+    if values["training.version"] >= 5:
         payload += struct.pack("!H", len(perk_claims))
         for key, receipt in sorted(perk_claims.items()):
             perk, rank = map(int, key.split(":"))
             payload += struct.pack("!HB", perk, rank) + bytes.fromhex(receipt)
     elif perk_claims:
         raise ProtocolError("perk claims require training version 5")
+    if values["training.version"] == 6:
+        validate_progression_binding(binding)
+        payload += bytes.fromhex(binding["activation"]) + bytes.fromhex(binding["snapshot"]) + bytes([binding["restore"]])
+    elif binding is not None:
+        raise ProtocolError("save progression binding requires training version 6")
     if len(payload) > MAX_PAYLOAD:
         raise ProtocolError("training open exceeds frame limit")
     return payload
 
 
-def decode_training_open(payload, include_perks=False):
+def decode_training_open(payload, include_perks=False, include_binding=False):
     if len(payload) < 12:
         raise ProtocolError("truncated training open")
     rows, cols = dimensions(payload[:4])
@@ -207,7 +242,7 @@ def decode_training_open(payload, include_perks=False):
     count = struct.unpack_from("!H", payload, 8 + size)[0]
     skill_end = 10 + size + count * 21
     if count > MAX_CLAIMS or (values["training.version"] == 4 and len(payload) != skill_end) \
-            or (values["training.version"] == 5 and len(payload) < skill_end + 2):
+            or (values["training.version"] >= 5 and len(payload) < skill_end + 2):
         raise ProtocolError("invalid training claim record count")
     claims = {}
     offset = 10 + size
@@ -221,10 +256,11 @@ def decode_training_open(payload, include_perks=False):
         offset += 21
     validate_claims(claims)
     perks = {}
-    if values["training.version"] == 5:
+    if values["training.version"] >= 5:
         perk_count = struct.unpack_from("!H", payload, offset)[0]
         offset += 2
-        if perk_count > MAX_PERK_CLAIMS or len(payload) != offset + perk_count * 19:
+        tail = 49 if values["training.version"] == 6 else 0
+        if perk_count > MAX_PERK_CLAIMS or len(payload) != offset + perk_count * 19 + tail:
             raise ProtocolError("invalid perk training record count")
         for _ in range(perk_count):
             perk, rank = struct.unpack_from("!HB", payload, offset)
@@ -236,6 +272,14 @@ def decode_training_open(payload, include_perks=False):
         validate_perk_claims(perks)
         if any(receipt in {claim["receipt"] for claim in claims.values()} for receipt in perks.values()):
             raise ProtocolError("receipt reused across reward types")
+    binding = None
+    if values["training.version"] == 6:
+        if payload[offset + 48] not in (0, 1):
+            raise ProtocolError("invalid restore selector")
+        binding = validate_progression_binding({"activation": payload[offset:offset+16].hex(),
+            "snapshot": payload[offset+16:offset+48].hex(), "restore": bool(payload[offset+48])})
+    if include_binding:
+        return rows, cols, values, claims, perks, binding
     return (rows, cols, values, claims, perks) if include_perks else (rows, cols, values, claims)
 
 

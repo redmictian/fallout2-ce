@@ -101,7 +101,7 @@ at the end of SAVE.DAT. Old saves
 without a trailer load with empty training state. Present but incomplete or
 corrupt trailers are errors, not silently accepted empty progress. The bonus is
 derived from the stored earned amounts, so duplicate messages cannot stack
-rewards. Earlier training saves migrate to the version-4 ledger without losing
+rewards. Earlier training saves migrate to the current ledger without losing
 receipts or bonuses; each older earned level retains its original five points.
 Changing `reward_points` in the catalog does not change rewards already earned.
 Levels can be earned
@@ -111,14 +111,13 @@ attempt without that snapshot requires abandoning and selecting again; this
 does not remove earned progress.
 
 The bridge durably records a successful assessment before sending its receipt.
-It retries delivery after interruption. Earned learning can be restored into an
-earlier save containing the same training identity, without repeatedly adding
-to raw skills. A save made before that identity existed starts another profile.
-Save after first opening nix-boy when you want to retain that identity. A level
-already claimed cannot grant another reward, even if a later modifier lowers
-the skill back into its band. Ordinary skill spending may move directly into
-level 2 without completing level 1; only the eligible band's unclaimed level can
-be assessed for a reward. Previously earned learning remains additive.
+It retries delivery after interruption within the current loaded progression.
+Loading an older game save restores its rewards and learning state, so a later
+completion is absent and can be earned again. Reopening without loading resumes
+unsaved progress and pending delivery. Separate activation fencing rejects stale
+messages from a discarded load. New saves use trailer 6 and a bridge snapshot
+reference; see [PROGRESSION.md](PROGRESSION.md) for compatibility, save-time bridge
+availability, practical reissue and backup/recovery.
 
 Closing the terminal keeps the active environment while the bridge is running.
 Reset uses the same seed; it does not remove earned levels. If the skill changed

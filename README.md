@@ -13,6 +13,11 @@ Its candidate version is in [nixboy.version](nixboy.version). See the
 [development workspace pointer](MODLOG.md). The terminal and challenges require
 a separate local bridge. Its offline HTML wiki uses Windows WebView2 and opens
 without Python, Docker or a running bridge.
+Progression now follows the selected game save: the existing save transaction
+captures a bridge progression reference in trailer 6. Later rewards/educational
+history are not restored into older saves. See the [save/load and recovery
+contract](tools/nixboy/PROGRESSION.md), including legacy-save limits and the
+save-time bridge requirement for characters with training profiles.
 Its [editable challenge catalog](tools/nixboy/content/README.md) maps Fallout
 skills to knowledge tracks, percentage bands and per-level reward amounts.
 Copying the executable alone does not start Docker. Runtime is disabled unless

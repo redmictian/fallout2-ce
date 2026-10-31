@@ -8,6 +8,9 @@ bool nixboyIsEnabled();
 // The configured shortcut is cached at first key event; restart to reload it.
 bool nixboyIsHotkey(int eventCode);
 void nixboyOpen();
+// Capture save-associated bridge progression before the checked SAVE.DAT write.
+// Failure leaves the existing slot untouched and reports a useful local error.
+bool nixboyPrepareSave();
 
 // Independent local reading UI; no terminal token, Docker or training identity.
 bool nixboyIsWikiEnabled();

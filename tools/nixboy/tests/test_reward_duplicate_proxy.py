@@ -84,6 +84,36 @@ class RewardRelayTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             ReceiptRelay(events.append, "skill", drop_acks=True)
 
+    def test_v6_reward_envelope_is_duplicated_unchanged_and_ack_can_be_lost(self):
+        events = []
+        relay = ReceiptRelay(events.append, "perk", drop_acks=True)
+        activation = "44" * 16
+        reward = wire.encode_training_perk_reward("11" * 16, 12, 2, b"\x22" * 16)
+        payload = wire.fence_training_payload(reward, activation)
+        self.assertEqual(relay.transfer(wire.TRAIN_PERK_REWARD, payload, True),
+                         wire.frame(wire.TRAIN_PERK_REWARD, payload) * 2)
+        ack = wire.fence_training_payload(reward + b"\1", activation)
+        self.assertEqual(relay.transfer(wire.TRAIN_PERK_ACK, ack, False), b"")
+        self.assertEqual(events[0]["activation"], activation)
+        self.assertEqual(events[0]["receipt"], "22" * 16)
+        self.assertTrue(events[1]["accepted"] and events[1]["dropped"])
+        self.assertEqual(events[1]["activation"], activation)
+
+    def test_v6_save_capture_and_snapshot_are_observed_without_modification(self):
+        events = []
+        relay = ReceiptRelay(events.append, "perk")
+        values = context(6)
+        binding = {"activation": "44" * 16, "snapshot": "55" * 32, "restore": True}
+        opening = wire.encode_training_open(40, 153, values, {}, {}, binding=binding)
+        self.assertEqual(relay.transfer(wire.TRAIN_CAPTURE, opening, False),
+                         wire.frame(wire.TRAIN_CAPTURE, opening))
+        snapshot = bytes.fromhex("66" * 32)
+        self.assertEqual(relay.transfer(wire.TRAIN_SNAPSHOT, snapshot, True),
+                         wire.frame(wire.TRAIN_SNAPSHOT, snapshot))
+        self.assertEqual(events[0]["kind"], "game_capture")
+        self.assertEqual(events[0]["binding"], binding)
+        self.assertEqual(events[1], {"kind": "game_snapshot", "snapshot": "66" * 32})
+
 
 if __name__ == "__main__":
     unittest.main()
