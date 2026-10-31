@@ -9,8 +9,9 @@ finished course. It uses a fixed native nginx guest with two real client origins
    prepared canonical stage-one contract with a new endpoint fault. Repair it,
    record a genuine reload, commit the bounded question and submit.
 
-F7 before commitment restores the current canonical stage; previous completion
-is retained. After conceptual commitment T creates an explicit new reassessment.
+F7 before commitment restores the current canonical stage; the current-run project
+cursor is retained. Loading a game starts the project again. After conceptual
+commitment T creates an explicit new reassessment.
 The default current profile uses no learner snapshots or carried files.
 
 Stage two has one explicitly test-only reward: owned inert Toughness12/rank1 →

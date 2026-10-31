@@ -83,8 +83,8 @@ no reward/learner failure is recorded. Validation decisions/checkpoints live
 outside the guest; a success marker cannot issue a receipt.
 
 External evidence is retained in `STATE/qemu-evidence/ATTEMPT/GENERATION/`.
-Use `smoke_qemu_training.py --run --output NEW-PRIVATE-DIRECTORY` from source
-for actual socket/Docker/serial checks; its ledger is modeled, not actual game
-save evidence. `inspect_training_save.py SAVE.DAT` reads an actual saved v4
-ledger without modification. The mod acceptance report distinguishes these
-from real in-game save/load and stability observations.
+The existing qualified guest supervisor, serial broker, overlays and trusted
+probes are retained unchanged. Source-only smoke_clean_candidate.py can exercise
+the native project/optional guest path; player packages contain runtime only.
+Previous backend qualification/stability evidence keeps its recorded revision
+and scope. Saving and ordinary challenges never require this backend.

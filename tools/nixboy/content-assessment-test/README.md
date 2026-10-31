@@ -4,14 +4,14 @@ This optional catalog demonstrates infrastructure only. It certifies no course
 lesson and introduces no fictional application or service framework.
 
 - `test.intro` is theory-only, with two finite question alternatives and no lab.
-- `test.mixed` requires `test.intro` completion independently of game skill. Its
+- `test.mixed` is an independently selectable bounded mixed assessment. Its
   alternatives reuse the existing trusted copy/directory handlers and each
   requires practical AND conceptual success in the same attempt.
 - `test.ordered` uses real file copies, trusted rollback/reapply checkpoints and
   an independently prepared worker. A correct final file alone is insufficient.
-- `test.foundation` is a derived ALL parent of intro and mixed completion.
+- Independent prerequisites and ALL completion parents are deferred/removed.
 
-Course completion awards **no game reward**. The underlying schema-2 legacy
+These assessment completions award **no game reward**. The underlying schema-2 legacy
 regression track is explicitly test-only: Science12/level61000/0..300/+1. It is
 not a permanent educational mapping and course selection must not issue it.
 Only `test.legacy-copy` and `test.legacy-directory` belong to that legacy pool.

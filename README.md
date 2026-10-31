@@ -6,12 +6,14 @@ Popular Fallout 2 total conversion mods are partially supported. Original versio
 
 There is also [Fallout Community Edition](https://github.com/alexbatalov/fallout1-ce).
 
-This checkout includes the **unreleased nix-boy 0.8.0 candidate**, one mod combining a Pip-Boy Linux
+This checkout includes the **nix-boy 0.8.0-rc.1 cleaned candidate**, one mod combining a Pip-Boy Linux
 terminal and its challenges, an offline wiki, and perk training.
 Its candidate version is in [nixboy.version](nixboy.version). See the
 [nix-boy setup and protocol guide](tools/nixboy/README.md) and
 [development workspace pointer](MODLOG.md). The terminal and challenges require
-a separate local bridge. Its offline HTML wiki uses Windows WebView2 and opens
+a separate local bridge. Saving does not use that bridge or any external
+educational file; current skills/perks remain game-owned. See the
+[cleanup contract](tools/nixboy/CLEANUP.md). Its offline HTML wiki uses Windows WebView2 and opens
 without Python, Docker or a running bridge.
 Its [editable challenge catalog](tools/nixboy/content/README.md) maps Fallout
 skills to knowledge tracks, percentage bands and per-level reward amounts.

@@ -89,7 +89,8 @@ control the displayed mapping; they do not change reward identity.
 It belongs to the level, so every challenge in that pool earns the same amount.
 The shipped four levels specify 5 explicitly. Earned receipts store their original
 amount: later catalog edits cannot increase or reduce previous rewards, including
-when loading an older save or replaying delivery. Legacy earned levels migrate
+within that game save. Loading an earlier save restores its earlier claims and
+bonuses; later external rewards are not imported. Legacy earned levels migrate
 with five points each. Balance band widths and reward amounts together; the next
 available level still comes from the character's resulting current skill value.
 An active attempt also records its selected amount. If its catalog reward changes

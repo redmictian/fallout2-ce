@@ -93,60 +93,39 @@ command history. Equivalent valid solutions are accepted unless the objective
 explicitly requires a technique. Learner `nixboy emit` commands cannot award
 training progress.
 
-## Progress and recovery
+## Game progress and active work
 
-The game stores a random character training identity and a sparse ledger of
-skill/level receipt IDs and earned amounts in a versioned, checksummed trailer
-at the end of SAVE.DAT. Old saves
-without a trailer load with empty training state. Present but incomplete or
-corrupt trailers are errors, not silently accepted empty progress. The bonus is
-derived from the stored earned amounts, so duplicate messages cannot stack
-rewards. Earlier training saves migrate to the version-4 ledger without losing
-receipts or bonuses; each older earned level retains its original five points.
-Changing `reward_points` in the catalog does not change rewards already earned.
-Levels can be earned
-independently; a higher current skill band does not require earlier rewards.
-Active attempts record their selected reward. An edited reward or an older
-attempt without that snapshot requires abandoning and selecting again; this
-does not remove earned progress.
+Saving/loading uses the ordinary game save system with its existing native
+training bonus/claim ledger. Saving needs no bridge, Docker, QEMU or external
+education files. The loaded character's skills, bonuses, owned perk ranks and
+native claims are authoritative. Later external results are never restored into
+an earlier save; a rolled-back advancement can be genuinely earned again.
 
-The bridge durably records a successful assessment before sending its receipt.
-It retries delivery after interruption. Earned learning can be restored into an
-earlier save containing the same training identity, without repeatedly adding
-to raw skills. A save made before that identity existed starts another profile.
-Save after first opening nix-boy when you want to retain that identity. A level
-already claimed cannot grant another reward, even if a later modifier lowers
-the skill back into its band. Ordinary skill spending may move directly into
-level 2 without completing level 1; only the eligible band's unclaimed level can
-be assessed for a reward. Previously earned learning remains additive.
+The existing opaque training identity is renewed on first terminal open after a
+game load/new game. Reopening without loading keeps that live assessment run.
+The bridge's runtime.json contains only active task state, alternatives, current
+project cursor and one completion awaiting acknowledgment. It is not an earned
+achievement database and never imports previous training.json histories.
 
-Closing the terminal keeps the active environment while the bridge is running.
-Reset uses the same seed; it does not remove earned levels. If the skill changed
-bands, checking preserves the exercise but asks you to abandon and select from
-the current band. Issued assignments have no silent detached idle deadline.
-Provider shutdown/loss removes or invalidates execution resources but retains
-the attempt definition, queue and receipts. It is a facility interruption, not a
-learner failure; explicit F7 reissue recreates the seeded starting exercise.
-Unsaved Linux edits do not survive that reissue. Prepared attempt-owned workers
-survive normal terminal detach; attachment-owned shell commands may stop.
+Lost ACK may retry the exact current completion within that run. Native duplicate
+checks prevent another effect. Accepted delivery or an exact observed character
+claim stops retry; a new run discards old pending results. No receipt-history
+recovery, snapshot reference, external save association or activation protocol is
+required. New writes remain v4/v5; a small v6 reader ignores obsolete reference
+bytes for earlier experimental saves. See CLEANUP.md and PERK_REWARDS.md.
 
-An optional `course.yaml` adds educational gates independently of skill bands.
-See [COURSE.md](COURSE.md) for prerequisites, committed questions, mixed completion,
-ordered checkpoints, explicit retries and private educational-record recovery.
-Legacy skill receipt payloads and reconciliation are preserved. The optional
-typed-perk adapter adds explicit opening/save v5 support; see
-[PERK_REWARDS.md](PERK_REWARDS.md) before moving saves between review builds.
+Detach/reopen keeps the active environment/files while its provider runs. Loading
+starts a fresh assessment run and cleans the prior scoped runtime on next open;
+practical labs restart canonically. The project cursor and theory drafts are
+current-run work, not game-save progress. Provider restart may reissue that same
+run's canonical task, without a learner penalty. No VM/process state is restored.
+Within-run reset affects the current stage, not earlier stage order. Independent
+course-wide prerequisites/ALL completions and cross-load project progress are deferred.
 
-The bridge owns all orchestration. One-service exercises have no network;
-network exercises use workstation/server services on an internal Docker network,
-with no host-published ports or Docker socket inside containers. Cleanup is
-limited to the exact owned attempt resources. Never use global Docker prune for
-nix-boy recovery. Preserve the state directory if a cleanup or validation error
-needs investigation.
-
-The initial Compose integration targets Docker's default local Unix socket (or
-default Windows named pipe). Training does not yet support the legacy bridge's
-custom Docker endpoint option. This workstation uses the supported WSL socket.
+Use a fresh candidate state directory and scoped provider controls. If task state
+is lost/corrupt, preserve it and start fresh task state; the game save remains
+loadable with its own skills/perks. Do not merge old progression snapshots, run
+another writer against live state, expose the Docker socket or use global prune.
 
 ## Authoring and validation
 
@@ -166,7 +145,7 @@ earned receipts per character. The shipped two-track slice is authored content,
 not a hardcoded progression limit. Source catalog edits belong in
 `tools/nixboy/content/`; installed edits affect the separate runtime copy.
 
-Selection, seeds, queues, attempt generations, receipt delivery and lifecycle
+Selection, seeds, current-run queues, attempt generations, one-result delivery and lifecycle
 belong to `training.py`; character bonuses and their save record belong to
 `src/nixboy_training_state.*`. The provisional content-to-skill mapping and
 reward magnitude can be balanced independently of these mechanics.
