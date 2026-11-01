@@ -1,0 +1,18 @@
+id: delivery.nginx-policy
+version: 1
+skill: 12
+level: 62000
+title: Native nginx policy fixture - stage one
+kind: qemu-nginx
+parameters:
+  name: [native-nginx-policy]
+  preparation: [nginx-policy-v1]
+wiki: [course.nginx-preparation]
+instructions: >-
+  INTEGRATION FIXTURE, not full SA67. Inspect /etc/nginx/nginx.conf.
+  Keep /public.txt available to both client namespaces. Restrict /staff.txt to 10.77.0.2,
+  denying 10.77.0.3. Preserve the expected bodies and nonprivileged nginx worker.
+  Use nginx -t and a native systemctl reload nginx. F6 then X reload records
+  the trusted reload checkpoint; F5 submits. Client namespaces are
+  nb-client-allowed and nb-client-denied. Use ip netns exec plus curl with
+  Host header lesson.nixboy.invalid and http://10.77.0.1:8080/public.txt.

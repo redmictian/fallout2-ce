@@ -15,10 +15,13 @@ from protocol import MAX_LEVEL, SKILL_NAMES
 
 CONTENT_ROOT = Path(__file__).resolve().parent / "content"
 IDENTIFIER = re.compile(r"^[a-z][a-z0-9_.-]{0,63}$")
+QEMU_KIND = "qemu-bt05"
+GUEST_KINDS = {QEMU_KIND, "qemu-nginx"}
 KINDS = {"make-directory", "copy-file", "move-file", "rename-directory", "remove-empty",
          "filter-lines", "sort-unique", "extract-field", "count-matches", "replace-text",
          "ssh-upload", "ssh-download", "ssh-remote-move", "ssh-key-login", "ssh-alias",
-         "private-file", "public-read", "executable", "shared-directory", "group-readable"}
+         "private-file", "public-read", "executable", "shared-directory", "group-readable",
+         "checkpoint-policy", *GUEST_KINDS}
 
 
 class ContentLoader(yaml.SafeLoader):
@@ -164,10 +167,15 @@ class Catalog:
             for level in track["levels"]:
                 if not self.pool(skill, level):
                     raise ValueError(f"authored skill {skill} level {level} has no challenges")
-        for topology in {"network" if item.kind.startswith("ssh-") else "single" for item in self.challenges.values()}:
+        for topology in {"network" if item.kind.startswith("ssh-") else "single"
+                         for item in self.challenges.values() if item.kind != QEMU_KIND}:
             path = self.root / "compose" / (topology + ".yaml")
             if not path.is_file():
                 raise ValueError(f"missing content topology: {path}")
+        self.course = None
+        if (self.root / "course.yaml").exists():
+            from course_content import CourseCatalog
+            self.course = CourseCatalog(self.root, self)
 
     @staticmethod
     def _read(path):
@@ -176,7 +184,11 @@ class Catalog:
         return yaml.load(path.read_text(encoding="utf-8"), Loader=ContentLoader)
 
     def pool(self, skill, level):
-        return list(self._pools.get((skill, level), ()))
+        # Referenced practical handlers are course-exclusive: selecting one
+        # through a legacy band must not bypass K or ordered checkpoints.
+        course = getattr(self, "course", None)
+        return [identifier for identifier in self._pools.get((skill, level), ())
+                if course is None or identifier not in course.challenge_ids]
 
     def level_for_value(self, skill, value):
         if type(value) is not int:
@@ -208,9 +220,21 @@ class Catalog:
         definition.pop("wiki")
         data = {"challenge": definition, "track": {key: value for key, value in track.items() if key != "levels"},
                 "band": track["levels"][spec.level]}
-        topology = "network" if spec.kind.startswith("ssh-") else "single"
         digest = hashlib.sha256(json.dumps(data, sort_keys=True, separators=(",", ":")).encode("utf-8"))
-        digest.update((self.root / "compose" / (topology + ".yaml")).read_bytes())
+        if spec.kind == QEMU_KIND:
+            from qemu_env import digest_artifacts
+            digest.update(digest_artifacts().encode("utf-8"))
+        elif spec.kind == "qemu-nginx":
+            from nginx_env import digest_artifacts
+            digest.update(digest_artifacts().encode("utf-8"))
+        else:
+            topology = "network" if spec.kind.startswith("ssh-") else "single"
+            digest.update((self.root / "compose" / (topology + ".yaml")).read_bytes())
+        course = getattr(self, "course", None)
+        if course is not None and identifier in course.challenge_ids:
+            # A previously selected legacy attempt cannot survive becoming
+            # course-only and bypass newly declared component requirements.
+            digest.update(b"\0course-exclusive")
         return digest.hexdigest()
 
 
@@ -228,7 +252,8 @@ def main():
         parser.exit(1, f"Invalid content: {exc}\n")
     print(json.dumps({"status": "valid", "root": str(catalog.root), "tracks": len(catalog.tracks),
                       "levels": sum(len(track["levels"]) for track in catalog.tracks.values()),
-                      "challenges": len(catalog.challenges), "articles": len(wiki.articles) if wiki else 0}))
+                      "challenges": len(catalog.challenges), "articles": len(wiki.articles) if wiki else 0,
+                      "course_gates": len(catalog.course.gates) if catalog.course else 0}))
 
 
 if __name__ == "__main__":

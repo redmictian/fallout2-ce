@@ -10,6 +10,7 @@
 #include <set>
 
 #include "skill_defs.h"
+#include "perk_defs.h"
 
 #ifdef _WIN32
 #ifndef WIN32_LEAN_AND_MEAN
@@ -44,12 +45,14 @@ namespace nixboy {
         constexpr uint8_t kTrainingOpen = 7;
         constexpr uint8_t kTrainingAction = 8;
         constexpr uint8_t kTrainingAck = 9;
+        constexpr uint8_t kPerkTrainingAck = 10;
         constexpr uint8_t kReady = 16;
         constexpr uint8_t kOutput = 17;
         constexpr uint8_t kResult = 18;
         constexpr uint8_t kExit = 19;
         constexpr uint8_t kError = 20;
         constexpr uint8_t kTrainingReward = 21;
+        constexpr uint8_t kPerkTrainingReward = 22;
 
 #ifdef _WIN32
         using Socket = SOCKET;
@@ -212,6 +215,7 @@ namespace nixboy {
         Socket socket = kInvalidSocket;
         State state = State::Closed;
         bool training = false;
+        bool perkTraining = false;
         std::deque<std::vector<uint8_t>> outgoing;
         size_t outgoingOffset = 0;
         size_t queuedBytes = 0;
@@ -235,6 +239,7 @@ namespace nixboy {
 #endif
             state = State::Closed;
             training = false;
+            perkTraining = false;
             outgoing.clear();
             outgoingOffset = 0;
             queuedBytes = 0;
@@ -314,9 +319,10 @@ namespace nixboy {
                 || (type == kOutput && !ready)
                 || (type == kResult && (!ready || training || length < 6 || length > 69))
                 || (type == kTrainingReward && (!ready || !training || length != 21))
+                || (type == kPerkTrainingReward && (!ready || !perkTraining || length != 35))
                 || (type == kExit && (!ready || length != 4))
                 || (type == kError && length > 4096)
-                || (type != kReady && type != kOutput && type != kResult && type != kExit && type != kError && type != kTrainingReward)) {
+                || (type != kReady && type != kOutput && type != kResult && type != kExit && type != kError && type != kTrainingReward && type != kPerkTrainingReward)) {
                 fail(events, "Invalid Nix-Boy protocol frame or session order.");
                 return true;
             }
@@ -355,6 +361,21 @@ namespace nixboy {
                 if (event.skill >= SKILL_COUNT || event.level == 0 || event.points < 1 || event.points > 300
                     || std::all_of(event.receipt.begin(), event.receipt.end(), [](uint8_t byte) { return byte == 0; })) {
                     fail(events, "Invalid nix-boy training claim.");
+                    return true;
+                }
+                events.push_back(std::move(event));
+                break;
+            }
+            case kPerkTrainingReward: {
+                Event event { EventType::PerkTrainingReward, {}, {}, 0 };
+                std::copy(payload, payload + 16, event.profile.begin());
+                event.perk = (uint16_t(payload[16]) << 8) | payload[17];
+                event.rank = payload[18];
+                std::copy(payload + 19, payload + 35, event.receipt.begin());
+                if (event.perk != PERK_TOUGHNESS || event.rank != 2
+                    || std::all_of(event.profile.begin(), event.profile.end(), [](uint8_t byte) { return byte == 0; })
+                    || std::all_of(event.receipt.begin(), event.receipt.end(), [](uint8_t byte) { return byte == 0; })) {
+                    fail(events, "Invalid typed nix-boy perk claim.");
                     return true;
                 }
                 events.push_back(std::move(event));
@@ -481,18 +502,20 @@ namespace nixboy {
     }
 
     bool Client::open(uint16_t rows, uint16_t cols, const Context& context, std::string& error, bool training,
-        const std::vector<TrainingClaim>& claims)
+        const std::vector<TrainingClaim>& claims, const std::vector<PerkTrainingClaim>& perkClaims)
     {
         error.clear();
         if (impl_->state != Impl::State::Connected) {
             error = "Nix-Boy session is disconnected or already open.";
             return false;
         }
-        if (training && std::find(context.begin(), context.end(), std::make_pair(std::string("training.version"), int32_t(4))) == context.end()) {
-            error = "nix-boy training requires context version 4.";
+        bool version5 = training && std::find(context.begin(), context.end(), std::make_pair(std::string("training.version"), int32_t(5))) != context.end();
+        if (training && !version5 && std::find(context.begin(), context.end(), std::make_pair(std::string("training.version"), int32_t(4))) == context.end()) {
+            error = "nix-boy training requires context version 4 or 5.";
             return false;
         }
-        if ((!training && !claims.empty()) || claims.size() > TrainingState::kMaxClaims) {
+        if ((!training && !claims.empty()) || claims.size() > TrainingState::kMaxClaims
+            || (!version5 && !perkClaims.empty()) || perkClaims.size() > TrainingState::kMaxPerkClaims) {
             error = "Invalid nix-boy training ledger size or session mode.";
             return false;
         }
@@ -503,6 +526,15 @@ namespace nixboy {
                 || std::all_of(claim.receipt.begin(), claim.receipt.end(), [](uint8_t byte) { return byte == 0; })
                 || !keys.emplace(claim.skill, claim.level).second || !receipts.insert(claim.receipt).second) {
                 error = "Invalid or duplicate nix-boy training claim.";
+                return false;
+            }
+        }
+        std::set<std::pair<uint16_t, uint8_t>> perkKeys;
+        for (const auto& claim : perkClaims) {
+            if (claim.perk != PERK_TOUGHNESS || claim.rank != 2
+                || std::all_of(claim.receipt.begin(), claim.receipt.end(), [](uint8_t byte) { return byte == 0; })
+                || !perkKeys.emplace(claim.perk, claim.rank).second || !receipts.insert(claim.receipt).second) {
+                error = "Invalid or duplicate typed nix-boy perk claim.";
                 return false;
             }
         }
@@ -524,6 +556,14 @@ namespace nixboy {
                 put16(payload, claim.points);
                 payload.insert(payload.end(), claim.receipt.begin(), claim.receipt.end());
             }
+            if (version5) {
+                put16(payload, static_cast<uint16_t>(perkClaims.size()));
+                for (const auto& claim : perkClaims) {
+                    put16(payload, claim.perk);
+                    payload.push_back(claim.rank);
+                    payload.insert(payload.end(), claim.receipt.begin(), claim.receipt.end());
+                }
+            }
         }
         if (!impl_->queue(training ? kTrainingOpen : kOpen, payload)) {
             error = "Nix-Boy send queue is full.";
@@ -531,6 +571,7 @@ namespace nixboy {
         }
         impl_->state = Impl::State::AwaitingReady;
         impl_->training = training;
+        impl_->perkTraining = version5;
         return true;
     }
 
@@ -582,6 +623,20 @@ namespace nixboy {
         payload.insert(payload.end(), receipt.begin(), receipt.end());
         payload.push_back(accepted ? 1 : 0);
         return impl_->queue(kTrainingAck, payload);
+    }
+
+    bool Client::acknowledgePerkTraining(const TrainingReceipt& profile, uint16_t perk, uint8_t rank,
+        const TrainingReceipt& receipt, bool accepted)
+    {
+        if (impl_->state != Impl::State::Ready || !impl_->perkTraining || perk != PERK_TOUGHNESS || rank != 2
+            || std::all_of(profile.begin(), profile.end(), [](uint8_t byte) { return byte == 0; })
+            || std::all_of(receipt.begin(), receipt.end(), [](uint8_t byte) { return byte == 0; })) return false;
+        std::vector<uint8_t> payload(profile.begin(), profile.end());
+        put16(payload, perk);
+        payload.push_back(rank);
+        payload.insert(payload.end(), receipt.begin(), receipt.end());
+        payload.push_back(accepted ? 1 : 0);
+        return impl_->queue(kPerkTrainingAck, payload);
     }
 
     void Client::poll(std::vector<Event>& events)

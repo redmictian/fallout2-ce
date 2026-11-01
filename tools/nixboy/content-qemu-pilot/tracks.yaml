@@ -1,0 +1,22 @@
+schema: 2
+tracks:
+  - id: bt05-test-science
+    title: Science (test mapping)
+    knowledge_title: BT05-A boot recovery pilot
+    skill: 12
+    levels:
+      60000:
+        title: TEST ONLY - mandatory mount recovery
+        min_skill: 0
+        max_skill: 300
+        reward_points: 1
+  - id: bt05-test-unarmed
+    title: Unarmed (test mapping)
+    knowledge_title: Ordinary container regression
+    skill: 3
+    levels:
+      60001:
+        title: TEST ONLY - ordinary container regression
+        min_skill: 0
+        max_skill: 300
+        reward_points: 1

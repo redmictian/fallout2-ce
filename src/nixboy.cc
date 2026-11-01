@@ -21,10 +21,13 @@
 #include "map.h"
 #include "nixboy_client.h"
 #include "nixboy_hotkey.h"
+#include "nixboy_perk_reward.h"
 #include "nixboy_terminal.h"
 #include "nixboy_wiki.h"
 #include "obj_types.h"
 #include "object.h"
+#include "perk.h"
+#include "stat.h"
 #include "scripts.h"
 #include "skill.h"
 #endif
@@ -288,7 +291,15 @@ namespace {
             for (int skill = 0; skill < SKILL_COUNT; skill++) {
                 context.emplace_back(std::string("skill.") + skillNames[skill], skillGetValue(gDude, skill));
             }
-            context.emplace_back("training.version", 4);
+            context.emplace_back("training.version", 5);
+            context.emplace_back("perk.toughness", perkGetRank(gDude, PERK_TOUGHNESS));
+            context.emplace_back("perk.toughness.max", perkGetMaximumRank(gDude, PERK_TOUGHNESS));
+#ifdef FALLOUT_NIXBOY_PERK_TRAINING
+            context.emplace_back("perk.training.enabled", 1);
+#else
+            context.emplace_back("perk.training.enabled", 0);
+#endif
+            context.emplace_back("stat.damage_resistance", critterGetStat(gDude, STAT_DAMAGE_RESISTANCE));
             for (size_t index = 0; index < 4; index++) {
                 context.emplace_back("training.profile." + std::to_string(index), nixboy::trainingState().profileWord(index));
             }
@@ -429,6 +440,16 @@ void nixboyOpen()
     };
     training.snapshot = [&options]() { return collectContext(options); };
     training.progress = []() { return nixboy::trainingState().claims(); };
+    training.perkProgress = []() { return nixboy::trainingState().perkClaims(); };
+    training.perkReward = [](const nixboy::TrainingReceipt& profile, uint16_t perk, uint8_t rank,
+                              const nixboy::TrainingReceipt& receipt) {
+        auto result = nixboy::applyPerkTrainingReward(nixboy::trainingState(), profile, perk, rank, receipt);
+        if (result == nixboy::PerkClaimResult::Rejected) return false;
+        debugPrint("Nix-Boy perk training: perk %d rank %d %s; raw %d DR %d.\n", perk, rank,
+            result == nixboy::PerkClaimResult::New ? "new" : "duplicate",
+            perkGetRank(gDude, perk), critterGetStat(gDude, STAT_DAMAGE_RESISTANCE));
+        return true;
+    };
 
     bool opened = nixboyTerminalOpen(options.port, token, collectContext(options), [&options](const std::string& name, int32_t value) {
         if (options.training) return;

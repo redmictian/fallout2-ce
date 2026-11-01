@@ -18,6 +18,7 @@ namespace nixboy {
         Output,
         Result,
         TrainingReward,
+        PerkTrainingReward,
         Exit,
         Error };
 
@@ -30,6 +31,9 @@ namespace nixboy {
         uint16_t level = 0;
         uint16_t points = 0;
         TrainingReceipt receipt {};
+        TrainingReceipt profile {};
+        uint16_t perk = 0;
+        uint8_t rank = 0;
     };
 
     enum class TrainingAction : uint8_t { Check = 1,
@@ -51,13 +55,15 @@ namespace nixboy {
 
         bool connect(uint16_t port, const std::string& token, std::string& error);
         bool open(uint16_t rows, uint16_t cols, const Context& context, std::string& error, bool training = false,
-            const std::vector<TrainingClaim>& claims = {});
+            const std::vector<TrainingClaim>& claims = {}, const std::vector<PerkTrainingClaim>& perkClaims = {});
         // False means not ready, invalid arguments, or bounded send queue full.
         bool sendInput(const std::string& bytes);
         bool resize(uint16_t rows, uint16_t cols);
         bool sendContext(const Context& context);
         bool sendTrainingAction(TrainingAction action);
         bool acknowledgeTraining(uint8_t skill, uint16_t level, uint16_t points, const TrainingReceipt& receipt, bool accepted);
+        bool acknowledgePerkTraining(const TrainingReceipt& profile, uint16_t perk, uint8_t rank,
+            const TrainingReceipt& receipt, bool accepted);
         void poll(std::vector<Event>& events);
         void close();
         bool isConnected() const;

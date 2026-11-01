@@ -1,0 +1,12 @@
+schema: 2
+tracks:
+  - id: assessment-test-only
+    title: Science
+    knowledge_title: Assessment infrastructure fixtures only
+    skill: 12
+    levels:
+      61000:
+        title: Legacy regression mapping only
+        min_skill: 0
+        max_skill: 300
+        reward_points: 1

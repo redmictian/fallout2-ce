@@ -1,0 +1,20 @@
+services:
+  workstation:
+    image: ${NIXBOY_TRAINING_IMAGE:-fallout2-nixboy-training:dev}
+    pull_policy: never
+    user: "1000:1000"
+    read_only: true
+    network_mode: none
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 256m
+    cpus: 1
+    pids_limit: 128
+    tmpfs:
+      - /home/nixboy:uid=1000,gid=1000,mode=0700,rw,exec,nosuid,nodev
+      - /tmp:mode=1777
+    labels:
+      org.fallout2-ce.nixboy.training: "1"
+      org.fallout2-ce.nixboy.owner: ${NIXBOY_OWNER}
+      org.fallout2-ce.nixboy.attempt: ${NIXBOY_ATTEMPT}
+      org.fallout2-ce.nixboy.generation: ${NIXBOY_GENERATION}

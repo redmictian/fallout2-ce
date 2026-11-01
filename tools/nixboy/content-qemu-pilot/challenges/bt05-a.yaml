@@ -1,0 +1,21 @@
+id: bt05-a
+version: 1
+skill: 12
+level: 60000
+title: BT05-A - restore the required mount and reboot
+kind: qemu-bt05
+parameters:
+  name: [bt05-a]
+instructions: >-
+  This disposable Linux guest failed startup because /etc/fstab names an incorrect
+  mandatory UUID for /srv/recovery-data. Use the real recovery console to identify
+  the disk with serial nbq-boot-data and repair that entry. Preserve the required
+  ext4 mount, its protected files and metadata, unrelated fstab entries, and the
+  enabled nbq-http.service running as nobody. Keep the mount mandatory; deleting
+  the entry, nofail/noauto, or mounting the identical-payload decoy does not pass.
+  Allow 60 seconds for a valid device to appear under software emulation. Reboot
+  the guest with systemctl reboot after the repair, then use F5 to validate normal
+  boot, the required filesystem and HTTP service. Terminal close and F6 detach;
+  F7 discards this attempt's writable disks and restores the original fault.
+  This pilot awards +1 Science point at test-only level 60000. It does not define
+  the permanent curriculum-to-skill mapping. Use a disposable character/profile.

@@ -1,0 +1,28 @@
+{
+  "schema": 1,
+  "package_sha256": "370fa90c24acb4308f2441bdacaef9f717a38c5bdc5dc23cd8e1cf223c6fdf2e",
+  "selected_source_sha256": {
+    "pr061.html": "18221093cf4ccc823069f692f6c27cd31b3b3087d96f6dc0c03240475084ef6c",
+    "practice-pr061.html": "267be879af48ce041fbd3e1fdef05a85c3cd21e8455d282c4547253c6ab1a5c7",
+    "pr062.html": "cd3427cebbd04a191ed26c6c83516f73965f7067d398d61362394d62b8938bcf",
+    "practice-pr062.html": "e9ad3276ac42b1ebf40b1a0b2a34275d412e454d34c71c4ff148a5567f11d055",
+    "web-server-preparation.html": "da082290e138a0cca41b5b93aefb78319dde96a8fdf5ae61bdb2f7dce47eb4cd",
+    "pilot.css": "02a8dbab8a7fa649e6bfd2b675c7ccb6985f6d3f5650f9aecfaef16b77117302"
+  },
+  "article_ids": [
+    "course.pr061",
+    "course.practice-pr061",
+    "course.pr062",
+    "course.practice-pr062",
+    "course.nginx-preparation"
+  ],
+  "excluded": "All assessment, assessor, planning, verification and historical files; optional JS not imported",
+  "adaptations": [
+    "body lesson/hero only",
+    "scoped local CSS",
+    "inline styles externalized",
+    "local lesson links use stable wiki IDs",
+    "omitted/external links rendered as references",
+    "arithmetic slider disabled; original explicit static cases retained"
+  ]
+}

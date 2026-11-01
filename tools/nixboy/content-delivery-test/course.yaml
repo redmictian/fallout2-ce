@@ -1,0 +1,46 @@
+schema: 1
+gates:
+  - id: delivery.nginx.1
+    version: 1
+    title: Integration project - native nginx source policy
+    format: practical
+    prerequisites: []
+    project:
+      id: delivery.nginx
+      stage: 1
+      preparation: nginx-policy-v1
+    alternatives:
+      - id: a
+        title: Repair staff access and reload
+        instructions: Preserve the public route and verify the source-specific staff policy through the actual clients.
+        challenge: delivery.nginx-policy
+        checkpoints: [reload]
+  - id: delivery.nginx.2
+    version: 1
+    title: Integration project - canonical repair and passive perk
+    format: mixed
+    prerequisites: [delivery.nginx.1]
+    project:
+      id: delivery.nginx
+      stage: 2
+      preparation: nginx-reload-v1
+    reward:
+      type: perk
+      perk: 12
+      target_rank: 2
+      test_only: true
+    alternatives:
+      - id: a
+        title: Repair the prepared stage-two route
+        instructions: Restore the new endpoint, preserve the canonical staff policy, record a reload, and commit the bounded question.
+        challenge: delivery.nginx-reload
+        checkpoints: [reload]
+        questions:
+          - id: q1
+            type: choice
+            prompt: A denied client cannot reach even the public positive-control route. Does its failed staff request establish a working nginx access policy?
+            choices:
+              - No; the client or facility is unavailable and the negative result is not valid policy evidence.
+              - Yes; any failed request proves the restriction.
+            answers: ["1"]
+            feedback: Independently capable clients and successful public controls are required before interpreting policy-specific denials.

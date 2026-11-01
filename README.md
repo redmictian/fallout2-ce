@@ -6,12 +6,14 @@ Popular Fallout 2 total conversion mods are partially supported. Original versio
 
 There is also [Fallout Community Edition](https://github.com/alexbatalov/fallout1-ce).
 
-This checkout includes **nix-boy 0.7.0**, one mod combining a Pip-Boy Linux
+This checkout includes the **nix-boy 0.8.0 release**, one mod combining a Pip-Boy Linux
 terminal and its challenges, an offline wiki, and perk training.
 Its release version is in [nixboy.version](nixboy.version). See the
 [nix-boy setup and protocol guide](tools/nixboy/README.md) and
 [development workspace pointer](MODLOG.md). The terminal and challenges require
-a separate local bridge. Its offline HTML wiki uses Windows WebView2 and opens
+a separate local bridge. Saving does not use that bridge or any external
+educational file; current skills/perks remain game-owned. See the
+[cleanup contract](tools/nixboy/CLEANUP.md). Its offline HTML wiki uses Windows WebView2 and opens
 without Python, Docker or a running bridge.
 Its [editable challenge catalog](tools/nixboy/content/README.md) maps Fallout
 skills to knowledge tracks, percentage bands and per-level reward amounts.
@@ -62,10 +64,14 @@ creation does not edit a game installation or install WebView2.
 
 The perk module adds a harmless training-unlock rank to all 76 selectable perks.
 Original benefits start at rank two; further normal selection requires level 310.
-Challenge-to-perk grants are not connected yet. The module is enabled by default;
+The optional delivery pilot connects one test-only passive Toughness advancement
+through trusted educational completion; see [typed reward compatibility](tools/nixboy/PERK_REWARDS.md).
+The module is enabled by default;
 `-DFALLOUT_NIXBOY_PERK_TRAINING=OFF` builds the original rank policy. The standard
-0.7.0 build requires new characters: its 1.2T saves and ordinary 1.2R saves are
-mutually incompatible. The existing skill-reward protocol remains v4.
+training build retains the 1.2T policy and rejects ordinary 1.2R saves.
+Existing skill receipt payloads are preserved; enhanced opening/perk delivery is
+v5. Saves remain trailer-v4 until a perk claim exists, then use explicit v5;
+the new reader accepts v1–4. The released 0.7.0 binary cannot read perk-bearing v5 saves.
 
 For disposable tests, `--debug-perks=all` opens a gallery of all rank-one perks,
 `--debug-perk-picker` opens the real level-up picker, and `--debug-perk=12:2`

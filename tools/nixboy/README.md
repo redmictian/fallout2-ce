@@ -10,6 +10,12 @@ The shipped catalog maps Unarmed to **Filesystem** and Science to
 editable catalog, rather than a two-track engine limit.
 Each level can set `reward_points` (1–300, default 5); earned amounts stay fixed
 after completion even when the catalog changes.
+
+The optional [bounded assessment catalog](COURSE.md) retains committed questions,
+mixed P AND K and trusted ordered checkpoints. Canonical projects keep a current
+stage cursor. There is no independent achievement/prerequisite framework.
+[CLEANUP.md](CLEANUP.md) describes game-owned rewards, ordinary offline saving,
+load-time task restart and the one current-completion duplicate/retry slot.
 The [wiki content directory](content/wiki/README.md) holds separate HTML
 lessons organized by Linux subject, with stable reading references from challenge
 YAML. Validate both catalogs with `python tools/nixboy/challenge_content.py` and
@@ -18,10 +24,12 @@ from the source root. Authoring tools need Python/PyYAML, without Docker.
 Deploy the export as `nixboy/wiki/`, separate from editable `nixboy/content/wiki/`.
 The Windows reader opens with Ctrl+W from gameplay or Pip-Boy, and Escape
 closes it. Reading uses WebView2 and requires no Python, Docker or bridge.
-The standard 0.7.0 perk policy uses new characters and 1.2T saves: level-up
+The perk-training policy uses new characters and 1.2T saves: level-up
 selection unlocks training without a bonus, and original benefits start at rank
-two. Further ordinary ranks require level 310; challenge grants are not wired
-yet. The [debug guide](DEBUGGING.md) documents direct-to-game, perk gallery,
+two. Further ordinary ranks require level 310. The optional delivery pilot now
+supports one owned passive Toughness upgrade through a trusted typed receipt;
+[PERK_REWARDS.md](PERK_REWARDS.md) documents the explicit v4/v5 compatibility.
+The [debug guide](DEBUGGING.md) documents direct-to-game, perk gallery,
 focused-rank and picker launches for disposable testing.
 Configure `[wiki]` with `enabled=1`, `hotkey=Ctrl+W` and
 `home=nixboy/wiki/index.html` in `nixboy.ini`. This section does not need the
@@ -29,7 +37,11 @@ terminal authentication token. Ctrl+W inside the terminal retains shell editing.
 Read [training setup and controls](TRAINING.md) first. The original ephemeral
 shell and configured integer bindings remain available with `training=0` in
 `nixboy.ini`. The foundation description below applies to that legacy mode;
-training owns resumable attempts and uses trusted completion receipts instead.
+training owns current-run attempts and a single trusted completion delivery slot.
+
+An optional [BT05-A QEMU pilot](QEMU.md) adds one genuine boot-recovery guest
+through the same training/reward path. Its separate catalog uses an explicit
+test-only mapping; the standard curriculum and ordinary container path are unchanged.
 
 ## Terminal appearance
 
@@ -366,7 +378,7 @@ python -m unittest discover -s tools/nixboy/tests -v
 ```
 
 For real Docker, build the image as above, install the pinned requirements into a
-virtual environment, then run `python nixboy/smoke_docker.py --run`. It checks
+virtual environment, use the developer-only `tools/nixboy/smoke_docker.py --run` from source. It checks
 Linux PTY input/output, Ctrl+C, resize, initial/live context, named results, command
 exit codes, final shell status, event delivery before exit, a 12-second quiet
 session, repeated sessions, failed-image startup/recovery, isolation and

@@ -3,7 +3,10 @@ param(
     [Parameter(Mandatory = $true)][string]$Destination,
     [Parameter(Mandatory = $true)][string]$WikiDirectory,
     [Parameter(Mandatory = $true)][string]$WebView2Loader,
-    [string]$LiveProbe
+    [string]$LiveProbe,
+    [switch]$QemuPilot,
+    [switch]$AssessmentPilot,
+    [switch]$DeliveryPilot
 )
 $ErrorActionPreference = 'Stop'
 
@@ -60,15 +63,21 @@ if ($manifest.schema -ne 1 -or $null -eq $manifest.source_sha256 -or $null -eq $
     throw 'Unsupported wiki export manifest.'
 }
 $sourceNames = @('challenge_content.py', 'wiki_content.py', 'wiki_pages.py')
-foreach ($item in Get-PackageFiles (Join-Path $runtimeRoot 'content')) {
-    $sourceNames += $item.FullName.Substring($runtimeRoot.Length + 1).Replace('\', '/')
+$wikiSourceContent = Join-Path $runtimeRoot $(if ($DeliveryPilot) { 'content-delivery-test' } else { 'content' })
+foreach ($item in Get-PackageFiles $wikiSourceContent) {
+    $sourceNames += 'content/' + $item.FullName.Substring($wikiSourceContent.Length + 1).Replace('\', '/')
 }
 $sourceProperties = @($manifest.source_sha256.PSObject.Properties)
 if (@(Compare-Object ($sourceNames | Sort-Object) ($sourceProperties.Name | Sort-Object)).Count) {
     throw 'Wiki source files changed; regenerate the wiki before packaging.'
 }
 foreach ($entry in $sourceProperties) {
-    Assert-ManifestHash (Get-RelativeFile $runtimeRoot $entry.Name) $entry.Value
+    $sourcePath = if ($entry.Name.StartsWith('content/')) {
+        Get-RelativeFile $wikiSourceContent $entry.Name.Substring(8)
+    } else {
+        Get-RelativeFile $runtimeRoot $entry.Name
+    }
+    Assert-ManifestHash $sourcePath $entry.Value
 }
 $exportProperties = @($manifest.files_sha256.PSObject.Properties)
 $exportNames = @($wikiFiles | Where-Object { $_.FullName -ne $manifestPath } |
@@ -89,7 +98,7 @@ if ((Get-FileHash -LiteralPath $loaderPath -Algorithm SHA256).Hash.ToLowerInvari
 $sourceCommit = (& git -C $sourceDir rev-parse HEAD).Trim()
 if ($LASTEXITCODE -ne 0) { throw 'Cannot determine source revision.' }
 $modVersion = (Get-Content -LiteralPath (Join-Path $sourceDir 'nixboy.version') -Raw).Trim()
-if ($modVersion -notmatch '^\d+\.\d+\.\d+$') { throw 'nixboy.version must contain one semantic release version.' }
+if ($modVersion -notmatch '^\d+\.\d+\.\d+(?:-rc\.[1-9]\d*)?$') { throw 'nixboy.version must contain one release or rc.N version.' }
 $sourceBranch = (& git -C $sourceDir branch --show-current).Trim()
 if ($LASTEXITCODE -ne 0) { throw 'Cannot determine source branch.' }
 $sourceStatus = & git -C $sourceDir status --porcelain
@@ -102,13 +111,18 @@ Copy-Item -LiteralPath $loaderPath -Destination (Join-Path $destinationPath 'Web
 $files = @(
     'LICENSE.md', 'nixboy.ini.example', 'nixboy.version',
     'third_party/departure-mono/README.nixboy.md', 'third_party/departure-mono/OFL.txt',
-    'tools/nixboy/README.md', 'tools/nixboy/DEBUGGING.md', 'tools/nixboy/TRAINING.md', 'tools/nixboy/protocol.md', 'tools/nixboy/.dockerignore',
-    'tools/nixboy/requirements.txt', 'tools/nixboy/bridge.py',
+    'tools/nixboy/README.md', 'tools/nixboy/DEBUGGING.md', 'tools/nixboy/TRAINING.md', 'tools/nixboy/protocol.md', 'tools/nixboy/CLEANUP.md', 'tools/nixboy/.dockerignore',
+    'tools/nixboy/requirements.txt', 'tools/nixboy/bridge.py', 'tools/nixboy/QEMU.md',
     'tools/nixboy/protocol.py', 'tools/nixboy/training.py',
+    'tools/nixboy/course_content.py', 'tools/nixboy/course_progress.py', 'tools/nixboy/COURSE.md',
+    'tools/nixboy/perk_rewards.py', 'tools/nixboy/PERK_REWARDS.md',
+    'tools/nixboy/NGINX.md',
+    'tools/nixboy/nginx_env.py', 'tools/nixboy/nginx_profile.py', 'tools/nixboy/nginx_prepare.py', 'tools/nixboy/nginx_probe.py',
+    'tools/nixboy/container/nginx/manifest.json',
     'tools/nixboy/challenge_content.py', 'tools/nixboy/challenge_env.py',
+    'tools/nixboy/qemu_env.py', 'tools/nixboy/qemu_probe.py', 'tools/nixboy/qemu_artifacts.py', 'tools/nixboy/wsl_provider.py',
+    'tools/start-nixboy-wsl.ps1',
     'tools/nixboy/wiki_content.py', 'tools/nixboy/wiki_pages.py',
-    'tools/nixboy/smoke_docker.py',
-    'tools/nixboy/smoke_windows_wsl.py',
     'tools/nixboy/container/Dockerfile', 'tools/nixboy/container/control.py',
     'tools/nixboy/container/nixboy', 'tools/nixboy/container/shell.py',
     'tools/nixboy/container/Dockerfile.training', 'tools/nixboy/container/Dockerfile.sshd',
@@ -118,6 +132,29 @@ $files = @(
     'third_party/webview2/README.nixboy.md', 'third_party/webview2/loader.sha256',
     'third_party/fpattern/LICENSE', 'third_party/sdl2/LICENSE', 'third_party/zlib/LICENSE'
 )
+foreach ($qemuName in @('Dockerfile','bt05-manifest.json','supervisor.py','control.py','serial_history.py')) {
+    $relative = 'tools/nixboy/container/qemu/' + $qemuName
+    $null = Get-RelativeFile $sourceDir $relative
+    $files += $relative
+}
+if ($QemuPilot) {
+    foreach ($pilotFile in Get-PackageFiles (Join-Path $runtimeRoot 'content-qemu-pilot')) {
+        if ($pilotFile.Extension -notin @('.yaml', '.yml', '.md', '.json')) { throw 'Unexpected pilot catalog file.' }
+        $files += $pilotFile.FullName.Substring($sourceDir.Length + 1).Replace('\', '/')
+    }
+}
+if ($AssessmentPilot) {
+    foreach ($pilotFile in Get-PackageFiles (Join-Path $runtimeRoot 'content-assessment-test')) {
+        if ($pilotFile.Extension -notin @('.yaml', '.yml', '.md', '.json')) { throw 'Unexpected assessment catalog file.' }
+        $files += $pilotFile.FullName.Substring($sourceDir.Length + 1).Replace('\', '/')
+    }
+}
+if ($DeliveryPilot) {
+    foreach ($pilotFile in Get-PackageFiles (Join-Path $runtimeRoot 'content-delivery-test')) {
+        if ($pilotFile.Extension -notin @('.yaml', '.yml', '.md', '.json', '.html', '.css', '.svg', '.png', '.jpg', '.webp')) { throw 'Unexpected delivery catalog file.' }
+        $files += $pilotFile.FullName.Substring($sourceDir.Length + 1).Replace('\', '/')
+    }
+}
 # Content is authored data only; runtime attempts, credentials and test solvers
 # are not in this directory or part of the redistributable package.
 $contentRoot = Join-Path $sourceDir 'tools/nixboy/content'
@@ -131,6 +168,8 @@ foreach ($relativePath in $files) {
     # Runtime files sit beside the game, without the source tools/ prefix.
     $packageRelativePath = if ($relativePath.StartsWith('tools/nixboy/')) {
         'nixboy/' + $relativePath.Substring('tools/nixboy/'.Length)
+    } elseif ($relativePath -eq 'tools/start-nixboy-wsl.ps1') {
+        'start-nixboy-wsl.ps1'
     } else { $relativePath }
     $targetPath = Join-Path $destinationPath $packageRelativePath
     New-Item -ItemType Directory -Force -Path (Split-Path -Parent $targetPath) | Out-Null
@@ -188,10 +227,10 @@ Release identity is recorded in nixboy.version and the
 source commit above; see the mod workspace's acceptance record for actual checks.
 Read nixboy/TRAINING.md for setup, controls and current limits.
 
-The standard 0.7.0 perk module requires new characters and uses 1.2T saves;
+The standard 0.8.0 perk module requires new characters and uses 1.2T saves;
 ordinary 1.2R saves are incompatible. All 76 selectable perks gain a harmless
 unlock rank; original benefits start at rank two, and normal upgrades require
-level 310. Challenge-to-perk rewards are not connected yet.
+level 310. Only the test-only owned Toughness rank 1-to-2 pilot is mapped. Saving needs no bridge or external educational files. Loading restarts active questions/projects; normal terminal reopen retains current-run work.
 
 For fast disposable tests, --debug-perks=all opens all rank-one perk cards,
 --debug-perk-picker opens the real level-up picker, and --debug-perk=12:2 opens

@@ -1,0 +1,123 @@
+schema: 1
+gates:
+  - id: test.intro
+    version: 1
+    title: Integration fixture - committed theory set
+    format: theory
+    prerequisites: []
+    alternatives:
+      - id: a
+        title: Theory fixture A
+        instructions: >-
+          INTEGRATION TEST ONLY. This supplied-evidence questionnaire tests the
+          assessment machinery. Submit all answers, then explicitly commit
+          the complete set. No Docker environment or game reward is needed.
+        questions:
+          - id: q1
+            type: choice
+            prompt: What supplies an educational prerequisite in this pilot?
+            choices:
+              - A high game-skill percentage by itself
+              - Recorded completion of the explicit prerequisite gate
+              - Merely opening the terminal
+              - A learner-created success file
+            answers: ["2"]
+            feedback: Educational eligibility uses recorded gate completion independently of game percentages.
+            option_feedback:
+              - A game percentage cannot bypass the educational prerequisite.
+              - The declared educational completion is the required evidence.
+              - Opening a terminal supplies no completion evidence.
+              - A success marker is not trusted assessment evidence.
+          - id: q2
+            type: number
+            prompt: A mixed fixture requires practical success AND conceptual success. How many of those two components must pass?
+            answers: ["2"]
+            feedback: Both components are required; one cannot compensate for the other.
+      - id: b
+        title: Theory fixture B
+        instructions: >-
+          INTEGRATION TEST ONLY. Answer both supplied cases before committing.
+          An explicit retry starts a fresh attempt. No Docker environment or
+          game reward is needed.
+        questions:
+          - id: q1
+            type: choice
+            prompt: Which event permits assessment feedback to be shown?
+            choices:
+              - Explicit commitment of the complete answer set
+              - Saving the first draft answer
+              - Leaving the terminal open
+              - Reconnecting before all questions have answers
+            answers: ["1"]
+            feedback: Complete-set commitment precedes grading and feedback.
+            option_feedback:
+              - Commitment fixes the submitted set before feedback.
+              - A partial draft remains editable and ungraded.
+              - Elapsed time does not commit answers.
+              - Reconnection does not submit or reveal the set.
+          - id: q2
+            type: number
+            prompt: Supplied checkpoint records are numbered 1, 2 and 3. How many records are shown?
+            answers: ["3"]
+            feedback: Three records are supplied; numeric formatting does not change the value.
+  - id: test.mixed
+    version: 1
+    title: Integration fixture - practical AND conceptual completion
+    format: mixed
+    prerequisites: []
+    alternatives:
+      - id: a
+        title: Mixed copy fixture
+        challenge: test.mixed-copy
+        instructions: >-
+          Complete the prepared copy task and submit practical evidence, then
+          commit both conceptual answers. Both must pass in this attempt.
+          Course completion grants no game reward.
+        questions:
+          - id: q1
+            type: choice
+            prompt: If the conceptual set passes but the required copy is absent, is this mixed gate complete?
+            choices: ["No, practical and conceptual success are both required", "Yes, conceptual success compensates"]
+            answers: ["1"]
+            feedback: A mixed gate completes only when both declared components pass.
+          - id: q2
+            type: text
+            normalization: space-casefold
+            prompt: For this input-normalization fixture, enter the single word ready in any letter case.
+            answers: [ready]
+            feedback: This fixture accepts ready after trimming whitespace and ignoring letter case.
+      - id: b
+        title: Mixed directory fixture
+        challenge: test.mixed-directory
+        instructions: >-
+          Complete the prepared directory task and submit practical evidence,
+          then commit both conceptual answers. Both must pass in this attempt.
+          Course completion grants no game reward.
+        questions:
+          - id: q1
+            type: choice
+            prompt: If the required directory exists but the conceptual set fails, is this mixed gate complete?
+            choices: ["No, practical and conceptual success are both required", "Yes, a final directory is enough"]
+            answers: ["1"]
+            feedback: A working final filesystem state does not waive the separate conceptual criterion.
+          - id: q2
+            type: text
+            normalization: space-casefold
+            prompt: For this input-normalization fixture, enter the single word ready in any letter case.
+            answers: [ready]
+            feedback: This fixture accepts ready after trimming whitespace and ignoring letter case.
+  - id: test.ordered
+    version: 1
+    title: Integration fixture - trusted ordered checkpoints
+    format: practical
+    prerequisites: []
+    alternatives:
+      - id: a
+        title: Ordered file-state fixture
+        challenge: test.ordered-policy
+        checkpoints: [rollback, reapply]
+        instructions: >-
+          Use the prepared old/new policy files to perform rollback, request
+          its trusted checkpoint, reapply, request its trusted checkpoint,
+          then submit. Final state alone is insufficient. This grants no
+          game reward and demonstrates no real service policy.

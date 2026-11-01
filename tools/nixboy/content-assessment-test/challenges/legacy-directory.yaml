@@ -1,0 +1,13 @@
+id: test.legacy-directory
+version: 1
+skill: 12
+level: 61000
+title: Test-only legacy regression - directory creation
+kind: make-directory
+parameters:
+  name: [legacy-dir]
+instructions: >-
+  LEGACY REGRESSION ONLY. Create ~/lab/{name}/ready as a directory,
+  preserving ~/lab/briefing.txt. This legacy test band awards one
+  Science point at level61000. It is not a permanent educational mapping
+  and is separate from course fixtures.

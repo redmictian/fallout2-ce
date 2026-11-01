@@ -1,0 +1,35 @@
+{
+  "schema": 1,
+  "fixture": "bt05-a-qualified-20261030-v1",
+  "guest": "Debian 13.7 / 6.12.113+deb13-cloud-amd64",
+  "qemu": "7.2.22",
+  "machine": "pc-i440fx-7.2",
+  "cpu": "Nehalem",
+  "memory_mib": 768,
+  "cpus": 2,
+  "root": "bt05-root-v1.qcow2",
+  "hashes": {
+    "bt05-root-v1.qcow2": "ca59952f1fd8aaf76ad0d7434143b5143353c7325d0bbeee61252204e26d2529",
+    "bt05-data-v1.qcow2": "77d418553590640540d0a8081ca08c54fce0579db60c5bc140223caf03c960a3",
+    "bt05-decoy-v1.qcow2": "267a4cfd7c2dd81fd6f2261100e7a7e2e4d883e0213d6f523b77212ca9782d99"
+  },
+  "disks": [
+    {"id": "boot-data", "serial": "nbq-boot-data", "base": "/images/bt05-data-v1.qcow2"},
+    {"id": "boot-decoy", "serial": "nbq-boot-decoy", "base": "/images/bt05-decoy-v1.qcow2"}
+  ],
+  "expected": {
+    "data_uuid": "7e59ba69-a0de-4aab-9322-a52c620b3dc2",
+    "decoy_uuid": "36a69f89-20a7-4fb6-9ce8-29850eeea9c0",
+    "payload_sha256": "ce40c26279708f08b0398db5e0118338946b1d51b436aad8545b9a31f008fcf8",
+    "payload_bytes": 233472,
+    "root_peer_sha256": "fb128d99f734afdd10f6952e01a3534c11b4e743a545032ba2968f565beb38c9",
+    "fstab_unrelated": [
+      "PARTUUID=84fd0772-d38a-4fe7-b574-dcb86f5e263f / ext4 rw,discard,errors=remount-ro,x-systemd.growfs 0 1",
+      "PARTUUID=82e17562-9f24-4564-9735-bb223836c0b4 /boot/efi vfat defaults,umask=077 0 2",
+      "/var/swap.nbq none swap sw 0 0"
+    ],
+    "mount": "/srv/recovery-data",
+    "service": "nbq-http.service",
+    "metadata": "0:0:644:1768478400"
+  }
+}

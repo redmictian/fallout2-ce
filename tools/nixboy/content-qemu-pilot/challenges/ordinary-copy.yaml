@@ -1,0 +1,13 @@
+id: pilot-ordinary-copy
+version: 1
+skill: 3
+level: 60001
+title: Ordinary container - deliver a file copy
+kind: copy-file
+parameters:
+  name: [pilot]
+instructions: >-
+  In the ordinary direct container, copy ~/lab/incoming/{name}.txt to
+  ~/lab/delivery/manifest.txt. Preserve the complete source and target contents.
+  This regression fixture awards +1 Unarmed point at test-only level 60001;
+  the mapping is not an educational-track decision.

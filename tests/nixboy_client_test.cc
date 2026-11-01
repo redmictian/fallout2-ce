@@ -196,12 +196,12 @@ struct Service {
 };
 
 void start(Service& service, Client& client, const Context& context = {}, bool training = false,
-    const std::vector<TrainingClaim>& claims = {})
+    const std::vector<TrainingClaim>& claims = {}, const std::vector<fallout::nixboy::PerkTrainingClaim>& perkClaims = {})
 {
     std::string error;
     require(client.connect(service.port, kToken, error), error.c_str());
     service.acceptClient();
-    require(client.open(24, 80, context, error, training, claims), error.c_str());
+    require(client.open(24, 80, context, error, training, claims, perkClaims), error.c_str());
     std::vector<Event> events;
     client.poll(events);
     require(events.empty(), "unexpected event before server sends");
@@ -219,6 +219,14 @@ void start(Service& service, Client& client, const Context& context = {}, bool t
             put16(expected, claim.level);
             put16(expected, claim.points);
             expected.insert(expected.end(), claim.receipt.begin(), claim.receipt.end());
+        }
+        if (std::find(context.begin(), context.end(), std::make_pair(std::string("training.version"), int32_t(5))) != context.end()) {
+            put16(expected, static_cast<uint16_t>(perkClaims.size()));
+            for (const auto& claim : perkClaims) {
+                put16(expected, claim.perk);
+                expected.push_back(claim.rank);
+                expected.insert(expected.end(), claim.receipt.begin(), claim.receipt.end());
+            }
         }
     }
     require(service.readFrame(training ? 7 : 2) == expected, "OPEN dimensions/context signed encoding");
@@ -290,7 +298,7 @@ void testValidation()
     require(!client.open(24, 80, { { "training.version", 1 } }, error, true), "legacy training context version rejected");
     require(!client.open(24, 80, { { "training.version", 2 } }, error, true), "previous training context version rejected");
     require(!client.open(24, 80, { { "training.version", 3 } }, error, true), "previous fixed-point training context version rejected");
-    require(!client.open(24, 80, { { "training.version", 5 } }, error, true), "unsupported training context version");
+    require(!client.open(24, 80, { { "training.version", 6 } }, error, true), "unsupported training context version");
     Context trainingContext { { "training.version", 4 } };
     TrainingReceipt receipt {};
     receipt.back() = 1;
@@ -560,6 +568,34 @@ void testDisconnectAndClose()
     require(client.open(24, 80, {}, error), "reopen after close");
 }
 
+void testPerkTrainingProtocol()
+{
+    using fallout::nixboy::TrainingReceipt;
+    Service service;
+    Client client;
+    TrainingReceipt receipt {}; receipt.back() = 77;
+    TrainingReceipt profile {}; profile.front() = 1;
+    Context context { { "training.version", 5 }, { "training.profile.0", 0x01000000 } };
+    start(service, client, context, true, {}, { { 12, 2, receipt } });
+    require(!client.acknowledgePerkTraining(profile, 12, 2, receipt, true), "perk ACK waits for READY");
+    makeReady(service, client);
+    Bytes reward(profile.begin(), profile.end());
+    put16(reward, 12); reward.push_back(2);
+    reward.insert(reward.end(), receipt.begin(), receipt.end());
+    service.send(frame(22, reward));
+    std::vector<Event> events;
+    pollUntil(client, events, 1);
+    require(events[0].type == EventType::PerkTrainingReward && events[0].profile == profile
+        && events[0].perk == 12 && events[0].rank == 2 && events[0].receipt == receipt, "typed profile-bound perk decoded");
+    require(client.acknowledgePerkTraining(profile, 12, 2, receipt, true), "perk ACK accepted");
+    client.poll(events);
+    reward.push_back(1);
+    require(service.readFrame(10) == reward, "perk ACK wire exact");
+    require(!client.acknowledgePerkTraining({}, 12, 2, receipt, true)
+        && !client.acknowledgePerkTraining(profile, 13, 2, receipt, true)
+        && !client.acknowledgePerkTraining(profile, 12, 3, receipt, true), "perk bounds before send");
+}
+
 } // namespace
 
 int main()
@@ -569,6 +605,7 @@ int main()
         testValidation();
         testRoundTrip();
         testTrainingProtocol();
+        testPerkTrainingProtocol();
         testMalformedFrames();
         testFragmentedPayloadAndLimits();
         testDisconnectAndClose();
