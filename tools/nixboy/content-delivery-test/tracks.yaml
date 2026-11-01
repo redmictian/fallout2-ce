@@ -1,0 +1,12 @@
+schema: 2
+tracks:
+  - id: delivery-test-only
+    title: Science
+    knowledge_title: Course delivery integration fixtures
+    skill: 12
+    levels:
+      62000:
+        title: Separate legacy regression mapping only
+        min_skill: 0
+        max_skill: 300
+        reward_points: 1

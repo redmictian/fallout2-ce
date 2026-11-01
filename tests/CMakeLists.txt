@@ -28,7 +28,7 @@ find_path(NIXBOY_TEST_ZLIB_INCLUDE_DIR zlib.h HINTS "${FETCHCONTENT_SOURCE_DIR_Z
 find_path(NIXBOY_TEST_ZCONF_INCLUDE_DIR zconf.h HINTS "${NIXBOY_TEST_ZLIB_INCLUDE_DIR}")
 if(UNIX AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND NIXBOY_TEST_ZLIB_INCLUDE_DIR AND NIXBOY_TEST_ZCONF_INCLUDE_DIR)
     foreach(mode IN ITEMS on off)
-        add_executable(perk-training-${mode}-test perk_training_test.cc ../src/perk_training.cc ../src/debug_perks.cc)
+        add_executable(perk-training-${mode}-test perk_training_test.cc ../src/perk_training.cc ../src/debug_perks.cc ../src/nixboy_training_state.cc)
         target_include_directories(perk-training-${mode}-test PRIVATE ../src "${NIXBOY_TEST_ZLIB_INCLUDE_DIR}" "${NIXBOY_TEST_ZCONF_INCLUDE_DIR}")
         target_compile_features(perk-training-${mode}-test PRIVATE cxx_std_17)
         target_compile_options(perk-training-${mode}-test PRIVATE -ffunction-sections -fdata-sections)

@@ -1,0 +1,13 @@
+id: test.mixed-copy
+version: 1
+skill: 12
+level: 61000
+title: Integration fixture - copy a file
+kind: copy-file
+parameters:
+  name: [assessment-copy-a]
+instructions: >-
+  INTEGRATION TEST ONLY, not a certified course lesson. Copy
+  ~/lab/incoming/{name}.txt to ~/lab/delivery/manifest.txt while preserving
+  the source. Return to the hub to submit practical evidence and answer the
+  complete conceptual set. Course completion grants no game reward.

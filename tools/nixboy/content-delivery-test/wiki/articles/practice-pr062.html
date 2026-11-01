@@ -1,0 +1,101 @@
+<div class="course-lesson"><div class=""><div class="hero"><p class="eyebrow">PRA-PR06.2 · guided terminal practice</p><h1>Make a measurement answer a question.</h1><p class="lead">A smaller time can mean better work, less work, or a different opportunity to run. Build a comparison that tells them apart, then use a real profile without asking it to explain what it did not observe.</p><div class="meta"><span>One guided assignment</span><span>70–100 minutes, flexible</span><span>Fresh prepared state</span></div></div><div id="main" class="content lesson-main">
+<section><h2>Preparation and supplied state</h2><p>Complete PR06.1 and <a href="wiki:course.pr062">L-PR-C/performance-investigation</a>. You should be able to read a process identity/parent, inspect affinity, compare complete bytes and distinguish a counter from a selected-event sample. This practice supplies command forms; writing a benchmark application, configuring a profiler service and administering CPU policy are not objectives.</p><p>Use the separate prepared terminal assignment at <code>/home/learner/practice-pr062</code>. Its card identifies one permitted logical CPU, called <strong>C</strong> below, from your actual allowed affinity set. Replace C with that number; do not assume CPU 0 exists or is permitted. The environment supplies GNU gzip, Bash, GNU coreutils, procps <code>top</code>/<code>ps</code>, util-linux <code>taskset</code>, <code>strace</code> and compatible <code>perf</code>, with the selected software events permitted for your own children. No package install, hardware event or system-wide privilege is needed.</p>
+<pre class="terminal"><code>/home/learner/practice-pr062/
+  data/example.bin        16,777,216 bytes, read-only
+  data/pieces/piece00     first 524,288-byte piece
+  …                       exactly 32 consecutive pieces, piece00…piece31
+  protected/keep.txt      "KEEP practice neighbour\n", read-only
+  work/                   empty, writable
+  out/                    empty, writable
+  evidence/               empty, writable</code></pre>
+<p><code>example.bin</code> consists of the first 16,777,216 bytes of an infinite repetition of ASCII <code>practice|item=000001|status=ok</code> followed by LF. The pieces are its 32 successive 524,288-byte chunks; concatenating in lexical order gives exactly <code>example.bin</code>. The task root and writable directories belong to learner UID/GID 1000, mode 0750 (evidence 0700); read-only directories are root:root 0555 and input files root:root 0444, mtime <code>2026-01-15T12:00:00Z</code>. <code>LC_ALL=C</code> is the declared locale. No symlinks, extra chunk entries or special metadata occur. Sufficient bytes, inodes and warm-cache RAM are supplied, with no other significant activity on C. No competitor is initially running.</p>
+<p>Only write under work, out and evidence. Preserve input/protected bytes and metadata; ordinary access-time updates are allowed. You may start and stop the explicitly disposable <code>yes</code> process created in step 5; never signal unrelated work. Each restart of this practice is fresh. Missing events, unusable DSO attribution or an unquiet CPU are facility limitations to report, not knowledge mistakes.</p></section>
+
+<section><h2>1 · Predict what each observation can establish</h2><p>Before collecting anything, predict which observation could support each claim: (a) the decoded output contains all input bytes; (b) the workflow consumed about two CPU-seconds; (c) most selected user samples were executing gzip; (d) another process consumed much of the same CPU's opportunity. One observation may be needed alongside another.</p>
+<details><summary>Compare the scope of your answers</summary><div><p>(a) Decode the whole gzip stream and compare bytes to the source; a successful filename or exit status is insufficient. (b) Read process-scoped task-clock for the complete workflow and its children. (c) Inspect your actual cpu-clock:u profile by command and DSO. (d) Inspect real interval CPU use of the relevant identities on the same affinity CPU; a selected-workload profile does not automatically include its unrelated neighbour. None alone proves all four claims.</p></div></details>
+<pre class="terminal"><code>cd /home/learner/practice-pr062
+export LC_ALL=C
+pwd
+gzip --version
+perf --version
+taskset -pc $$
+perf stat -e task-clock,context-switches,page-faults -- sleep 0.2</code></pre>
+<p>The final command checks that collection opens the required counters; a sleeping command is not the workload benchmark. An error or <code>&lt;not supported&gt;</code> is not zero measured work. Ask for the matching prepared facility if these events cannot be collected. Do not respond by changing host security policy.</p></section>
+
+<section><h2>2 · Establish a complete baseline</h2><p>Prepare a file <code>work/level6.sh</code> containing the following ordinary Bash command recipe. This recipe runs real GNU gzip sixteen times; it is not an application interface to implement. Use the prepared editor or the literal command block supplied in the terminal assignment.</p>
+<pre class="terminal"><code>#!/bin/bash
+set -eu
+for pass in {1..16}; do
+  gzip -n -6 -c -- data/example.bin &gt; "out/pass-$pass.gz"
+done</code></pre>
+<p><code>-n</code> omits original filename/time in the gzip header, <code>-6</code> selects a documented compression level, and <code>-c</code> writes compressed bytes to stdout. Redirection is inside the loop and measured execution. The source is preserved. Run one unmeasured warm-up, then three separate real counting runs.</p>
+<pre class="terminal"><code>taskset -c C bash work/level6.sh
+taskset -c C perf stat -o evidence/level6-1.stat \
+  -e task-clock,context-switches,page-faults -- bash work/level6.sh
+# Repeat the same command as level6-2.stat and level6-3.stat.</code></pre>
+<p>Read all three logs. Make a table with elapsed time, task-clock and completed passes. Sort the three elapsed values mentally or on paper; the middle value is the median. Compute the run spread as <code>(max − min) / median</code>. A large spread is a reason to inspect conditions and repeat an entire block, not to keep only the fastest run.</p>
+<pre class="terminal"><code># Check every final pass; retain upstream failures as failures.
+set -o pipefail
+for pass in {1..16}; do
+  gzip -t -- "out/pass-$pass.gz"
+  gzip -dc -- "out/pass-$pass.gz" | cmp - data/example.bin
+  wc -c &lt; "out/pass-$pass.gz"
+done</code></pre>
+<p>Equal comparisons print nothing and exit 0. These final checks verify the retained outputs. In an assessment, the complete real work during each counting/profile run must also be observed; final files alone cannot prove sixteen executions occurred.</p>
+<details><summary>Why not use one outer redirection with perf's repeat option?</summary><div><p><code>perf stat -r 3 -- gzip -c data/example.bin &gt; all.gz</code> repeats gzip but leaves one shared outer output redirection open. It concatenates three streams, so decoding produces the source three times. Keeping redirection inside the measured recipe gives each run the intended output. This practice retains separate stat logs to make each comparison visible.</p></div></details></section>
+
+<section><h2>3 · Obtain your own usable profile</h2><p>Count first, then sample a separate execution. A 16 MiB input may be too short for stable sampling. For profiling only, copy the recipe to <code>work/profile6.sh</code> and change sixteen passes to 128; disclose that difference. Use the same profile work for the later candidate. The larger repetition supplies more actual events; it is not a way to invent samples.</p>
+<pre class="terminal"><code>taskset -c C perf record -F 99 -e cpu-clock:u \
+  -o evidence/level6.perf.data -- bash work/profile6.sh
+perf report -i evidence/level6.perf.data --stdio --no-children \
+  --sort comm,dso,symbol --show-nr-samples &gt; evidence/level6.report</code></pre>
+<p>Open the report. Record event, requested/effective frequency, sample count, any lost/throttled warnings, major commands and DSOs. Aim for at least 200 usable user-event samples; if there are fewer, increase the <em>profile-only</em> repetitions for both states equally and collect again. If most DSOs are unidentified, the preparation needs repair. Missing function names can remain an explicit limitation here: do not rename an unresolved address into a guessed function.</p>
+<p>Predict: if gzip has 80% of selected sample weight, does it follow that gzip accounts for exactly 80% of elapsed wall time?</p>
+<details><summary>Reveal the interpretation</summary><div><p>No. This profile samples selected user-mode CPU activity in the workflow and inherited children. Its histogram is normalized to observed selected-event weight. Waiting to run, sleeping, some startup/kernel costs and unrelated processes are not represented by that percentage. A hot DSO is a useful location observation, not a complete wall-time explanation.</p></div></details></section>
+
+<section><h2>4 · Change a documented setting and keep useful work constant</h2><p>Copy <code>work/level6.sh</code> to <code>work/level3.sh</code> and change only <code>-6</code> to <code>-3</code>. Copy the longer profile recipe similarly. Predict which quantities may change: decoded bytes, compressed bytes, CPU consumed, elapsed time, sample percentage. Lower gzip levels trade compression work and size; do not assume the tradeoff satisfies an unstated business requirement.</p><p>Warm the level-3 workflow once, collect three separate stat runs, collect its own profile/report using the same longer profile count, and perform all output comparisons. Write down actual results before revealing the example below. If this dataset/host shows little speed difference, that is a valid observation; the practice has no promised gain threshold. The later assessments have explicit useful-output contracts and preflighted tolerances.</p>
+<div class="table-wrap" tabindex="0" role="region" aria-label="Data comparison"><table><caption>Illustrative comparison only — these are not your evidence or a pass threshold</caption><thead><tr><th>Observation</th><th>Level 6</th><th>Level 3</th></tr></thead><tbody><tr><td>Completed input work</td><td>16 full passes</td><td>16 full passes</td></tr><tr><td>Decoded content</td><td>Equal to source</td><td>Equal to source</td></tr><tr><td>Median elapsed</td><td>1.40 s</td><td>1.00 s</td></tr><tr><td>Task-clock per pass</td><td>0.085 s</td><td>0.060 s</td></tr><tr><td>Compressed bytes per output</td><td>Smaller</td><td>Larger, still valid gzip</td></tr><tr><td>gzip sample share</td><td>May remain large</td><td>May remain large</td></tr></tbody></table></div>
+<details><summary>Explain the comparison without overclaiming</summary><div><p>If full work and output remain correct and repeated times/CPU decrease, the setting was an effective change for this fixture. A larger compressed artifact might still violate a separately declared transfer/storage budget; content correctness alone does not settle that decision. Similar sample percentages do not contradict reduced absolute CPU: a normalized denominator can shrink. No conclusion about all future inputs or hardware cache behavior follows.</p></div></details></section>
+
+<section><h2>5 · Observe scheduling opportunity separately</h2><p>Now keep the gzip workflow at level 6. Create one explicitly disposable same-owner CPU consumer; <code>yes</code> repeatedly writes its default text to <code>/dev/null</code> and has no required output in this practice. Identify and record its PID before starting the workload.</p>
+<pre class="terminal"><code>taskset -c C /usr/bin/yes &gt; /dev/null &amp;
+competitor=$!
+ps -p "$competitor" -o pid,ppid,user,ni,comm,args
+taskset -pc "$competitor"
+taskset -c C bash work/profile6.sh &amp;
+workflow=$!
+ps --ppid "$workflow" -o pid,ppid,comm,args
+# Select the live gzip child PID from this observation, not the shell PID.
+top -b -d 1 -n 6 -p GZIP_PID,COMPETITOR_PID
+wait "$workflow"</code></pre>
+<p>Use your observed PIDs. Ignore top's first frame and inspect later interval frames. A selected child can finish before the next frame; repeat the untimed observation or identify its successor if necessary. The parent shell's low CPU does not mean its gzip children did no work. Compare three complete level-6 counting runs with this competitor against three without it; use the same work and warm-up. Stop only the recorded disposable competitor:</p>
+<pre class="terminal"><code>kill -TERM "$competitor"
+wait "$competitor"             # signal termination is expected here</code></pre>
+<p>Predict: if elapsed falls substantially after the optional competitor is gone, while selected task-clock changes little, what was reduced?</p>
+<details><summary>Separate work from opportunity</summary><div><p>The useful computation can consume similar CPU time but obtain it sooner when it competes less for the allowed logical CPU. The live interval observation and fixed affinity make contention plausible. A gzip user-CPU histogram alone does not directly measure runnable waiting. Stopping a required useful service to get a better number would fail an assessment; this explicitly optional process is different.</p></div></details></section>
+
+<section><h2>6 · Observe launches and preserve gzip member boundaries</h2><p>Return to the initial no-competitor condition. Consider this real multi-file workflow, saved as <code>work/pieces-loop.sh</code>:</p>
+<pre class="terminal"><code>#!/bin/bash
+set -eu
+export LC_ALL=C
+for f in data/pieces/piece*; do
+  gzip -n -3 -c -- "$f"
+done &gt; out/pieces.gz</code></pre>
+<p>Run it once and copy <code>out/pieces.gz</code> to <code>work/pieces-reference.gz</code>. Its 32 independent compressed members decode to the original file. GNU gzip also accepts several file operands with <code>-c</code>, producing separately compressed members in operand order. Save this candidate as <code>work/pieces-batch.sh</code>:</p>
+<pre class="terminal"><code>#!/bin/bash
+set -eu
+export LC_ALL=C
+gzip -n -3 -c -- data/pieces/piece* &gt; out/pieces.gz</code></pre>
+<p>Predict whether (a) the decoded bytes, (b) compressed bytes under this same binary/level/unnamed headers, and (c) number of gzip launches will match.</p>
+<pre class="terminal"><code>bash work/pieces-batch.sh
+gzip -dc -- out/pieces.gz | cmp - data/example.bin
+cmp out/pieces.gz work/pieces-reference.gz
+taskset -c C strace -f -e trace=execve -o evidence/loop-exec.log \
+  bash work/pieces-loop.sh
+taskset -c C strace -f -e trace=execve -o evidence/batch-exec.log \
+  bash work/pieces-batch.sh</code></pre>
+<p>Inspect successful gzip <code>execve</code> records: 32 in the loop, one in the batch. Ignore Bash startup and failed executable-path searches. This is direct process-image execution evidence, not an all-system-call profile. A trace perturbs timing, so measure separately without strace if comparing times. For longer perf captures, repeat each complete workflow the same disclosed number of times. A tiny 32-piece example may show little meaningful timing signal; the execution distinction is still observable.</p>
+<details><summary>Member behavior and the correct scope of the conclusion</summary><div><p>Both comparisons should succeed for the fixed same-version gzip <code>-n -3</code> work. Each input remains a separate member; batching reduces launches while preserving bytes. Compressing concatenated plaintext into one member can decode to the same data yet violates a requirement to preserve independent members. <code>gzip -l</code> is not the entire decoded-size oracle for a multi-member file. The command documentation and actual exec evidence justify what changed; a user-CPU profile alone does not account for every startup/kernel cost.</p></div></details></section>
+
+<section><h2>Completion and feedback</h2><p>This is one guided practice, with three linked investigations. Finish with: a baseline/candidate table and both real profiles for the setting change; a correct decoded-output check; a fixed-work competition observation; actual launch counts and byte-preserving member comparison; and unchanged protected data. Record any unavailable facility or inconclusive speed signal. Optional reflections are feedback, not an essay grade.</p><p>Before assessment, answer these aloud: Why can a hot DSO remain hot after an effective correction? Why can selected task-clock stay similar while elapsed improves? Why can equal decoded bytes fail a task that explicitly requires member preservation? Review the corresponding disclosure if your explanation confuses a profile denominator, scheduling opportunity or output contract.</p><p><strong>Ready for PR06.2:</strong> choose <span class="reference">one of three mixed alternatives (reference outside this reading demo)</span>. They change work scale, required output constraints and limiting condition. Every alternative requires actual repeated counts, learner-generated profiles, an effective permitted correction and separately keyed conceptual success. A guided practice or supplied transcript does not replace that practical evidence.</p></section>
+</div></div></div>

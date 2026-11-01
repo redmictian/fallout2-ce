@@ -10,7 +10,9 @@ import json
 import os
 from pathlib import Path
 import re
+import secrets
 import subprocess
+import time
 
 from challenge_content import CONTENT_ROOT, KINDS
 
@@ -19,6 +21,47 @@ OWNER_LABEL = "org.fallout2-ce.nixboy.owner"
 ATTEMPT_LABEL = "org.fallout2-ce.nixboy.attempt"
 PERMISSIONS = {"private-file": 0o600, "public-read": 0o644, "executable": 0o700,
                "shared-directory": 0o770, "group-readable": 0o640}
+
+# A fixed fixture worker, started by trusted Docker exec rather than a learner
+# attachment. Its root-owned private heartbeat is not a learner success marker.
+# The outer container still has no capabilities, host mounts or Docker socket.
+PREPARED_WORKER = r'''import json,os,signal,sys,time
+directory,nonce=sys.argv[1:]
+os.umask(0o077)
+os.mkdir(directory,0o700)
+try: os.setsid()
+except PermissionError: pass
+signal.signal(signal.SIGHUP,signal.SIG_IGN)
+pid=os.getpid()
+start=open('/proc/%d/stat'%pid).read().rsplit(')',1)[1].split()[19]
+tick=0
+while True:
+ tick+=1
+ value={'pid':pid,'start':start,'nonce':nonce,'ticks':tick,'monotonic':time.monotonic()}
+ with open(directory+'/state.tmp','w') as output:
+  json.dump(value,output)
+ os.replace(directory+'/state.tmp',directory+'/state.json')
+ time.sleep(.25)
+'''
+
+WORKER_PROBE = r'''import json,os,sys,time
+d=json.loads(sys.argv[1])
+try:
+ with open(d['directory']+'/state.json') as source:
+  value=json.loads(source.read(2048))
+ pid=value['pid']
+ if type(pid) is not int or pid<=1 or value['nonce']!=d['nonce']:
+  raise ValueError('invalid worker record')
+ start=open('/proc/%d/stat'%pid).read().rsplit(')',1)[1].split()[19]
+ if start!=value['start'] or time.monotonic()-value['monotonic']>2:
+  raise ValueError('prepared worker stopped or stalled')
+ print(json.dumps({key:value[key] for key in ('pid','start','ticks')}))
+except (OSError,ValueError,KeyError,TypeError,IndexError) as error:
+ print(json.dumps({'error':str(error)[:300]}))
+'''
+
+POLICY_OLD = "policy=old\n"
+POLICY_NEW = "policy=new\n"
 
 
 def owner_namespace(state_dir):
@@ -75,6 +118,7 @@ class ComposeEnvironment:
         self.payload = ("#!/bin/sh\nprintf 'maintenance ready\\n'\n" if spec.kind == "executable" else
                         f"Nix-Boy {self.params['name']} report.\nPreserve this complete text.\n")
         self.expected = None
+        self.worker = None
 
     def _compose(self, *arguments, timeout=45):
         # Preserve PATH/runtime basics but do not inherit alternate Compose files,
@@ -101,7 +145,8 @@ class ComposeEnvironment:
         # startup/configuration has been changed to hang or print indefinitely.
         bounded = ["/usr/bin/timeout", "--signal=TERM", "--kill-after=1", "7", *argv]
         execution = self.client.api.exec_create(self.services[service], bounded, user=user,
-                                                workdir="/home/nixboy", environment={"LC_ALL": "C"})
+                                                workdir="/tmp" if user == "0:0" else "/home/nixboy",
+                                                environment={"LC_ALL": "C"})
         output = self.client.api.exec_start(execution["Id"], stream=True, demux=True)
         stdout, stderr = bytearray(), bytearray()
         try:
@@ -156,21 +201,37 @@ for name in json.loads(sys.argv[1]):
 print(json.dumps(result))
 """, paths)
 
-    def start(self):
+    def start(self, cancel=None, progress=None):
         if self._closed:
             raise RuntimeError("exercise client is closed")
+        def cancelled():
+            if cancel is not None and cancel.is_set():
+                from training import OperationCancelled
+                raise OperationCancelled("Preparation cancelled; no learner result recorded.")
         try:
+            cancelled()
+            if progress:
+                progress("Starting the isolated container fixture...")
             self._compose("up", "--wait", "--wait-timeout", "25", "--pull", "never", "--no-build")
+            cancelled()
             for service in (("workstation", "server") if self.network else ("workstation",)):
                 identifier = self._compose("ps", "--quiet", service, timeout=10)
                 if not re.fullmatch(r"[a-f0-9]{12,64}", identifier):
                     raise RuntimeError("Compose did not return one service container")
                 self.services[service] = identifier
             self.container_id = self.services["workstation"]
+            cancelled()
+            if progress:
+                progress("Preparing the assignment files and independent workers...")
             self._setup()
+            cancelled()
             initial = self.check()
-            if initial["status"] != "incomplete":
+            # This sequence fixture starts in the new state. It is unsolved
+            # until the manager observes old then new in separate checkpoints.
+            expected = "passed" if self.spec.kind == "checkpoint-policy" else "incomplete"
+            if initial["status"] != expected:
                 raise RuntimeError("exercise preflight must establish an unsolved fixture: " + str(initial))
+            cancelled()
             return self.container_id
         except Exception:
             self._teardown()
@@ -224,6 +285,96 @@ print(json.dumps(result))
             self._write("workstation", self.source_path, source)
         elif self.network:
             self._setup_network()
+        elif kind == "checkpoint-policy":
+            self._write("workstation", lab + "/policy.conf", POLICY_NEW)
+            self._write("workstation", lab + "/old-policy.conf", POLICY_OLD)
+            self._write("workstation", lab + "/new-policy.conf", POLICY_NEW)
+            self._write("workstation", lab + "/protected.txt", self.payload)
+            self._start_prepared_worker()
+
+    def _start_prepared_worker(self):
+        """Own one fixed heartbeat process for the attempt, never an attachment."""
+        nonce = secrets.token_hex(16)
+        directory = "/tmp/nixboy-prepared-" + nonce
+        execution = self.client.api.exec_create(
+            self.services["workstation"],
+            ["/usr/bin/python3", "-I", "-u", "-c", PREPARED_WORKER, directory, nonce],
+            user="0:0", workdir="/tmp", environment={"LC_ALL": "C"},
+            stdin=False, stdout=False, stderr=False)
+        self.client.api.exec_start(execution["Id"], detach=True)
+        self.worker = {"directory": directory, "nonce": nonce}
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline:
+            observed = self._worker_probe()
+            if "error" not in observed:
+                self.worker.update(pid=observed["pid"], start=observed["start"])
+                return
+            time.sleep(.05)
+        raise RuntimeError("prepared worker did not become ready")
+
+    def _worker_probe(self):
+        if self.worker is None:
+            raise RuntimeError("prepared worker has no trusted identity")
+        return self._python("workstation", WORKER_PROBE, self.worker, user="0:0")
+
+    def health(self):
+        """Facility health is distinct from learner-controlled objective state."""
+        try:
+            if not self.services:
+                raise RuntimeError("exercise is not running")
+            for identifier in self.services.values():
+                if not self.client.api.inspect_container(identifier)["State"]["Running"]:
+                    raise RuntimeError("an exercise service has stopped")
+            evidence = {"containers": dict(self.services)}
+            if self.spec.kind == "checkpoint-policy":
+                previous = self._worker_probe()
+                if "error" in previous:
+                    raise RuntimeError(previous["error"])
+                time.sleep(.3)
+                observed = self._worker_probe()
+                if "error" in observed:
+                    raise RuntimeError(observed["error"])
+                if observed["pid"] != self.worker.get("pid") or observed["start"] != self.worker.get("start") \
+                        or previous["pid"] != observed["pid"] or previous["start"] != observed["start"] \
+                        or observed["ticks"] <= previous["ticks"]:
+                    raise RuntimeError("prepared worker identity changed or heartbeat stalled")
+                evidence["worker"] = observed
+            return {"status": "ready", "feedback": "Assignment facility ready.", "evidence": evidence}
+        except Exception as exc:
+            return {"status": "error", "facility_failure": True,
+                    "feedback": "Assignment facility unavailable: " + str(exc)[:1000]}
+
+    def checkpoint(self, name):
+        """Observe a named fixed operation; the manager owns ordering and binding."""
+        if self.spec.kind != "checkpoint-policy" or name not in ("rollback", "reapply"):
+            return {"status": "error", "feedback": "Unsupported trusted checkpoint."}
+        facility = self.health()
+        if facility["status"] != "ready":
+            return facility
+        try:
+            expected = POLICY_OLD if name == "rollback" else POLICY_NEW
+            ok, policy = self._policy_observation(expected)
+            evidence = dict(facility["evidence"], policy=policy)
+            return {"status": "passed" if ok else "incomplete", "evidence": evidence,
+                    "feedback": "Observed " + name + " state." if ok else
+                    "Required policy bytes or protected file do not match the " + name + " state."}
+        except Exception as exc:
+            return {"status": "error", "facility_failure": True,
+                    "feedback": "Checkpoint probe unavailable: " + str(exc)[:1000]}
+
+    def _policy_observation(self, expected):
+        paths = ["/home/nixboy/lab/" + name for name in
+                 ("policy.conf", "old-policy.conf", "new-policy.conf", "protected.txt")]
+        values = self.snapshot("workstation", paths)
+        def matches(path, text):
+            item = values[path]
+            return bool(item and item["regular"] and item.get("text") == text)
+        ok = all(matches(path, text) for path, text in zip(
+            paths, (expected, POLICY_OLD, POLICY_NEW, self.payload)))
+        policy = values[paths[0]]
+        text = policy.get("text") if policy else None
+        return ok, {"sha256": hashlib.sha256(text.encode()).hexdigest() if text is not None else None,
+                    "regular": bool(policy and policy["regular"]), "protected": ok}
 
     def _setup_network(self):
         name, kind = self.params["name"], self.spec.kind
@@ -249,13 +400,12 @@ print(json.dumps(result))
 
     def check(self):
         try:
-            if not self.services:
-                raise RuntimeError("exercise is not running")
-            for identifier in self.services.values():
-                if not self.client.api.inspect_container(identifier)["State"]["Running"]:
-                    raise RuntimeError("an exercise service has stopped")
+            facility = self.health()
+            if facility["status"] != "ready":
+                return facility
             ok, feedback = self._validate()
-            return {"status": "passed" if ok else "incomplete", "feedback": feedback}
+            return {"status": "passed" if ok else "incomplete", "feedback": feedback,
+                    "evidence": facility["evidence"]}
         except Exception as exc:
             return {"status": "error", "feedback": "Exercise validation unavailable: " + str(exc)[:1000]}
 
@@ -269,7 +419,9 @@ print(json.dumps(result))
             return bool(item and item["regular"] and item.get("text") == expected)
         def directory(item):
             return bool(item and item["directory"])
-        if kind == "make-directory":
+        if kind == "checkpoint-policy":
+            ok, policy = self._policy_observation(POLICY_NEW)
+        elif kind == "make-directory":
             target, preserved = observe("workstation", f"{lab}/{name}/ready", lab + "/briefing.txt")
             ok = directory(target) and text(preserved, self.payload)
         elif kind == "copy-file":
@@ -345,6 +497,7 @@ print(json.dumps(result))
         finally:
             self.services = {}
             self.container_id = None
+            self.worker = None
 
     def reset(self):
         self._teardown()
@@ -360,4 +513,19 @@ print(json.dumps(result))
             self.client.close()
 
 
-Environment = ComposeEnvironment
+def Environment(client, spec, *args, **kwargs):
+    """Keep ordinary tasks on their established container implementation."""
+    from challenge_content import QEMU_KIND
+    if spec.kind == QEMU_KIND:
+        from qemu_env import QemuEnvironment
+        return QemuEnvironment(client, spec, *args, **kwargs)
+    if spec.kind == "qemu-nginx":
+        from nginx_env import NginxEnvironment
+        return NginxEnvironment(client, spec, *args, **kwargs)
+    return ComposeEnvironment(client, spec, *args, **kwargs)
+
+
+def cleanup_environments(client, state_dir):
+    cleanup_owned(client, state_dir)
+    from qemu_env import cleanup_qemu_owned
+    cleanup_qemu_owned(client, state_dir)

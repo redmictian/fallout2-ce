@@ -1,0 +1,12 @@
+id: pilot-ordinary-mkdir
+version: 1
+skill: 3
+level: 60001
+title: Ordinary container - create a ready directory
+kind: make-directory
+parameters:
+  name: [pilot]
+instructions: >-
+  In the ordinary direct container, create ~/lab/{name}/ready as a directory.
+  Preserve ~/lab/briefing.txt. This regression fixture awards +1 Unarmed point
+  at test-only level 60001; the mapping is not an educational-track decision.

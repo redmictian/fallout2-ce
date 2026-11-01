@@ -1,0 +1,17 @@
+id: test.ordered-policy
+version: 1
+skill: 12
+level: 61000
+title: Integration fixture - ordered file rollback and reapply
+kind: checkpoint-policy
+parameters:
+  name: [assessment-policy]
+instructions: >-
+  INTEGRATION TEST ONLY, not a service or course lesson. A real file
+  ~/lab/policy.conf starts with policy=new. Copy ~/lab/old-policy.conf over it,
+  return to the hub and request checkpoint rollback. Then copy
+  ~/lab/new-policy.conf over it and request checkpoint reapply. Finally submit.
+  The trusted observer must see both states in that order; a correct final
+  file alone does not pass. An independent prepared worker keeps running
+  through normal console detachment. You may create a witness file in ~/lab.
+  Course completion grants no game reward.

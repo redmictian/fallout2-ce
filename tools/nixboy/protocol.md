@@ -141,30 +141,30 @@ to the trusted bridge; Fallout accepts independent level claims and does not
 require every earlier level. ACK is followed by fresh
 CONTEXT; a game-memory acknowledgment is not a promise that a save was written.
 
-The game stores identity, points and receipt records together in its checked
-version-4 SAVE.DAT trailer. Versions 1, 2 and 3 migrate their existing receipts
-with five points each. The bridge's version-4 JSON similarly retains old receipt
-identity and assigns the original five points. Wire training versions 1, 2 and 3
-are rejected, so upgrade game and bridge together. The bridge can import exact
-receipts from the opening ledger and replays missing earned entries after
-reconnect, including entries whose authored track was removed. Acknowledgments
-update the bridge's current game ledger; later CONTEXT frames refresh skills
-and profile values without resending the opening ledger.
-The amount comes from the completed level's `reward_points` (default 5), then
-remains part of the immutable earned record. Catalog edits cannot reprice an
-earned reward or a replay into an older save.
-It never invents success from shell exit, PTY text or learner helper events.
+The game stores its native bonus/claim ledger in the checked v4/v5 SAVE.DAT
+trailer. Its existing profile field identifies the current assessment run and is
+lazily renewed on the first open after load/new game. Ordinary reopen keeps it.
+Saving/loading makes no bridge request. A bounded compatibility reader ignores
+obsolete v6 reference bytes; new writes have no external reference.
 
-INPUT routes to a restricted hub menu or the current exercise PTY. RESIZE and
-CONTEXT remain available. A profile cannot change within a session. F5-F8 send
-TRAIN_ACTION; F10/CLOSE or a socket disconnect detach the frontend and stop its
-specific shell attachment, preserving exercise files while the bridge runs.
-A fresh attachment starts a fresh shell. EOF from that shell returns to the hub
-and never generates EXIT as a training reward. Reset, abandon, expiry and bridge
-shutdown have separate environment lifecycle handling.
+The bridge observes the opening native claims for current eligibility/duplicates,
+not to reconstruct an earned history. It keeps one current-completion pending
+slot. Same-run lost ACK can retry it; accepted ACK or matching current game claim
+suppresses delivery. Unknown/new runtime drops previous pending task state and
+cannot recover any missing historical reward. Current character skill bands and
+owned perk ranks remain progression authority. No educational snapshot, saved
+stage graph, capture frame or activation/timeline envelope exists.
 
-Legacy RESULT events are never forwarded by the training bridge, and the C++
-client rejects RESULT in training mode. Legacy OPEN retains its original
-RESULT/EXIT/global-binding behavior. The per-installation authentication token
-never enters the learner environment. Docker/provisioning errors and validator
-errors cannot grant a completion receipt.
+INPUT routes to the current hub or exercise PTY. CONTEXT cannot change runtime or
+negotiated version in a session. F5–F8 retain their actions; F10/socket close
+normally detaches without resetting. Provider loss is a facility/reissue result.
+Bounded questions and mixed checks use the same terminal frames, with trusted
+keys withheld before commitment; there is no browser assessment authority.
+
+Version5 appends uint16 perk count and19-byte (perk:uint16, rank:uint8, receipt16)
+records to the version4 opening. Typed TRAIN_PERK_REWARD22 carries profile16 plus
+that19-byte record; TRAIN_PERK_ACK10 adds accepted:uint8. Current pilot is owned
+Toughness12 rank1→2 only. Native New/Duplicate/Rejected separates actual effects
+from duplicate acknowledgments; see PERK_REWARDS.md. Skill inner frames are
+unchanged. Pair this candidate game and bridge; retired save-restoration protocols
+and optional cross-save modes are not implemented.

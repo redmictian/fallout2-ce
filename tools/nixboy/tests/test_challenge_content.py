@@ -114,6 +114,31 @@ class CatalogTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "missing content topology"):
                 Catalog(root)
 
+    def test_optional_guest_catalog_needs_no_compose_and_fingerprints_trusted_artifacts(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "challenges").mkdir()
+            tracks = {"schema": 2, "tracks": [{"id": "bt05-test-only", "title": "Science",
+                "knowledge_title": "BT05 pilot only", "skill": 12, "levels": {60000: {
+                    "title": "Temporary test mapping", "min_skill": 0, "max_skill": 300, "reward_points": 1}}}]}
+            challenge = {"id": "pilot.bt05-a", "version": 1, "skill": 12, "level": 60000,
+                "title": "BT05-A", "instructions": "Repair the mandatory mount for {name}.",
+                "kind": "qemu-bt05", "parameters": {"name": ["bt05-a"]}}
+            (root / "tracks.yaml").write_text(yaml.safe_dump(tracks))
+            (root / "challenges/bt05.yaml").write_text(yaml.safe_dump(challenge))
+            catalog = Catalog(root)
+            self.assertEqual(catalog.get("pilot.bt05-a").kind, "qemu-bt05")
+            self.assertEqual(catalog.level_for_value(12, 25), 60000)
+            fake = types.SimpleNamespace(digest_artifacts=lambda: "qemu/kernel/disks-v1")
+            with mock.patch.dict(sys.modules, {"qemu_env": fake}):
+                first = catalog.digest("pilot.bt05-a")
+                fake.digest_artifacts = lambda: "qemu/kernel/disks-v2"
+                self.assertNotEqual(first, catalog.digest("pilot.bt05-a"))
+            challenge["kind"] = "copy-file"
+            (root / "challenges/bt05.yaml").write_text(yaml.safe_dump(challenge))
+            with self.assertRaisesRegex(ValueError, "missing content topology"):
+                Catalog(root)
+
     def test_catalog_reloads_after_reconstruction_and_digests_changed_content(self):
         with tempfile.TemporaryDirectory() as directory:
             root = self.copy_content(directory)
@@ -230,6 +255,20 @@ class EnvironmentBoundaryTests(unittest.TestCase):
         self.assertNotIn("DOCKER_HOST", options["env"])
         self.assertEqual(options["env"]["NIXBOY_OWNER"], env.owner)
         self.assertLessEqual(options["timeout"], 45)
+
+    def test_optional_dispatch_keeps_ordinary_compose_path(self):
+        from dataclasses import replace
+        from challenge_env import Environment
+        spec = Catalog().get("unarmed.files.copy-file")
+        guest = mock.Mock()
+        fake = types.SimpleNamespace(QemuEnvironment=guest)
+        with mock.patch.dict(sys.modules, {"qemu_env": fake}), mock.patch("challenge_env.ComposeEnvironment") as ordinary:
+            Environment("client", spec, "id", 1, 0, "state")
+            ordinary.assert_called_once_with("client", spec, "id", 1, 0, "state")
+            guest.assert_not_called()
+            qemu = replace(spec, kind="qemu-bt05")
+            Environment("client", qemu, "id", 1, 0, "state")
+            guest.assert_called_once_with("client", qemu, "id", 1, 0, "state")
 
     def test_topologies_have_isolated_writable_executable_homes_and_no_host_access(self):
         for topology in ("single", "network"):

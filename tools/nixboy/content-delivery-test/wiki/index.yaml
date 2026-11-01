@@ -1,0 +1,33 @@
+schema: 1
+subjects:
+- id: course.resources
+  title: Resource investigation
+  articles:
+  - id: course.pr061
+    title: PR06.1 · What is consuming the resource?
+    file: articles/pr061.html
+    stylesheets:
+    - assets/course-lessons.css
+  - id: course.practice-pr061
+    title: Guided practice · Observe CPU, memory and capacity
+    file: articles/practice-pr061.html
+    stylesheets:
+    - assets/course-lessons.css
+  - id: course.pr062
+    title: PR06.2 · Count, sample and investigate
+    file: articles/pr062.html
+    stylesheets:
+    - assets/course-lessons.css
+  - id: course.practice-pr062
+    title: Guided practice · Measure a permitted correction
+    file: articles/practice-pr062.html
+    stylesheets:
+    - assets/course-lessons.css
+- id: course.services
+  title: nginx service preparation
+  articles:
+  - id: course.nginx-preparation
+    title: nginx preparation outline and comparison
+    file: articles/web-server-preparation.html
+    stylesheets:
+    - assets/course-lessons.css
