@@ -227,10 +227,10 @@ Release identity is recorded in nixboy.version and the
 source commit above; see the mod workspace's acceptance record for actual checks.
 Read nixboy/TRAINING.md for setup, controls and current limits.
 
-The standard 0.7.0 perk module requires new characters and uses 1.2T saves;
+The standard 0.8.0 perk module requires new characters and uses 1.2T saves;
 ordinary 1.2R saves are incompatible. All 76 selectable perks gain a harmless
 unlock rank; original benefits start at rank two, and normal upgrades require
-level 310. Challenge-to-perk rewards are not connected yet.
+level 310. Only the test-only owned Toughness rank 1-to-2 pilot is mapped. Saving needs no bridge or external educational files. Loading restarts active questions/projects; normal terminal reopen retains current-run work.
 
 For fast disposable tests, --debug-perks=all opens all rank-one perk cards,
 --debug-perk-picker opens the real level-up picker, and --debug-perk=12:2 opens
